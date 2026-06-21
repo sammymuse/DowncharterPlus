@@ -1,0 +1,6 @@
+# Downcharter+ — runtime dependencies
+# Install with:  pip install -r requirements.txt
+mido>=1.3
+numpy>=1.24
+soundfile>=0.12        # bundled libsndfile: reads .ogg/.opus/.wav/.flac/.mp3
+# GUI: tkinter (ships with Python, no extra dependency)

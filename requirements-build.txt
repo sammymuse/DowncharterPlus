@@ -1,0 +1,4 @@
+# Downcharter+ — dependencies needed only to build the .exe
+# Install with:  pip install -r requirements-build.txt
+-r requirements.txt
+pyinstaller>=6.0
