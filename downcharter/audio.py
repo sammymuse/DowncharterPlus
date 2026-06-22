@@ -407,3 +407,40 @@ def section_energy_tiers(paths, sections, tempo_map, tpb: int,
     lo = s[len(s) // 3]
     hi = s[2 * len(s) // 3]
     return ["calm" if v <= lo else ("mid" if v < hi else "high") for v in scores]
+
+
+def section_brightness_tiers(paths, sections, tempo_map, tpb: int,
+                             hop_s: float = 0.1) -> list[str] | None:
+    """Color-temperature tier per section from the audio TIMBRE (mean spectral
+    centroid), song-relative: the darkest third → 'warm', the brightest third →
+    'cool', the middle → None (neutral). Lets the lightshow tint each section to
+    its real timbre (bass-heavy passage = warm; cymbal/distorted = cool) instead of
+    section type alone. No absolute frequency — thirds of the song's own range.
+    Returns None if the audio can't be read."""
+    if not sections:
+        return None
+    if isinstance(paths, str):
+        paths = [paths]
+    try:
+        import numpy as np
+        mono, sr = load_mono_mix(paths)
+        mag, hop = _stft_mag(mono, sr)
+    except Exception:
+        return None
+    if mag.shape[0] < 4:
+        return None
+    win = (mag.shape[1] - 1) * 2
+    freqs = np.fft.rfftfreq(win, 1.0 / sr)
+    centroid = (mag * freqs[None, :]).sum(axis=1) / (mag.sum(axis=1) + 1e-9)
+    stft_s = hop / sr
+    bright: list[float] = []
+    for s in sections:
+        a_s = tick_to_ms(s.start, tempo_map, tpb) / 1000.0
+        b_s = tick_to_ms(s.end, tempo_map, tpb) / 1000.0
+        j0 = max(0, int(a_s / stft_s))
+        j1 = min(mag.shape[0], max(j0 + 1, int(b_s / stft_s)))
+        bright.append(float(np.mean(centroid[j0:j1])) if j1 > j0 else 0.0)
+    vals = sorted(bright)
+    lo = vals[len(vals) // 3]
+    hi = vals[2 * len(vals) // 3]
+    return ["warm" if v <= lo else ("cool" if v > hi else None) for v in bright]

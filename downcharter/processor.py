@@ -582,6 +582,16 @@ def process_midi(
             audio_accents = _audio.flux_accents(a_paths, tempo_map, tpb)
             if audio_accents:
                 stats["audio_accents"] = len(audio_accents)
+            # Color temperature per section from the audio timbre (spectral centroid):
+            # dark→warm, bright→cool. Sets s.warmth so the lightshow tints each section.
+            if sections:
+                warmth = _audio.section_brightness_tiers(
+                    a_paths, sections, tempo_map, tpb)
+                if warmth:
+                    for s, w in zip(sections, warmth):
+                        s.warmth = w
+                    stats["audio_warm"] = sum(1 for w in warmth if w == "warm")
+                    stats["audio_cool"] = sum(1 for w in warmth if w == "cool")
             # Character ANIMATION from the audio: ONLY vocals. Animating an ABSENT
             # bass/guitar/drums/keys creates a PART track with no charted gems —
             # RB3 doesn't render the character (camera/animation pointing at nothing)

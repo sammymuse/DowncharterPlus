@@ -131,6 +131,7 @@ class Section:
     name: str           # original name
     kind: str           # canonical type
     energy: str | None = None   # 'calm'/'mid'/'high' — refined by audio; None=structural
+    warmth: str | None = None   # 'warm'/'cool' — timbre (audio brightness); None=neutral
 
 
 def section_energy(s: "Section") -> str:
@@ -393,6 +394,24 @@ SECTION_PP_POOL = {
     "default":    ["ProFilm_a", "clean_trails", "film_contrast", "ProFilm_b"],
 }
 
+# Temperature swap: pulls the temperature-bearing presets toward the section's real
+# TIMBRE (audio spectral centroid). A dark/bassy section (low centroid) → 'warm';
+# a bright/cymbal/distorted section (high centroid) → 'cool'. The mid third (or no
+# audio) stays neutral and the pool is untouched. Song-relative — no absolute colour.
+_WARM_OF = {"manual_cool": "manual_warm", "loop_cool": "loop_warm"}
+_COOL_OF = {"manual_warm": "manual_cool", "loop_warm": "loop_cool"}
+
+
+def _warmth_pool(pool: list[str], warmth: str | None) -> list[str]:
+    """Bias a light pool toward `warmth` ('warm'/'cool'); keeps length/structure,
+    only swaps the warm/cool presets. None → unchanged."""
+    if warmth == "warm":
+        return [_WARM_OF.get(p, p) for p in pool]
+    if warmth == "cool":
+        return [_COOL_OF.get(p, p) for p in pool]
+    return pool
+
+
 # Pauses (≥2 measures with no notes) → blackout/silhouette (74% pattern in prof. venues)
 _PAUSE_LIGHT = ["blackout_fast", "silhouettes", "blackout_spot", "blackout_slow"]
 
@@ -469,9 +488,11 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
     last: str | None = None
     for s in sections:
         energy = section_energy(s)
-        base = SECTION_LIGHT_POOL.get(s.kind, SECTION_LIGHT_POOL["default"])
+        # Color temperature follows the section's real timbre (audio brightness).
+        base = _warmth_pool(SECTION_LIGHT_POOL.get(s.kind, SECTION_LIGHT_POOL["default"]),
+                            s.warmth)
         accents = ([SPECIAL_LIGHTING[s.kind]] if s.kind in SPECIAL_LIGHTING
-                   else _section_lights(theme, s))   # genre tint
+                   else _warmth_pool(_section_lights(theme, s), s.warmth))   # genre tint
         step = max(tpb // 8, int(tpb * _LIGHT_CADENCE[energy]))
         snap_win = tpb // 4
         t = s.start
