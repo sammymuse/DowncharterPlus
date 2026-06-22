@@ -412,11 +412,11 @@ def section_energy_tiers(paths, sections, tempo_map, tpb: int,
 def section_brightness_tiers(paths, sections, tempo_map, tpb: int,
                              hop_s: float = 0.1) -> list[str] | None:
     """Color-temperature tier per section from the audio TIMBRE (mean spectral
-    centroid), song-relative: the darkest third → 'warm', the brightest third →
-    'cool', the middle → None (neutral). Lets the lightshow tint each section to
-    its real timbre (bass-heavy passage = warm; cymbal/distorted = cool) instead of
-    section type alone. No absolute frequency — thirds of the song's own range.
-    Returns None if the audio can't be read."""
+    centroid), song-relative: the BRIGHTEST third → 'warm', the DARKEST third →
+    'cool', the middle → None (neutral). Mapping inverted after the venue_audio_study
+    ground-truth pass (the 20 official venues put 'warm' presets in brighter audio,
+    bright_p 63.6 vs 57.1 for 'cool'). No absolute frequency — thirds of the song's
+    own range. Returns None if the audio can't be read."""
     if not sections:
         return None
     if isinstance(paths, str):
@@ -443,7 +443,7 @@ def section_brightness_tiers(paths, sections, tempo_map, tpb: int,
     vals = sorted(bright)
     lo = vals[len(vals) // 3]
     hi = vals[2 * len(vals) // 3]
-    return ["warm" if v <= lo else ("cool" if v > hi else None) for v in bright]
+    return ["cool" if v <= lo else ("warm" if v > hi else None) for v in bright]
 
 
 def flux_strobe_spans(paths, tempo_map, tpb: int, hi_pct: float = 88.0,
@@ -496,10 +496,45 @@ def flux_strobe_spans(paths, tempo_map, tpb: int, hi_pct: float = 88.0,
     return [(a, b) for a, b in merged if b - a >= min_ticks] or None
 
 
+def calm_blackout_ticks(paths, sections, tempo_map, tpb: int,
+                        sub_beats: int = 2, min_beats: float = 4.0,
+                        hop_s: float = 0.1) -> list[int] | None:
+    """Blackout anchors = the START of each contiguous LOW-energy region of the song.
+    Ground-truth driven: the venue_audio_study over the 20 official venues showed
+    blackout lighting sits in CALM states (loud_p median 36, 46% in the bottom third)
+    and NOT at a sharp intensity fall (drop ratio ~1.0). So instead of find_drops'
+    build->drop transients, we anchor a blackout where the song's energy is genuinely
+    low. Reuses energy_envelope's song-relative 'calm' tier, merges consecutive calm
+    spans, and keeps regions lasting >= min_beats. Returns one tick per calm region
+    (its start), or None. Song-relative: a uniformly loud song yields no calm region."""
+    env = energy_envelope(paths, sections, tempo_map, tpb, sub_beats, hop_s)
+    if not env:
+        return None
+    span_ticks = max(1, sub_beats) * tpb
+    out: list[int] = []
+    run_start = None
+    run_len = 0
+    for start, tier in env:
+        if tier == "calm":
+            if run_start is None:
+                run_start = start
+            run_len += span_ticks
+        else:
+            if run_start is not None and run_len >= int(min_beats * tpb):
+                out.append(run_start)
+            run_start, run_len = None, 0
+    if run_start is not None and run_len >= int(min_beats * tpb):
+        out.append(run_start)
+    return out or None
+
+
 def find_drops(paths, tempo_map, tpb: int, win_s: float = 0.5,
                hi_pct: float = 70.0, drop_ratio: float = 0.45,
                hop: int = 1024, win: int = 2048) -> list[int] | None:
-    """Drop moments: a sharp COLLAPSE of intensity (loudness+flux) right after a
+    """SUPERSEDED for blackout placement by calm_blackout_ticks (the venue_audio_study
+    showed official blackouts sit in calm states, not at sharp falls). Kept for
+    reference / possible future 'drop' cues.
+    Drop moments: a sharp COLLAPSE of intensity (loudness+flux) right after a
     sustained-loud stretch — the classic build->drop / breakdown entry. For each frame
     boundary, compares the mean intensity of the previous `win_s` seconds against the
     next: a drop = previous window in the song's loud range (>= hi_pct percentile) AND

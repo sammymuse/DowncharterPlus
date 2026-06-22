@@ -607,10 +607,13 @@ def process_midi(
             audio_strobe = _audio.flux_strobe_spans(a_paths, tempo_map, tpb)
             if audio_strobe:
                 stats["audio_strobe_spans"] = len(audio_strobe)
-            # Intensity collapse after a loud stretch → blackout_spot (build->drop look).
-            drop_ticks = _audio.find_drops(a_paths, tempo_map, tpb)
-            if drop_ticks:
-                stats["audio_drops"] = len(drop_ticks)
+            # Blackout anchors = start of calm low-energy regions (ground-truth: the
+            # 20 official venues put blackout in calm states, not at a sharp fall).
+            if sections:
+                drop_ticks = _audio.calm_blackout_ticks(
+                    a_paths, sections, tempo_map, tpb)
+                if drop_ticks:
+                    stats["audio_blackout_calm"] = len(drop_ticks)
             # Character ANIMATION from the audio: ONLY vocals. Animating an ABSENT
             # bass/guitar/drums/keys creates a PART track with no charted gems —
             # RB3 doesn't render the character (camera/animation pointing at nothing)
