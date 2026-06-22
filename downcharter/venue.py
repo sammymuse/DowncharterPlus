@@ -1007,22 +1007,40 @@ def _absent_framings(inst_onsets: dict[str, list[int]] | None) -> set[str]:
 # (no jumps: closeups `_cls`, camera `_cam_pt`, `drums_lt/kd`) for calm+mid; ENERGETIC
 # tier (jumps/kicks: `D_All*`, plain `D_Gtr/Bass/Vocals`, duos, crowd) only for high.
 # `build_camera` chooses by the real `section_energy` (refined by audio).
-_SECTION_DIRECTED = {            # (calm pair, energetic pair) — 2 cuts/tier for variety
-    # Duos (gb/kb/kg/kv/guitar/bass) go in the CALM pairs — they are not jumps, they
-    # just film 2 members interacting (valid in mellow); the guard requires both playing.
-    # all_yeah/all_lt in the energetic ones (climax/sing-along). drums_lt/kd reinforced.
-    "intro":      (("D_Bass_CLS",   "D_Drums_LT"),   ("D_Bass",     "D_All_Cam")),
-    "verse":      (("D_Bass_CLS",   "D_Duo_KB"),     ("D_Bass",     "D_Duo_GB")),
-    "prechorus":  (("D_Bass_CLS",   "D_Duo_KG"),     ("D_Duo_GB",   "D_All_Cam")),
-    "chorus":     (("D_Keys_Cam",   "D_Vox_CLS"),    ("D_All_Yeah", "D_Crowd_Bass")),
-    "postchorus": (("D_Keys_Cam",   "D_Duo_Bass"),   ("D_Crowd",    "D_All_Cam")),
-    "bridge":     (("D_Duo_KB",     "D_Keys_Cam"),   ("D_Duo_KG",   "D_Duo_KB")),
-    "build":      (("D_Drums_KD",   "D_Duo_KB"),     ("D_Drums",    "D_All_LT")),
-    "drop":       (("D_Drums_LT",   "D_Bass_CLS"),   ("D_All_LT",   "D_Drums")),
-    "breakdown":  (("D_Drums_LT",   "D_Drums_Point"),("D_Drums",    "D_All_Cam")),
-    "riff":       (("D_Gtr_CLS",    "D_Duo_KB"),     ("D_Gtr",      "D_Duo_GB")),
-    "outro":      (("D_Bass_CLS",   "D_Keys_Cam"),   ("D_All_Cam",  "D_Crowd")),
-    "default":    (("D_Drums_LT",   "D_Duo_KB"),     ("D_Keys",     "D_All_Cam")),
+_SECTION_DIRECTED = {       # (calm pool, energetic pool) — POOLS (not pairs) for variety
+    # The directed_study over the 20 official venues showed they use a MEDIAN of 14
+    # distinct directed cuts/song with the top one ~20% (not one cut hammered). We were
+    # offering only 2 per kind → a single cut dominated (Elegy crowd_b 67%). So each tier
+    # is a 4-5 wide pool the generator rotates through with an anti-recency guard.
+    # Calm = closeups / duos (2 members interacting, no jumps). Energetic = lt/kd/yeah/
+    # cam / points (climax, sing-along). Drawn from the official frequency ranking
+    # (vocals_cam_pt, guitar_cls, drums_lt, bass_cls, drums_kd, all_yeah, duo_gb...).
+    "intro":      (["D_Bass_CLS", "D_Drums_LT", "D_Gtr_CLS", "D_Keys_Cam"],
+                   ["D_Bass", "D_All_Cam", "D_Drums_LT", "D_All_LT"]),
+    "verse":      (["D_Bass_CLS", "D_Duo_KB", "D_Gtr_CLS", "D_Vox_CLS", "D_Duo_GB"],
+                   ["D_Bass", "D_Duo_GB", "D_Gtr_Cam_PT", "D_Drums_LT"]),
+    "prechorus":  (["D_Bass_CLS", "D_Duo_KG", "D_Gtr_CLS", "D_Vox_Cam_PT"],
+                   ["D_Duo_GB", "D_All_Cam", "D_Drums_KD", "D_All_LT"]),
+    "chorus":     (["D_Vox_CLS", "D_Keys_Cam", "D_Gtr_CLS", "D_Vox_Cam_PT"],
+                   ["D_All_Yeah", "D_Crowd_Bass", "D_All_LT", "D_All_Cam", "D_Drums_LT"]),
+    "postchorus": (["D_Keys_Cam", "D_Duo_Bass", "D_Vox_CLS", "D_Gtr_CLS"],
+                   ["D_Crowd", "D_All_Cam", "D_All_Yeah", "D_All_LT"]),
+    "bridge":     (["D_Duo_KB", "D_Keys_Cam", "D_Bass_CLS", "D_Vox_Cam_PT", "D_Duo_KG"],
+                   ["D_Duo_KG", "D_Duo_KB", "D_All_Cam", "D_Drums_LT"]),
+    "build":      (["D_Drums_KD", "D_Duo_KB", "D_Bass_CLS", "D_Gtr_CLS"],
+                   ["D_Drums", "D_All_LT", "D_Drums_KD", "D_All_Cam"]),
+    "drop":       (["D_Drums_LT", "D_Bass_CLS", "D_Gtr_CLS"],
+                   ["D_All_LT", "D_Drums", "D_All_Yeah", "D_Drums_KD"]),
+    "breakdown":  (["D_Drums_LT", "D_Drums_Point", "D_Bass_CLS", "D_Gtr_CLS"],
+                   ["D_Drums", "D_All_Cam", "D_Drums_LT", "D_All_LT"]),
+    "riff":       (["D_Gtr_CLS", "D_Duo_KB", "D_Bass_CLS", "D_Gtr_Cam_PT"],
+                   ["D_Gtr", "D_Duo_GB", "D_Gtr_Cam_PT", "D_Drums_LT"]),
+    "solo":       (["D_Gtr_CLS", "D_Bass_CLS", "D_Drums_LT", "D_Keys_Cam"],
+                   ["D_Gtr", "D_Drums", "D_Gtr_Cam_PT", "D_All_LT"]),
+    "outro":      (["D_Bass_CLS", "D_Keys_Cam", "D_Vox_CLS", "D_Gtr_CLS"],
+                   ["D_All_Cam", "D_Crowd", "D_All_LT", "D_All_Yeah"]),
+    "default":    (["D_Drums_LT", "D_Duo_KB", "D_Bass_CLS", "D_Gtr_CLS"],
+                   ["D_Keys", "D_All_Cam", "D_Drums_LT", "D_All_LT"]),
 }
 
 # Substitution for songs WITHOUT real vocals (instrumentals): the cuts that depend
@@ -1053,6 +1071,16 @@ SOLO_CAMERA = {
     "drums":  ["D_Near", "D_Hand", "D_Head", "All_Near", "D_Behind", "D_Drums"],
     "keys":   ["K_Near", "K_Hand", "K_Head", "KV_Near", "K_Behind", "D_Keys"],
     "vocal":  ["V_Near", "V_Closeup", "GV_Near", "DV_Near", "V_Behind", "D_Vox_CLS"],
+}
+
+# Directed options for a solo section, rotated with the anti-recency guard (the
+# soloist filmed several ways instead of the same closeup repeating).
+_SOLO_DIRECTED = {
+    "guitar": ["D_Gtr_CLS", "D_Gtr", "D_Gtr_Cam_PT"],
+    "bass":   ["D_Bass_CLS", "D_Bass", "D_Bass_Cam"],
+    "drums":  ["D_Drums_LT", "D_Drums", "D_Drums_KD"],
+    "keys":   ["D_Keys_Cam", "D_Keys"],
+    "vocal":  ["D_Vox_CLS", "D_Vocals", "D_Vox_Cam_PT"],
 }
 
 
@@ -1205,6 +1233,26 @@ def _guard_directed(cut: str, tick: int, tpb: int,
     return cut
 
 
+def _fresh_directed(options: list[str], recent, has_vocal: bool) -> str | None:
+    """Pick a directed cut from `options` not used in the recent window (anti-monotony).
+    Resolves no-vocal substitutions first; if every option is recent, returns the
+    least-recently used one (first in list). Keeps the per-song variety near the
+    official ~14 distinct cuts and the top-cut share near ~20% instead of one
+    directed dominating."""
+    seen, opts = set(), []
+    for c in options:
+        c2 = c if has_vocal else _NO_VOCAL_SUB.get(c, c)
+        if c2 not in seen:
+            seen.add(c2)
+            opts.append(c2)
+    if not opts:
+        return None
+    for c in opts:
+        if c not in recent:
+            return c
+    return opts[0]
+
+
 def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                  tpb: int, bre_spans: list[tuple[int, int]] | None = None,
                  pace_scale: float = 1.0,
@@ -1234,6 +1282,8 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     # vocal). Computed once; applied to every framing pool.
     bad_framings = _absent_framings(inst_onsets)
     dsel = 0                          # alternates the directed pair between sections
+    from collections import deque
+    recent_directed: deque = deque(maxlen=5)   # anti-recency: last 5 emitted directed cuts
     erank = {"calm": 0, "mid": 1, "high": 2}
     prev_energy = "calm"              # previous section's energy (for dircut_at_start)
     last_allband = -10 ** 9           # throttle for the full-band directed_all*
@@ -1270,10 +1320,12 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     for s in sections:
         energy = section_energy(s)
         if s.kind == "solo":
-            solo_pool = SOLO_CAMERA[_solo_instrument(s.name)]
+            inst = _solo_instrument(s.name)
+            solo_pool = SOLO_CAMERA[inst]
             if bad_framings:                     # don't film an absent soloist
                 solo_pool = _safe_framing(solo_pool, bad_framings)
             pool = solo_pool
+            section_dir = _SOLO_DIRECTED.get(inst, ["D_Drums_LT"])
         else:
             framing = SECTION_CAMERA.get(s.kind, SECTION_CAMERA["default"])
             if bad_framings:                     # don't film absent instruments
@@ -1281,14 +1333,15 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             # Section's directed cut chosen by ENERGY: high → energetic
             # (jumps/kicks), calm/mid → calm (closeups/cam) — avoids jumps/kicks
             # in mellow parts, like the official venues. Injected in the middle of the pool.
-            calm_pair, energetic_pair = _SECTION_DIRECTED.get(
+            calm_pool, energetic_pool = _SECTION_DIRECTED.get(
                 s.kind, _SECTION_DIRECTED["default"])
-            pair = energetic_pair if energy == "high" else calm_pair
-            if not has_vocal:                    # instrumental → vocal-free variants
-                pair = tuple(_NO_VOCAL_SUB.get(c, c) for c in pair)
-            # 1 directed per pool (~13-15%), but ALTERNATES the 2 cuts of the pair between
-            # sections → variety along the song without inflating the density.
-            dc = pair[dsel % len(pair)]
+            # Directed options for this section = energy-biased pool (the matching tier
+            # first, the other as overflow), rotated with the anti-recency guard so no
+            # single directed dominates (official top-cut ~20%, ~14 distinct/song).
+            section_dir = (list(energetic_pool) + list(calm_pool) if energy == "high"
+                           else list(calm_pool) + list(energetic_pool))
+            energetic_pair = energetic_pool          # kept name for dircut_at_start below
+            dc = _fresh_directed(section_dir, recent_directed, has_vocal)
             dsel += 1
             # Normalizes the framing pool to 7 entries (cycling the original framing) →
             # the directed becomes ~1/8 of the cuts (≈13%), compensating the at-start cuts.
@@ -1297,23 +1350,23 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             while len(base) < 8 and orig_n:
                 base.append(framing[len(base) % orig_n])
             pool = base
-            pool.insert(min(2, len(pool)), dc)
+            if dc is not None:
+                pool.insert(min(2, len(pool)), dc)
             # dircut_at_start (book p.337): only on the UPWARD transition to an intense
             # section (previous < current AND current=high) does it nail the energetic
             # cut on the entry's downbeat — a "kick" synced with the drop in the music.
             # Not always: only on real rises, and the 2:1 audio guarantees intensity.
             start_cut = False
             if energy == "high" and erank[energy] > erank[prev_energy]:
-                ecut = energetic_pair[(dsel - 1) % len(energetic_pair)]
-                if not has_vocal:
-                    ecut = _NO_VOCAL_SUB.get(ecut, ecut)
+                ecut = _fresh_directed(list(energetic_pair), recent_directed, has_vocal)
                 start = _snap_to_music(s.start, accents, tpb, floor=last_tick + min_gap)
-                g = _guard_directed(ecut, start, tpb, inst_onsets)
+                g = _guard_directed(ecut, start, tpb, inst_onsets) if ecut else None
                 if g and not (g in _DIRECTED_DRAMATIC and start - last_dramatic < tpb * 8):
                     ev0 = _cut_event(start, g)
                     if ev0 is not None and s.start <= start < s.end:
                         out.append(ev0)
                         last_cut, last_tick = g, start
+                        recent_directed.append(g)
                         start_cut = True
                         if g in _DIRECTED_DRAMATIC:
                             last_dramatic = start
@@ -1337,6 +1390,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                     if ev0 is not None:
                         out.append(ev0)
                         last_cut, last_tick = g, start
+                        recent_directed.append(g)
                         last_allband = last_dramatic = start
         pace_ms = SECTION_PACE_S.get(s.kind, 3.0) * 1000.0 * pace_scale
         # Audio nudge: if the real loudness differs from the structural energy, adjusts the
@@ -1363,6 +1417,13 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             if cut == last_cut:                      # avoid immediate repetition
                 idx += 1
                 cut = pool[idx % len(pool)]
+            # When the pool lands on a DIRECTED slot, re-pick a fresh one from the
+            # section pool avoiding the recent window → a long section rotates through
+            # several directed cuts instead of repeating the same one.
+            if cut in DIRECTED_CUTS:
+                fresh = _fresh_directed(section_dir, recent_directed, has_vocal)
+                if fresh is not None:
+                    cut = fresh
             # Semantic guard: a directed cut has to make sense in the context.
             guarded = _guard_directed(cut, placed, tpb, inst_onsets)
             # Throttle for the dramatic full-band ones: ≥8 beats between them.
@@ -1375,6 +1436,8 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             cut = guarded
             if cut in _DIRECTED_DRAMATIC:
                 last_dramatic = placed
+            if cut in DIRECTED_CUTS:                 # remember emitted directed (anti-recency)
+                recent_directed.append(cut)
             ev = _cut_event(placed, cut)
             if ev is not None and placed < s.end:
                 out.append(ev)
