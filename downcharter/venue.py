@@ -447,7 +447,8 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
                    time_sig_map: list,
                    drum_onsets: list[int] | None = None,
                    pause_spans: list[tuple[int, int]] | None = None,
-                   strobe_spans: list[tuple[int, int]] | None = None) -> list[AbsEvent]:
+                   strobe_spans: list[tuple[int, int]] | None = None,
+                   audio_onsets: list[int] | None = None) -> list[AbsEvent]:
     """Professional-style lightshow, DRIVEN BY THE SECTION TYPE (the primary pattern
     learned from the 20 venues). Cycles the section pool (SECTION_LIGHT_POOL) at the
     drums' rhythm and sprinkles a genre accent (theme) every _LIGHT_ACCENT_EVERY
@@ -459,6 +460,11 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
     drums = sorted(drum_onsets) if drum_onsets else []
     pause_spans = pause_spans or []
     strobe_spans = strobe_spans or []
+    audio_onsets = sorted(audio_onsets) if audio_onsets else []
+    # Snap light changes to real transients: drum hits PLUS the strong audio flux
+    # accents (catches audio-only hits the MIDI drums miss). The cadence stays
+    # section-driven; only the PLACEMENT is pulled onto the nearest musical hit.
+    hits = sorted(set(drums) | set(audio_onsets)) if audio_onsets else drums
     pi = 0
     last: str | None = None
     for s in sections:
@@ -471,8 +477,9 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
         t = s.start
         i = 0
         bi = 0   # pool index, advances ONLY on base steps (separate from the accent)
+        placed: list[int] = []   # change ticks in this section (for forced audio hits)
         while t < s.end:
-            tick = _nearest(t, drums, snap_win, floor=s.start) if drums else None
+            tick = _nearest(t, hits, snap_win, floor=s.start) if hits else None
             if tick is None:
                 tick = t
             if _in_span(tick, strobe_spans):          # burst → strobe (handled separately)
@@ -493,9 +500,26 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
             if preset != last and tick < s.end:
                 out.append(_txt(tick, f"[lighting ({preset})]"))
                 light_events.append((tick, preset))
+                placed.append(tick)
                 last = preset
             t += step
             i += 1
+        # Forced 'hit': a strong audio flux accent landing in a GAP of the cadence
+        # (no change within snap_win) punches the genre accent there, so a big
+        # musical hit in an otherwise static stretch triggers a visible light change.
+        ai = 0
+        for o in audio_onsets:
+            if not (s.start <= o < s.end):
+                continue
+            if _in_span(o, pause_spans) or _in_span(o, strobe_spans):
+                continue
+            if all(abs(o - pt) > snap_win for pt in placed):
+                preset = accents[ai % len(accents)]
+                ai += 1
+                out.append(_txt(o, f"[lighting ({preset})]"))
+                light_events.append((o, preset))
+                placed.append(o)
+                last = preset
     # Keyframes [next]: the MANUAL presets (verse/chorus/manual_*/dischord/stomp) are
     # STATIC until a keyframe advances them. The official venues keyframe them ~1×
     # per beat (snap to hits). AUTO presets (frenzy/flare/loop/strobe…) animate
@@ -1529,7 +1553,8 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
                    inst_onsets: dict[str, list[int]] | None = None,
                    n_harm: int = 0,
                    fill_onsets: list[int] | None = None,
-                   dbass_onsets: list[int] | None = None) -> list[AbsEvent]:
+                   dbass_onsets: list[int] | None = None,
+                   audio_onsets: list[int] | None = None) -> list[AbsEvent]:
     """Generate all the text events of an explicit VENUE, sorted by tick.
     `theme` is the THEMES key (derived from the genre via genre_to_theme).
     `accents` (ticks of the Expert accents) syncs the cuts with the music.
@@ -1548,9 +1573,13 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
         fill_onsets if fill_onsets is not None else (drum_onsets or []), tpb,
         dbass_onsets=dbass_onsets)
     out += build_lighting(sections, th, tpb, time_sig_map, drum_onsets,
-                          pause_spans, strobe_spans)
+                          pause_spans, strobe_spans, audio_onsets=audio_onsets)
     out += build_postproc(sections, th, tpb, time_sig_map, drum_onsets)
-    out += build_pyro(sections, drum_onsets or [], tpb, accents=accents)
+    # Audio flux accents join the band accents as pyro candidates (real hits, incl.
+    # audio-only ones); build_pyro still gates density/placement by energy + cap.
+    pyro_accents = (sorted(set(accents or []) | set(audio_onsets))
+                    if audio_onsets else accents)
+    out += build_pyro(sections, drum_onsets or [], tpb, accents=pyro_accents)
     out += build_camera(sections, tempo_map, time_sig_map, tpb, bre_spans,
                         pace_scale=th["pace"], accents=accents, onsets=onsets,
                         inst_onsets=inst_onsets)

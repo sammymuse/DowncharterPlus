@@ -244,6 +244,46 @@ def percussive_onset_ticks(paths, tempo_map, tpb: int,
     return [_ms_to_tick(ms, tempo_map, tpb) for ms in times]
 
 
+def flux_accents(paths, tempo_map, tpb: int, top_pct: float = 90.0,
+                 min_gap_s: float = 0.40, hop: int = 1024,
+                 win: int = 2048) -> list[int] | None:
+    """STRONG spectral-flux transients (chorus hits, crashes, synth stabs) — a
+    SELECTIVE subset of percussive_onset_ticks meant to PUNCTUATE the lightshow
+    (snap light changes / pyro to real musical hits), NOT to reproduce every drum
+    hit. Song-relative: keeps only local flux maxima above the `top_pct` percentile
+    of all peak heights, spaced >= min_gap_s apart. No absolute threshold — a quiet
+    song and a loud one both surface their own strongest ~10% of transients.
+    Catches AUDIO-only hits the MIDI drums miss (electronic stabs, orchestral crashes).
+    Returns ticks (ascending) or None on failure / no audio."""
+    if isinstance(paths, str):
+        paths = [paths]
+    try:
+        import numpy as np
+        mono, sr = load_mono_mix(paths)
+        mag, hop = _stft_mag(mono, sr, hop, win)
+        if mag.shape[0] < 5:
+            return None
+        flux = np.maximum(0.0, np.diff(mag, axis=0)).sum(axis=1)
+        flux /= (flux.max() + 1e-9)
+        peaks = [(i, float(flux[i])) for i in range(2, len(flux) - 2)
+                 if flux[i] >= flux[i - 1] and flux[i] > flux[i + 1]
+                 and flux[i] > flux[i - 2] and flux[i] >= flux[i + 2]]
+        if not peaks:
+            return None
+        thr = float(np.percentile([f for _, f in peaks], top_pct))
+        min_gap = max(1, int(min_gap_s * sr / hop))
+        out: list[int] = []
+        last = -10 ** 9
+        for i, f in peaks:
+            if f >= thr and i - last >= min_gap:
+                out.append(_ms_to_tick((i * hop + win / 2) / sr * 1000.0,
+                                       tempo_map, tpb))
+                last = i
+        return out or None
+    except Exception:
+        return None
+
+
 # Frequency bands → per-instrument activity proxy (no ML separation).
 _BANDS = {"bass": (40, 250), "drums": (3000, 12000), "lead": (300, 3000)}
 

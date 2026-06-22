@@ -91,8 +91,10 @@ def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
     Blends song-relative cues: audio (loudness+flux+brightness) + MIDI (band
     fullness + velocity) + the structural type. A chorus must be loud AND busy AND
     bright AND full to read 'high' — plain volume no longer decides on its own.
-    Returns True if AUDIO was used (kept for the `audio_used` stat); the MIDI cues
-    refine the energy even with no audio (graceful, dependency-free fallback)."""
+    Audio is used whenever ANY song audio exists (the mixed .ogg/.mogg/.mp3, not
+    only separated stems — find_song_audio falls back to the single mix). The
+    MIDI-only path (returns False) kicks in solely when the folder has NO audio file
+    at all; the MIDI cues still refine the energy there (dependency-free fallback)."""
     if not sections:
         return False
     from .venue import SECTION_ENERGY
@@ -568,12 +570,18 @@ def process_midi(
         from . import audio as _audio
         a_paths = ([audio_path] if audio_path
                    else _audio.find_song_audio(os.path.dirname(os.path.abspath(src_path))))
+        audio_accents = None
         if _audio.available() and a_paths:
             if not drum_onsets:                       # Layer 1
                 pd = _audio.percussive_onset_ticks(a_paths, tempo_map, tpb)
                 if pd:
                     drum_onsets = pd
                     stats["audio_drums"] = True
+            # Strong audio transients (chorus hits, crashes, stabs) → snap light
+            # changes / pyro to real musical hits, incl. audio-only ones.
+            audio_accents = _audio.flux_accents(a_paths, tempo_map, tpb)
+            if audio_accents:
+                stats["audio_accents"] = len(audio_accents)
             # Character ANIMATION from the audio: ONLY vocals. Animating an ABSENT
             # bass/guitar/drums/keys creates a PART track with no charted gems —
             # RB3 doesn't render the character (camera/animation pointing at nothing)
@@ -604,7 +612,7 @@ def process_midi(
                 events_track, bre_spans, song_end, tempo_map, time_sig_map, tpb,
                 theme, accents, onsets, sections=sections, drum_onsets=drum_onsets,
                 inst_onsets=inst_onsets, n_harm=n_harm, fill_onsets=fill_onsets,
-                dbass_onsets=dbass_onsets)
+                dbass_onsets=dbass_onsets, audio_onsets=audio_accents)
             new_mid.tracks.append(build_venue_track(venue_events))
             stats["venue_events"] = len(venue_events)
             stats["venue_theme"] = theme
