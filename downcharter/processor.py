@@ -572,6 +572,7 @@ def process_midi(
                    else _audio.find_song_audio(os.path.dirname(os.path.abspath(src_path))))
         audio_accents = None
         energy_env = None
+        audio_strobe = None
         if _audio.available() and a_paths:
             if not drum_onsets:                       # Layer 1
                 pd = _audio.percussive_onset_ticks(a_paths, tempo_map, tpb)
@@ -600,6 +601,11 @@ def process_midi(
                     a_paths, sections, tempo_map, tpb)
                 if energy_env:
                     stats["audio_env_spans"] = len(energy_env)
+            # Sustained spectral-flux walls (blast/tremolo) → continuous strobe, even
+            # for audio-only walls the MIDI drums miss.
+            audio_strobe = _audio.flux_strobe_spans(a_paths, tempo_map, tpb)
+            if audio_strobe:
+                stats["audio_strobe_spans"] = len(audio_strobe)
             # Character ANIMATION from the audio: ONLY vocals. Animating an ABSENT
             # bass/guitar/drums/keys creates a PART track with no charted gems —
             # RB3 doesn't render the character (camera/animation pointing at nothing)
@@ -631,7 +637,7 @@ def process_midi(
                 theme, accents, onsets, sections=sections, drum_onsets=drum_onsets,
                 inst_onsets=inst_onsets, n_harm=n_harm, fill_onsets=fill_onsets,
                 dbass_onsets=dbass_onsets, audio_onsets=audio_accents,
-                energy_env=energy_env)
+                energy_env=energy_env, audio_strobe_spans=audio_strobe)
             new_mid.tracks.append(build_venue_track(venue_events))
             stats["venue_events"] = len(venue_events)
             stats["venue_theme"] = theme

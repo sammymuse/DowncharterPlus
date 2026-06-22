@@ -446,6 +446,56 @@ def section_brightness_tiers(paths, sections, tempo_map, tpb: int,
     return ["warm" if v <= lo else ("cool" if v > hi else None) for v in bright]
 
 
+def flux_strobe_spans(paths, tempo_map, tpb: int, hi_pct: float = 88.0,
+                      min_beats: float = 1.75, hop: int = 1024,
+                      win: int = 2048) -> list[tuple[int, int]] | None:
+    """Audio strobe spans: stretches where the spectral flux stays SUSTAINED above the
+    song's own `hi_pct` percentile (a tremolo / blast 'wall'). Catches audio-driven
+    walls (electronic, shoegaze, orchestral crescendos) that the MIDI drums don't flag.
+    The CONTINUITY requirement (>= min_beats above threshold) is the natural gate: a
+    calm song's loud frames are isolated strums that never sustain, so it produces no
+    span — no absolute level needed. Returns (start_tick, end_tick) spans or None."""
+    if isinstance(paths, str):
+        paths = [paths]
+    try:
+        import numpy as np
+        mono, sr = load_mono_mix(paths)
+        mag, hop = _stft_mag(mono, sr, hop, win)
+        if mag.shape[0] < 8:
+            return None
+        flux = np.concatenate([[0.0], np.maximum(0.0, np.diff(mag, axis=0)).sum(axis=1)])
+        w = max(1, int(0.15 * sr / hop))                  # ~0.15 s smoothing
+        sm = np.convolve(flux, np.ones(w) / w, mode="same")
+        thr = float(np.percentile(sm, hi_pct))
+        active = sm >= thr
+    except Exception:
+        return None
+    spans: list[tuple[int, int]] = []
+    n = len(active)
+    i = 0
+    while i < n:
+        if active[i]:
+            j = i
+            while j < n and active[j]:
+                j += 1
+            a = _ms_to_tick((i * hop + win / 2) / sr * 1000.0, tempo_map, tpb)
+            b = _ms_to_tick((j * hop + win / 2) / sr * 1000.0, tempo_map, tpb)
+            spans.append((a, b))
+            i = j
+        else:
+            i += 1
+    # Merge runs separated by < 1/2 beat, then keep only the sustained ones.
+    bridge = tpb // 2
+    merged: list[tuple[int, int]] = []
+    for a, b in spans:
+        if merged and a - merged[-1][1] < bridge:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    min_ticks = int(min_beats * tpb)
+    return [(a, b) for a, b in merged if b - a >= min_ticks] or None
+
+
 def energy_envelope(paths, sections, tempo_map, tpb: int, sub_beats: int = 2,
                     hop_s: float = 0.1) -> list[tuple[int, str]] | None:
     """Within-section energy envelope at SUB-SECTION resolution. Splits the whole song

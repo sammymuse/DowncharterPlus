@@ -640,6 +640,17 @@ def _fast_runs(onsets: list[int], fast_gap: int, min_span: int) -> list[tuple[in
     return spans
 
 
+def _merge_spans(spans: list[tuple[int, int]], bridge: int) -> list[tuple[int, int]]:
+    """Sort and coalesce spans whose gap is < `bridge` (also merges overlaps)."""
+    merged: list[tuple[int, int]] = []
+    for a, b in sorted(spans):
+        if merged and a - merged[-1][1] < bridge:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
 def find_strobe_spans(drum_onsets: list[int], tpb: int,
                       dbass_onsets: list[int] | None = None) -> list[tuple[int, int]]:
     """'Painkiller'-style strobe spans: fast and SUSTAINED bursts deserve
@@ -1592,7 +1603,9 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
                    fill_onsets: list[int] | None = None,
                    dbass_onsets: list[int] | None = None,
                    audio_onsets: list[int] | None = None,
-                   energy_env: list[tuple[int, str]] | None = None) -> list[AbsEvent]:
+                   energy_env: list[tuple[int, str]] | None = None,
+                   audio_strobe_spans: list[tuple[int, int]] | None = None
+                   ) -> list[AbsEvent]:
     """Generate all the text events of an explicit VENUE, sorted by tick.
     `theme` is the THEMES key (derived from the genre via genre_to_theme).
     `accents` (ticks of the Expert accents) syncs the cuts with the music.
@@ -1610,6 +1623,10 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     strobe_spans = find_strobe_spans(
         fill_onsets if fill_onsets is not None else (drum_onsets or []), tpb,
         dbass_onsets=dbass_onsets)
+    # Merge audio-detected blast/tremolo walls (sustained spectral flux) with the
+    # MIDI-derived strobe spans — catches audio-only walls the drums don't flag.
+    if audio_strobe_spans:
+        strobe_spans = _merge_spans(strobe_spans + list(audio_strobe_spans), tpb // 2)
     out += build_lighting(sections, th, tpb, time_sig_map, drum_onsets,
                           pause_spans, strobe_spans, audio_onsets=audio_onsets,
                           energy_env=energy_env)
