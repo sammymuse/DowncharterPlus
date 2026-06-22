@@ -402,6 +402,16 @@ _WARM_OF = {"manual_cool": "manual_warm", "loop_cool": "loop_warm"}
 _COOL_OF = {"manual_warm": "manual_cool", "loop_warm": "loop_cool"}
 
 
+def _env_tier(env: list[tuple[int, str]] | None, tick: int) -> str:
+    """Local energy tier at `tick` from a sorted (start_tick, tier) envelope.
+    Returns the tier of the rightmost breakpoint <= tick (first one if before all)."""
+    if not env:
+        return "mid"
+    import bisect
+    i = bisect.bisect_right([b[0] for b in env], tick) - 1
+    return env[max(0, i)][1]
+
+
 def _warmth_pool(pool: list[str], warmth: str | None) -> list[str]:
     """Bias a light pool toward `warmth` ('warm'/'cool'); keeps length/structure,
     only swaps the warm/cool presets. None → unchanged."""
@@ -467,7 +477,8 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
                    drum_onsets: list[int] | None = None,
                    pause_spans: list[tuple[int, int]] | None = None,
                    strobe_spans: list[tuple[int, int]] | None = None,
-                   audio_onsets: list[int] | None = None) -> list[AbsEvent]:
+                   audio_onsets: list[int] | None = None,
+                   energy_env: list[tuple[int, str]] | None = None) -> list[AbsEvent]:
     """Professional-style lightshow, DRIVEN BY THE SECTION TYPE (the primary pattern
     learned from the 20 venues). Cycles the section pool (SECTION_LIGHT_POOL) at the
     drums' rhythm and sprinkles a genre accent (theme) every _LIGHT_ACCENT_EVERY
@@ -484,6 +495,7 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
     # accents (catches audio-only hits the MIDI drums miss). The cadence stays
     # section-driven; only the PLACEMENT is pulled onto the nearest musical hit.
     hits = sorted(set(drums) | set(audio_onsets)) if audio_onsets else drums
+    env = sorted(energy_env) if energy_env else None
     pi = 0
     last: str | None = None
     for s in sections:
@@ -493,13 +505,17 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
                             s.warmth)
         accents = ([SPECIAL_LIGHTING[s.kind]] if s.kind in SPECIAL_LIGHTING
                    else _warmth_pool(_section_lights(theme, s), s.warmth))   # genre tint
-        step = max(tpb // 8, int(tpb * _LIGHT_CADENCE[energy]))
         snap_win = tpb // 4
         t = s.start
         i = 0
         bi = 0   # pool index, advances ONLY on base steps (separate from the accent)
         placed: list[int] = []   # change ticks in this section (for forced audio hits)
         while t < s.end:
+            # Cadence from the LOCAL energy (audio sub-section envelope) — speeds up in
+            # the loud half of a section, eases in the quiet half. Falls back to the
+            # section tier when there's no envelope (no audio).
+            local = _env_tier(env, t) if env else energy
+            step = max(tpb // 8, int(tpb * _LIGHT_CADENCE[local]))
             tick = _nearest(t, hits, snap_win, floor=s.start) if hits else None
             if tick is None:
                 tick = t
@@ -1575,7 +1591,8 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
                    n_harm: int = 0,
                    fill_onsets: list[int] | None = None,
                    dbass_onsets: list[int] | None = None,
-                   audio_onsets: list[int] | None = None) -> list[AbsEvent]:
+                   audio_onsets: list[int] | None = None,
+                   energy_env: list[tuple[int, str]] | None = None) -> list[AbsEvent]:
     """Generate all the text events of an explicit VENUE, sorted by tick.
     `theme` is the THEMES key (derived from the genre via genre_to_theme).
     `accents` (ticks of the Expert accents) syncs the cuts with the music.
@@ -1594,7 +1611,8 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
         fill_onsets if fill_onsets is not None else (drum_onsets or []), tpb,
         dbass_onsets=dbass_onsets)
     out += build_lighting(sections, th, tpb, time_sig_map, drum_onsets,
-                          pause_spans, strobe_spans, audio_onsets=audio_onsets)
+                          pause_spans, strobe_spans, audio_onsets=audio_onsets,
+                          energy_env=energy_env)
     out += build_postproc(sections, th, tpb, time_sig_map, drum_onsets)
     # Audio flux accents join the band accents as pyro candidates (real hits, incl.
     # audio-only ones); build_pyro still gates density/placement by energy + cap.

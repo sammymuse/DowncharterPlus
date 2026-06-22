@@ -571,6 +571,7 @@ def process_midi(
         a_paths = ([audio_path] if audio_path
                    else _audio.find_song_audio(os.path.dirname(os.path.abspath(src_path))))
         audio_accents = None
+        energy_env = None
         if _audio.available() and a_paths:
             if not drum_onsets:                       # Layer 1
                 pd = _audio.percussive_onset_ticks(a_paths, tempo_map, tpb)
@@ -592,6 +593,13 @@ def process_midi(
                         s.warmth = w
                     stats["audio_warm"] = sum(1 for w in warmth if w == "warm")
                     stats["audio_cool"] = sum(1 for w in warmth if w == "cool")
+            # Within-section energy envelope (sub-section composite score) → the light
+            # cadence speeds up in the loud half of a section, eases in the quiet half.
+            if sections:
+                energy_env = _audio.energy_envelope(
+                    a_paths, sections, tempo_map, tpb)
+                if energy_env:
+                    stats["audio_env_spans"] = len(energy_env)
             # Character ANIMATION from the audio: ONLY vocals. Animating an ABSENT
             # bass/guitar/drums/keys creates a PART track with no charted gems —
             # RB3 doesn't render the character (camera/animation pointing at nothing)
@@ -622,7 +630,8 @@ def process_midi(
                 events_track, bre_spans, song_end, tempo_map, time_sig_map, tpb,
                 theme, accents, onsets, sections=sections, drum_onsets=drum_onsets,
                 inst_onsets=inst_onsets, n_harm=n_harm, fill_onsets=fill_onsets,
-                dbass_onsets=dbass_onsets, audio_onsets=audio_accents)
+                dbass_onsets=dbass_onsets, audio_onsets=audio_accents,
+                energy_env=energy_env)
             new_mid.tracks.append(build_venue_track(venue_events))
             stats["venue_events"] = len(venue_events)
             stats["venue_theme"] = theme

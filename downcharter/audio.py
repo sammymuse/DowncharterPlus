@@ -444,3 +444,35 @@ def section_brightness_tiers(paths, sections, tempo_map, tpb: int,
     lo = vals[len(vals) // 3]
     hi = vals[2 * len(vals) // 3]
     return ["warm" if v <= lo else ("cool" if v > hi else None) for v in bright]
+
+
+def energy_envelope(paths, sections, tempo_map, tpb: int, sub_beats: int = 2,
+                    hop_s: float = 0.1) -> list[tuple[int, str]] | None:
+    """Within-section energy envelope at SUB-SECTION resolution. Splits the whole song
+    into spans of `sub_beats` beats and scores each with the same composite cue as
+    section_energy_scores (loudness+flux+brightness), ranked song-relative across ALL
+    spans, then thirds → 'calm'/'mid'/'high'. Returns a sorted list of
+    (start_tick, tier) breakpoints, or None. Lets the lightshow speed up in the loud
+    half of a long section and ease off in the quiet half — a continuous feel instead
+    of a single tier per section."""
+    if not sections:
+        return None
+    from types import SimpleNamespace
+    span_len = max(1, sub_beats) * tpb
+    spans: list[SimpleNamespace] = []
+    for s in sections:
+        t = s.start
+        while t < s.end:
+            spans.append(SimpleNamespace(start=t, end=min(t + span_len, s.end)))
+            t += span_len
+    if len(spans) < 3:
+        return None
+    scores = section_energy_scores(paths, spans, tempo_map, tpb, hop_s)
+    if scores is None:
+        return None
+    sv = sorted(scores)
+    lo = sv[len(sv) // 3]
+    hi = sv[2 * len(sv) // 3]
+    return [(spans[i].start,
+             "calm" if scores[i] <= lo else ("mid" if scores[i] < hi else "high"))
+            for i in range(len(spans))]
