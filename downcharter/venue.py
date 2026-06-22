@@ -478,7 +478,8 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
                    pause_spans: list[tuple[int, int]] | None = None,
                    strobe_spans: list[tuple[int, int]] | None = None,
                    audio_onsets: list[int] | None = None,
-                   energy_env: list[tuple[int, str]] | None = None) -> list[AbsEvent]:
+                   energy_env: list[tuple[int, str]] | None = None,
+                   drop_ticks: list[int] | None = None) -> list[AbsEvent]:
     """Professional-style lightshow, DRIVEN BY THE SECTION TYPE (the primary pattern
     learned from the 20 venues). Cycles the section pool (SECTION_LIGHT_POOL) at the
     drums' rhythm and sprinkles a genre accent (theme) every _LIGHT_ACCENT_EVERY
@@ -570,6 +571,13 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
     # official venues).
     for a, b in strobe_spans:
         out.append(_txt(a, "[lighting (strobe_fast)]"))
+    # Audio drops (intensity collapse after a loud stretch) → punch a blackout_spot at
+    # the moment everything cuts out, the classic build->drop look. blackout_spot is an
+    # AUTO preset (self-animating) so it needs no keyframe; the next section/cadence
+    # change resumes the show.
+    for d in (drop_ticks or []):
+        if not _in_span(d, pause_spans) and not _in_span(d, strobe_spans):
+            out.append(_txt(d, "[lighting (blackout_spot)]"))
     return out
 
 
@@ -1604,8 +1612,8 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
                    dbass_onsets: list[int] | None = None,
                    audio_onsets: list[int] | None = None,
                    energy_env: list[tuple[int, str]] | None = None,
-                   audio_strobe_spans: list[tuple[int, int]] | None = None
-                   ) -> list[AbsEvent]:
+                   audio_strobe_spans: list[tuple[int, int]] | None = None,
+                   drop_ticks: list[int] | None = None) -> list[AbsEvent]:
     """Generate all the text events of an explicit VENUE, sorted by tick.
     `theme` is the THEMES key (derived from the genre via genre_to_theme).
     `accents` (ticks of the Expert accents) syncs the cuts with the music.
@@ -1629,7 +1637,7 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
         strobe_spans = _merge_spans(strobe_spans + list(audio_strobe_spans), tpb // 2)
     out += build_lighting(sections, th, tpb, time_sig_map, drum_onsets,
                           pause_spans, strobe_spans, audio_onsets=audio_onsets,
-                          energy_env=energy_env)
+                          energy_env=energy_env, drop_ticks=drop_ticks)
     out += build_postproc(sections, th, tpb, time_sig_map, drum_onsets)
     # Audio flux accents join the band accents as pyro candidates (real hits, incl.
     # audio-only ones); build_pyro still gates density/placement by energy + cap.

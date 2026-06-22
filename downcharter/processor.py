@@ -573,6 +573,7 @@ def process_midi(
         audio_accents = None
         energy_env = None
         audio_strobe = None
+        drop_ticks = None
         if _audio.available() and a_paths:
             if not drum_onsets:                       # Layer 1
                 pd = _audio.percussive_onset_ticks(a_paths, tempo_map, tpb)
@@ -606,6 +607,10 @@ def process_midi(
             audio_strobe = _audio.flux_strobe_spans(a_paths, tempo_map, tpb)
             if audio_strobe:
                 stats["audio_strobe_spans"] = len(audio_strobe)
+            # Intensity collapse after a loud stretch → blackout_spot (build->drop look).
+            drop_ticks = _audio.find_drops(a_paths, tempo_map, tpb)
+            if drop_ticks:
+                stats["audio_drops"] = len(drop_ticks)
             # Character ANIMATION from the audio: ONLY vocals. Animating an ABSENT
             # bass/guitar/drums/keys creates a PART track with no charted gems —
             # RB3 doesn't render the character (camera/animation pointing at nothing)
@@ -637,7 +642,8 @@ def process_midi(
                 theme, accents, onsets, sections=sections, drum_onsets=drum_onsets,
                 inst_onsets=inst_onsets, n_harm=n_harm, fill_onsets=fill_onsets,
                 dbass_onsets=dbass_onsets, audio_onsets=audio_accents,
-                energy_env=energy_env, audio_strobe_spans=audio_strobe)
+                energy_env=energy_env, audio_strobe_spans=audio_strobe,
+                drop_ticks=drop_ticks)
             new_mid.tracks.append(build_venue_track(venue_events))
             stats["venue_events"] = len(venue_events)
             stats["venue_theme"] = theme

@@ -496,6 +496,47 @@ def flux_strobe_spans(paths, tempo_map, tpb: int, hi_pct: float = 88.0,
     return [(a, b) for a, b in merged if b - a >= min_ticks] or None
 
 
+def find_drops(paths, tempo_map, tpb: int, win_s: float = 0.5,
+               hi_pct: float = 70.0, drop_ratio: float = 0.45,
+               hop: int = 1024, win: int = 2048) -> list[int] | None:
+    """Drop moments: a sharp COLLAPSE of intensity (loudness+flux) right after a
+    sustained-loud stretch — the classic build->drop / breakdown entry. For each frame
+    boundary, compares the mean intensity of the previous `win_s` seconds against the
+    next: a drop = previous window in the song's loud range (>= hi_pct percentile) AND
+    the next window falls to <= drop_ratio of it. Song-relative — a steadily quiet (or
+    steadily loud) song yields no drop. Returns the drop ticks, or None."""
+    if isinstance(paths, str):
+        paths = [paths]
+    try:
+        import numpy as np
+        mono, sr = load_mono_mix(paths)
+        mag, hop = _stft_mag(mono, sr, hop, win)
+        if mag.shape[0] < 8:
+            return None
+        flux = np.concatenate([[0.0], np.maximum(0.0, np.diff(mag, axis=0)).sum(axis=1)])
+        loud = mag.sum(axis=1)
+        inten = flux / (flux.max() + 1e-9) + loud / (loud.max() + 1e-9)
+        w = max(1, int(0.2 * sr / hop))                   # ~0.2 s smoothing
+        inten = np.convolve(inten, np.ones(w) / w, mode="same")
+        hi = float(np.percentile(inten, hi_pct))
+    except Exception:
+        return None
+    stft_s = hop / sr
+    fw = max(1, int(win_s / stft_s))
+    out: list[int] = []
+    i = fw
+    n = len(inten)
+    while i < n - fw:
+        prev = float(inten[i - fw:i].mean())
+        nxt = float(inten[i:i + fw].mean())
+        if prev >= hi and nxt <= prev * drop_ratio:
+            out.append(_ms_to_tick((i * hop + win / 2) / sr * 1000.0, tempo_map, tpb))
+            i += fw                                       # skip past this drop
+        else:
+            i += 1
+    return out or None
+
+
 def energy_envelope(paths, sections, tempo_map, tpb: int, sub_beats: int = 2,
                     hop_s: float = 0.1) -> list[tuple[int, str]] | None:
     """Within-section energy envelope at SUB-SECTION resolution. Splits the whole song
