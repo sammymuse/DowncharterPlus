@@ -1488,11 +1488,22 @@ def _section_at(sections: list[Section], tick: int) -> Section | None:
     return sections[-1] if sections else None
 
 
+def _idle_state(s: Section) -> str:
+    """The right 'not playing' marker for a section. anim_study over the 20 official
+    venues: idle_realtime is the dead-quiet bookend (loud_p ~9, intro/outro), idle is
+    a calm pause (loud_p ~33), idle_intense is standing energetic during a LOUD section
+    (loud_p ~77, used 140× — we never emitted it). So an instrument silent in a high-
+    energy section stands intense, not slack."""
+    if s.kind in ("intro", "outro"):
+        return "[idle_realtime]"
+    return "[idle_intense]" if section_energy(s) == "high" else "[idle]"
+
+
 def _anim_state(s: Section, playing: bool, instrument: str,
                 intense_theme: bool) -> str:
     """Decide an instrument's mood marker in a section."""
     if not playing:
-        return "[idle_realtime]" if s.kind in ("intro", "outro") else "[idle]"
+        return _idle_state(s)
     if s.kind == "solo" and _solo_instrument(s.name) == instrument:
         return "[play_solo]"
     energy = section_energy(s)
@@ -1526,7 +1537,9 @@ def build_animations(part_onsets: list[int], sections: list[Section],
     for a, b in zip(onsets, onsets[1:]):
         mt = measure_ticks_at(a, time_sig_map, tpb)
         if b - a >= 2 * mt:
-            timeline.append((a + eighth, "[idle]"))
+            sec_a = _section_at(sections, a)
+            idle = _idle_state(sec_a) if sec_a is not None else "[idle]"
+            timeline.append((a + eighth, idle))
             sec = _section_at(sections, b)
             if sec is not None:
                 timeline.append((max(b - eighth, a + eighth + 1),
