@@ -457,7 +457,7 @@ def section_energy_scores(paths, sections, tempo_map, tpb: int,
 
 def section_energy_subspans(paths, sections, tempo_map, tpb: int,
                             hop_s: float = 0.1, smooth_s: float = 0.5,
-                            min_span_s: float = 3.0):
+                            min_span_s: float = 3.0, heavy_gate: float = 0.5):
     """Per-section SUB-SPANS of energy tier, following the music WITHIN a section.
     Instead of one mean tier per section (which washes out a chorus that starts calm
     and builds, and collapses a compressed song to all-'mid'), this segments the
@@ -469,15 +469,41 @@ def section_energy_subspans(paths, sections, tempo_map, tpb: int,
     envelope is MAGNITUDE-scaled song-relative (_scale01: p90→1), the song's own
     loudest ~10%+ of frames always reach 'high' — so even a less-dynamic / compressed
     song gets its peaks back here without any structural/kind promotion.
+
+    HEAVINESS GATE: loudness alone can't tell a *heavy* breakdown (headbang) from a
+    loud *sung* chorus — both can be equally loud. A 'high' span is demoted to 'mid'
+    (→ [play], not [intense]) when its song-relative HEAVINESS — bass energy + spectral
+    flatness + darkness — is below `heavy_gate` (0.5 = the song's own midpoint, NOT
+    restrictive: only the lighter half of the loud material loses the headbang). The
+    heaviest passages (real breakdowns) keep [intense]. NB: the 20 official venues do
+    NOT gate intense this way (they headbang loud choruses freely); this is a more
+    contained aesthetic, by design, for sung/emotional material.
     Returns list[list[(start_tick, end_tick, tier)]] (one list per section, covering
     the whole section, runs contiguous), or None on audio failure."""
     if not sections:
         return None
-    env, stft_s = feel_envelope(paths, hop_s)
-    if env is None:
+    if isinstance(paths, str):
+        paths = [paths]
+    try:
+        import numpy as np
+        mono, sr = load_mono_mix(paths)
+        feats, stft_s = _feel_frames(mono, sr)
+    except Exception:
+        return None
+    if feats is None:
         return None
     import numpy as np
+    # Composite FEEL envelope (same blend as feel_envelope) + a song-relative
+    # HEAVINESS envelope (low-end + flatness + darkness), both from one STFT pass.
+    env = np.zeros(len(feats["loud"]), dtype="float64")
+    for k, wt in _FEEL_W.items():
+        r = _scale01(feats[k])
+        env += abs(wt) * (1.0 - r if wt < 0 else r)
+    heavy = (_scale01(feats["low"]) + _scale01(feats["flat"])
+             + (1.0 - _scale01(feats["bright"]))) / 3.0
     w = max(1, int(round(smooth_s / stft_s)))
+    if w > 1:
+        heavy = np.convolve(heavy, np.ones(w) / w, mode="same")
     if w > 1:
         env = np.convolve(env, np.ones(w) / w, mode="same")
     tier = np.where(env < 0.45, 0, np.where(env < 0.62, 1, 2)).astype(int)
@@ -521,7 +547,14 @@ def section_energy_subspans(paths, sections, tempo_map, tpb: int,
             hi = max(runs[i][1], runs[tgt][1])
             runs[tgt] = [lo, hi, runs[tgt][2]]
             del runs[i]
-        # collapse any adjacent equal-tier runs left after merging
+        # Heaviness gate: a 'high' run that isn't heavy enough (sung loud chorus, not a
+        # breakdown) drops to 'mid' → [play] instead of [intense].
+        for r in runs:
+            if r[2] == 2:
+                hh = float(np.mean(heavy[j0 + r[0]:j0 + r[1]]))
+                if hh < heavy_gate:
+                    r[2] = 1
+        # collapse any adjacent equal-tier runs left after merging/gating
         collapsed: list[list[int]] = []
         for r in runs:
             if collapsed and collapsed[-1][2] == r[2]:
