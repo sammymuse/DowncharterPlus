@@ -143,9 +143,10 @@ aponta a câmara a quem carrega a música (eventos #3/#4/#6 informam isto).
       antes mortos (`D_Drums_NP`) vivos. Harness `dev/cut_stats.py`. Pools antigas
       (`_SECTION_DIRECTED`/`_ALLBAND_*`/`_SOLO_DIRECTED`/`_fresh_directed`) ficaram
       mortas — remover na limpeza final.
-- [ ] Fase 2 — afinar os detetores novos (diversidade de duo/technical; ativar
-      vocal_peak com `_vocal_real` real; kick→KD) + budget por-tipo
-- [ ] ~~Fase 2 — eventos novos~~ (já wired na Fase 1; falta afinar)
+- [x] Fase 2 — `detect_features` (rotação de duos/closeups/vocal por secção → nenhum
+      directed domina, máx 2-3/tipo); vocal_peak robustecido e ativo (D_Vox_CLS volta);
+      `detect_technical` desligado (duplicava CLS). Falta: kick→KD preciso (sem kick
+      isolado hoje); subir directed share ~6-7%→~13% se quisermos mais presença.
 - [ ] Fase 3 — Stagedive/Crowdsurf
 - [ ] Fase 4 — framing segue o instrumento em destaque
 </content>

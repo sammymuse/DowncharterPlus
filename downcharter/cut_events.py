@@ -189,33 +189,38 @@ def detect_vocal_peaks(inst_onsets: dict[str, list[int]] | None,
     return out
 
 
-def detect_duos(sections: list[Section], inst_onsets: dict[str, list[int]] | None,
-                accents: list[int], tpb: int) -> list[CutEvent]:
-    """Two instruments co-active in a mid/high section → duo interaction shot."""
+def detect_features(sections: list[Section], inst_onsets: dict[str, list[int]] | None,
+                    accents: list[int], tpb: int) -> list[CutEvent]:
+    """One FEATURE shot per mid/high section, ROTATING through the available feature
+    cuts (duos / fretboard close-ups / vocal close-up) so no single directed dominates.
+    Replaces the old detect_duos that always picked the same pair."""
     out = []
     if not inst_onsets:
         return out
     has = {k: bool(inst_onsets.get(k)) for k in ("guitar", "bass", "keys", "drums")}
     real_vox = bool(inst_onsets.get("_vocal_real"))
+    # Menu of feature cuts available for THIS band (interaction first, then close-ups).
+    menu: list[list[str]] = []
+    if real_vox and has["guitar"]:        menu.append(["D_Duo_Gtr"])
+    if has["guitar"] and has["bass"]:     menu.append(["D_Duo_GB"])
+    if has["keys"] and has["bass"]:       menu.append(["D_Duo_KB"])
+    if real_vox and has["bass"]:          menu.append(["D_Duo_Bass"])
+    if has["keys"] and has["guitar"]:     menu.append(["D_Duo_KG"])
+    if has["guitar"]:                     menu.append(["D_Gtr_CLS"])
+    if has["bass"]:                       menu.append(["D_Bass_CLS"])
+    if real_vox:                          menu.append(["D_Vox_CLS", "D_Vox_Cam_PT"])
+    if has["keys"]:                       menu.append(["D_Keys_Cam"])
+    if not menu:
+        return out
+    idx = 0
     for s in sections:
         if _RANK[_camera_energy(s)] < 1:          # only mid/high
             continue
-        # most-specific available pair
-        if real_vox and has["guitar"]:
-            cuts = ["D_Duo_Gtr"]
-        elif real_vox and has["bass"]:
-            cuts = ["D_Duo_Bass"]
-        elif has["guitar"] and has["bass"]:
-            cuts = ["D_Duo_GB"]
-        elif has["keys"] and has["bass"]:
-            cuts = ["D_Duo_KB"]
-        elif has["keys"] and has["guitar"]:
-            cuts = ["D_Duo_KG"]
-        else:
-            continue
+        cuts = menu[idx % len(menu)]
+        idx += 1
         mid = (s.start + s.end) // 2
-        out.append(CutEvent(_nearest_accent(mid, accents, tpb), "duo", cuts,
-                            PRIO["duo"], note=f"duo @{s.kind}"))
+        out.append(CutEvent(_nearest_accent(mid, accents, tpb), "feature", cuts,
+                            PRIO["duo"], note=f"feature @{s.kind}"))
     return out
 
 
@@ -271,8 +276,8 @@ def detect_events(sections: list[Section],
     ev += detect_solos(sections, acc, tpb)
     ev += detect_downtime(inst_onsets, time_sig_map, tpb)
     ev += detect_vocal_peaks(inst_onsets, acc, time_sig_map, tpb)
-    ev += detect_duos(sections, inst_onsets, acc, tpb)
+    ev += detect_features(sections, inst_onsets, acc, tpb)
     ev += detect_stagedive(sections, inst_onsets, acc, time_sig_map, tpb)
-    ev += detect_technical(sections, inst_onsets, acc, tpb)
+    # detect_technical is defined but not wired yet (Phase 2+: precise fast-run anchor).
     ev.sort(key=lambda e: (e.tick, -e.priority))
     return ev
