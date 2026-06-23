@@ -101,10 +101,17 @@ def detect_rises(sections: list[Section], accents: list[int], tpb: int) -> list[
 
 
 def detect_impacts(sections: list[Section], accents: list[int], tpb: int) -> list[CutEvent]:
-    """Entry of an impact section (intro/chorus/drop/breakdown/outro) → full-band pan."""
+    """Entry of an impact section (intro/chorus/drop/breakdown/outro) → full-band pan.
+
+    GATED ON REAL ENERGY, not the section name: section labels lie (e.g. Elegy tags a
+    calm 4-bar lead-in as "Breakdown" and the actual climax as "Bridge" — the names are
+    swapped). A dramatic full-band pan only reads as an "impact" if the section is
+    genuinely energetic (mid/high); a calm intro/breakdown/outro is a quiet moment the
+    framing bed should carry, not a place to throw a band-wide cut. The real high-energy
+    entries still get their dramatic cut (here or via detect_rises)."""
     out = []
     for s in sections:
-        if s.kind in _IMPACT_KINDS:
+        if s.kind in _IMPACT_KINDS and _RANK[_camera_energy(s)] >= 1:
             out.append(CutEvent(_nearest_accent(s.start, accents, tpb), "impact",
                                 ["D_All_Cam", "D_All_LT"], PRIO["impact"],
                                 dramatic=True, note=f"impact entry @{s.kind}"))

@@ -148,6 +148,14 @@ aponta a câmara a quem carrega a música (eventos #3/#4/#6 informam isto).
       directed domina, máx 2-3/tipo); vocal_peak robustecido e ativo (D_Vox_CLS volta);
       `detect_technical` desligado (duplicava CLS). Falta: kick→KD preciso (sem kick
       isolado hoje); subir directed share ~6-7%→~13% se quisermos mais presença.
+- [x] Fase 2.2 (afinação) — **não confiar no nome da secção**: o Elegy etiqueta uma
+      passagem **calma de 4 compassos** como `[section Breakdown]` (na prática é a entrada
+      do bridge) e o clímax **high** como `[section Bridge]` — nomes trocados. `breakdown`
+      está em `_IMPACT_KINDS`, por isso disparava um `D_All_Cam` dramático numa secção
+      calma. `detect_impacts` passou a **gatear por energia real** (≥ mid): intro/breakdown/
+      outro calmos deixam de receber full-band; só entradas mesmo enérgicas o recebem (o
+      clímax real continua coberto por `detect_rises`). Elegy directed 10→7 mas todos
+      corretos; BM intacto (o seu breakdown é mesmo high).
 - [x] Fase 2.1 (afinação) — `detect_features` deixou de **rodar às cegas** um menu fixo
       indexado pela ordem das secções (que largava D_Vox_CLS/D_Gtr_CLS no instrumento
       errado). Agora **segue o líder real** da secção (`_section_leaders` song-relative),
