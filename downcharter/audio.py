@@ -337,7 +337,11 @@ def _ms_to_tick(ms: float, tempo_map, tpb: int) -> int:
 def _rank01(values):
     """Song-relative rank of each value in [0, 1] (min→0, max→1). Ties broken by
     order; a flat distribution maps everything to 0.5. Keeps every audio cue on a
-    common, scale-free axis so loudness/flux/brightness can be blended fairly."""
+    common, scale-free axis so loudness/flux/brightness can be blended fairly.
+    NOTE: rank FLATTENS magnitude (it only asks 'how many frames are below this?'),
+    so a song with lots of quiet material inflates a merely-moderate section just for
+    sitting above the floor. For the intensity envelope use _scale01 instead, which
+    preserves magnitude. _rank01 is kept for the MIDI cues (note-count ordering)."""
     import numpy as np
     v = np.asarray(values, dtype="float64")
     n = len(v)
@@ -345,6 +349,25 @@ def _rank01(values):
         return np.full(n, 0.5)
     order = v.argsort().argsort().astype("float64")
     return order / (n - 1)
+
+
+def _scale01(values):
+    """Song-relative MAGNITUDE scaling to [0, 1]: (x − p10) / (p90 − p10), clipped.
+    Still song-relative (no absolute dB — robust floor/ceiling are the song's own
+    p10/p90), but unlike _rank01 it preserves MAGNITUDE: a section is judged against
+    the song's loud ceiling, not against how many frames it beats. A merely-moderate
+    verse that sits well below the choruses/breakdown maps LOW (calm) instead of being
+    inflated to mid just for being above the quiet parts. A flat song → all 0.5."""
+    import numpy as np
+    v = np.asarray(values, dtype="float64")
+    n = len(v)
+    if n == 0:
+        return v
+    lo = float(np.percentile(v, 10))
+    hi = float(np.percentile(v, 90))
+    if hi - lo < 1e-12:
+        return np.full(n, 0.5)
+    return np.clip((v - lo) / (hi - lo), 0.0, 1.0)
 
 
 # Empirical FEEL weights — derived from feel_study.py over the 20 venue learn
@@ -405,7 +428,7 @@ def feel_envelope(paths, hop_s: float = 0.1):
     n = len(feats["loud"])
     comp = np.zeros(n, dtype="float64")
     for k, w in _FEEL_W.items():
-        r = np.asarray(_rank01(feats[k].tolist()))     # song-relative percentile
+        r = _scale01(feats[k])     # song-relative MAGNITUDE (not rank — keeps feel)
         comp += abs(w) * (1.0 - r if w < 0 else r)
     return comp, stft_s
 
@@ -441,7 +464,7 @@ def section_energy_tiers(paths, sections, tempo_map, tpb: int,
     scores = section_energy_scores(paths, sections, tempo_map, tpb, hop_s)
     if scores is None:
         return None
-    return ["calm" if v < 0.42 else ("mid" if v < 0.62 else "high") for v in scores]
+    return ["calm" if v < 0.45 else ("mid" if v < 0.62 else "high") for v in scores]
 
 
 def section_brightness_tiers(paths, sections, tempo_map, tpb: int,
@@ -632,5 +655,5 @@ def energy_envelope(paths, sections, tempo_map, tpb: int, sub_beats: int = 2,
     if scores is None:
         return None
     return [(spans[i].start,
-             "calm" if scores[i] < 0.42 else ("mid" if scores[i] < 0.62 else "high"))
+             "calm" if scores[i] < 0.45 else ("mid" if scores[i] < 0.62 else "high"))
             for i in range(len(spans))]

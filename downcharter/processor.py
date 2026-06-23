@@ -123,12 +123,15 @@ def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
 
     # Tier by FIXED thresholds on the composite itself — NOT forced thirds, and NOT
     # re-normalized to this song's range (which would undo the song-relative meaning
-    # and re-force a spread). The cues are already percentile-ranked WITHIN the song
-    # (au/rfull/rvel in [0,1]), so a fixed threshold is itself song-relative: 'high'
-    # is rare (only sections that sit near the top of the song's own intensity), and
-    # a near-flat song collapses every cue to ~0.5 → all 'mid' (no fake extremes).
+    # and re-force a spread). The audio cue (au) is now MAGNITUDE-scaled song-relative
+    # (_scale01: judged vs the song's loud ceiling, not rank position), so a merely-
+    # moderate verse maps low and reads 'calm' instead of being inflated to 'mid' just
+    # for sitting above the quiet parts. 'high' stays rare (only the real peaks); a
+    # near-flat song collapses to ~0.5 → all 'mid' (no fake extremes). Thresholds
+    # recalibrated (calm<0.45) on the magnitude comp vs the 20 venues (CALM markers
+    # median ~0.40, HIGH ~0.69) + the Broken Mirror anchors (Verse 2 → calm).
     for s, c in zip(sections, comp):
-        s.energy = "calm" if c < 0.42 else ("mid" if c < 0.62 else "high")
+        s.energy = "calm" if c < 0.45 else ("mid" if c < 0.62 else "high")
     return au is not None
 
 
