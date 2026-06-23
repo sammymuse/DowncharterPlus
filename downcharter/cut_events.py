@@ -189,38 +189,101 @@ def detect_vocal_peaks(inst_onsets: dict[str, list[int]] | None,
     return out
 
 
+# Single-character close-up per instrument (the feature shot for whoever leads).
+_FEATURE_CLOSEUP = {
+    "guitar": ["D_Gtr_CLS", "D_Gtr"], "bass": ["D_Bass_CLS", "D_Bass"],
+    "keys": ["D_Keys_Cam", "D_Keys"], "drums": ["D_Drums_LT", "D_Drums"],
+    "vocal": ["D_Vox_CLS", "D_Vox_Cam_PT"],
+}
+# Interaction shot for two members that CO-lead a section (frozenset of the pair → cut).
+_FEATURE_DUO = {
+    frozenset({"guitar", "bass"}): "D_Duo_GB",
+    frozenset({"keys", "bass"}): "D_Duo_KB",
+    frozenset({"keys", "guitar"}): "D_Duo_KG",
+    frozenset({"keys", "vocal"}): "D_Duo_KV",
+    frozenset({"guitar", "vocal"}): "D_Duo_Gtr",
+    frozenset({"bass", "vocal"}): "D_Duo_Bass",
+    # NOTE: D_Duo_Drums (drummer-vocalist) is intentionally omitted — it asserts the
+    # drummer is the singer, which is almost never the case; a drums+vocal section
+    # falls to a vocal close-up instead.
+}
+
+
+def _section_leaders(inst_onsets: dict[str, list[int]], start: int, end: int,
+                     totals: dict[str, int]) -> list[tuple[str, float]]:
+    """Rank the instruments by SONG-RELATIVE density in [start,end) — onsets-in-window
+    over the instrument's song total, so a continuously-busy drummer doesn't always win;
+    we surface whoever STEPS UP here. Returns (inst, score) sorted desc, present only."""
+    import bisect
+    out: list[tuple[str, float]] = []
+    for inst in ("guitar", "bass", "keys", "drums", "vocal"):
+        ons = inst_onsets.get(inst)
+        tot = totals.get(inst, 0)
+        if not ons or tot < 4:
+            continue
+        cnt = bisect.bisect_left(ons, end) - bisect.bisect_left(ons, start)
+        if cnt < 2:
+            continue
+        out.append((inst, cnt / tot))
+    out.sort(key=lambda x: -x[1])
+    return out
+
+
+def _onset_near(ons: list[int], t: int) -> int:
+    """The instrument's own onset closest to t (so the feature lands on a real hit of it)."""
+    import bisect
+    i = bisect.bisect_left(ons, t)
+    best = t
+    for ci in (i - 1, i):
+        if 0 <= ci < len(ons) and (best == t or abs(ons[ci] - t) < abs(best - t)):
+            best = ons[ci]
+    return best
+
+
 def detect_features(sections: list[Section], inst_onsets: dict[str, list[int]] | None,
                     accents: list[int], tpb: int) -> list[CutEvent]:
-    """One FEATURE shot per mid/high section, ROTATING through the available feature
-    cuts (duos / fretboard close-ups / vocal close-up) so no single directed dominates.
-    Replaces the old detect_duos that always picked the same pair."""
+    """One FEATURE shot per mid/high section that FOLLOWS THE MUSIC: it films whoever
+    actually LEADS the section (song-relative density), as an interaction (duo) when two
+    members co-lead, otherwise a single-character close-up. The hit lands on a real onset
+    of the lead instrument. Candidates are ordered most→least specific so build_camera's
+    anti-recency still gives variety — but every option is grounded in what's playing,
+    instead of the old blind menu rotation that dropped vox/gtr close-ups on the wrong
+    instrument."""
     out = []
     if not inst_onsets:
         return out
-    has = {k: bool(inst_onsets.get(k)) for k in ("guitar", "bass", "keys", "drums")}
+    totals = {k: len(v) for k, v in inst_onsets.items()
+              if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
     real_vox = bool(inst_onsets.get("_vocal_real"))
-    # Menu of feature cuts available for THIS band (interaction first, then close-ups).
-    menu: list[list[str]] = []
-    if real_vox and has["guitar"]:        menu.append(["D_Duo_Gtr"])
-    if has["guitar"] and has["bass"]:     menu.append(["D_Duo_GB"])
-    if has["keys"] and has["bass"]:       menu.append(["D_Duo_KB"])
-    if real_vox and has["bass"]:          menu.append(["D_Duo_Bass"])
-    if has["keys"] and has["guitar"]:     menu.append(["D_Duo_KG"])
-    if has["guitar"]:                     menu.append(["D_Gtr_CLS"])
-    if has["bass"]:                       menu.append(["D_Bass_CLS"])
-    if real_vox:                          menu.append(["D_Vox_CLS", "D_Vox_Cam_PT"])
-    if has["keys"]:                       menu.append(["D_Keys_Cam"])
-    if not menu:
-        return out
-    idx = 0
     for s in sections:
         if _RANK[_camera_energy(s)] < 1:          # only mid/high
             continue
-        cuts = menu[idx % len(menu)]
-        idx += 1
         mid = (s.start + s.end) // 2
-        out.append(CutEvent(_nearest_accent(mid, accents, tpb), "feature", cuts,
-                            PRIO["duo"], note=f"feature @{s.kind}"))
+        leaders = _section_leaders(inst_onsets, s.start, s.end, totals)
+        if not leaders:
+            continue
+        lead, lead_score = leaders[0]
+        # Candidate order = most→least specific: co-lead duo, then lead close-up, then
+        # the second member's close-up. build_camera's anti-recency picks among these,
+        # so variety emerges while every option stays grounded in who's actually playing.
+        cuts: list[str] = []
+        # Co-lead duo: only when a second member is genuinely strong here (>=60% of the
+        # lead's density) and forms a real pair — that's a true interaction, not a guess.
+        second = None
+        if len(leaders) >= 2 and leaders[1][1] >= lead_score * 0.6:
+            second = leaders[1][0]
+            duo = _FEATURE_DUO.get(frozenset({lead, second}))
+            # Vocal duos need REAL vocals (lyrics) for the shot to read as interaction.
+            if duo and ("vocal" not in (lead, second) or real_vox):
+                cuts.append(duo)
+        cuts += _FEATURE_CLOSEUP.get(lead, [])
+        if second:
+            cuts += _FEATURE_CLOSEUP.get(second, [])
+        # Anchor on a real onset of the lead instrument near the section midpoint.
+        lead_ons = inst_onsets.get(lead) or []
+        tick = _onset_near(lead_ons, mid) if lead_ons else mid
+        out.append(CutEvent(_nearest_accent(tick, accents, tpb), "feature", cuts,
+                            PRIO["duo"], note=f"feature {lead}@{s.kind}"))
     return out
 
 

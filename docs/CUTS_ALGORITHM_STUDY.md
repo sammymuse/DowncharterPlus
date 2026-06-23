@@ -148,6 +148,14 @@ aponta a câmara a quem carrega a música (eventos #3/#4/#6 informam isto).
       directed domina, máx 2-3/tipo); vocal_peak robustecido e ativo (D_Vox_CLS volta);
       `detect_technical` desligado (duplicava CLS). Falta: kick→KD preciso (sem kick
       isolado hoje); subir directed share ~6-7%→~13% se quisermos mais presença.
+- [x] Fase 2.1 (afinação) — `detect_features` deixou de **rodar às cegas** um menu fixo
+      indexado pela ordem das secções (que largava D_Vox_CLS/D_Gtr_CLS no instrumento
+      errado). Agora **segue o líder real** da secção (`_section_leaders` song-relative),
+      ancora o hit numa **nota desse instrumento**, e só usa **duo quando dois co-lideram**
+      (≥60% da densidade do líder; duos com voz exigem voz real; D_Duo_Drums removido —
+      assumia baterista-vocalista). Variedade vem da anti-recência de `build_camera` sobre
+      candidatos ordenados (duo→close-up líder→close-up 2º). Stats: BM 90/9, Elegy 93/6,
+      22/24 distintos, top 13% — sem regressão, mas cada directed combina com o que toca.
 - [x] Fase 3 — Stagedive/Crowdsurf ligados (`detect_stagedive` na janela de gap vocal
       ≥16 compassos + cap 1/música em `build_camera`). Dispara só com gap vocal real;
       validar in-game numa música com esse padrão.
