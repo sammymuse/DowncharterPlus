@@ -132,6 +132,7 @@ class Section:
     kind: str           # canonical type
     energy: str | None = None   # 'calm'/'mid'/'high' — refined by audio; None=structural
     warmth: str | None = None   # 'warm'/'cool' — timbre (audio brightness); None=neutral
+    energy_spans: list | None = None   # [(start,end,tier)] sub-section energy (audio); None=use mean
 
 
 def section_energy(s: "Section") -> str:
@@ -1605,10 +1606,14 @@ def _anim_state(s: Section, playing: bool, instrument: str,
         return _idle_state(s)
     if s.kind == "solo" and _solo_instrument(s.name) == instrument:
         return "[play_solo]"
-    level = _ENERGY_LEVEL[section_energy(s)]
-    # Stagger: soften the expressive instruments one notch on alternating sections so
-    # the band isn't a single mood (official median ~43% of moments NOT in unison). This
-    # also pulls the over-used [play] share down toward the official ~32%.
+    return _mood_for_level(_ENERGY_LEVEL[section_energy(s)], instrument, sec_idx)
+
+
+def _mood_for_level(level: int, instrument: str, sec_idx: int) -> str:
+    """Map an energy level (0/1/2) to a mood marker, with the per-instrument stagger.
+    Stagger: soften the expressive instruments one notch on alternating sections so the
+    band isn't a single mood (official median ~43% of moments NOT in unison). This also
+    pulls the over-used [play] share down toward the official ~32%."""
     rank = _INST_VARY_RANK.get(instrument, 2)
     if rank >= 2 and level > 0 and (sec_idx + rank) % 2 == 0:
         level -= 1
@@ -1627,12 +1632,22 @@ def build_animations(part_onsets: list[int], sections: list[Section],
     floor = onsets[0]
     eighth = max(1, tpb // 2)
     timeline: list[tuple[int, str]] = []
-    # State per section (transitions start 1/8 before the boundary).
+    # State per section (transitions start 1/8 before the boundary). When the section
+    # carries audio sub-spans, the mood FOLLOWS the music within the section (a chorus
+    # that starts calm and builds gets [mellow]→[play]→…), instead of one mood per
+    # section. Solo/idle still resolve as a whole-section state.
     for i, s in enumerate(sections):
         playing = _count_onsets(onsets, s.start, s.end) > 0
-        state = _anim_state(s, playing, instrument, i)
-        tick = s.start if i == 0 else max(s.start - eighth, floor)
-        timeline.append((max(tick, floor), state))
+        solo = s.kind == "solo" and _solo_instrument(s.name) == instrument
+        if playing and not solo and s.energy_spans:
+            for j, (a, b, tier) in enumerate(s.energy_spans):
+                state = _mood_for_level(_ENERGY_LEVEL[tier], instrument, i)
+                tick = s.start if (i == 0 and j == 0) else max(a - eighth, floor)
+                timeline.append((max(tick, floor), state))
+        else:
+            state = _anim_state(s, playing, instrument, i)
+            tick = s.start if i == 0 else max(s.start - eighth, floor)
+            timeline.append((max(tick, floor), state))
     # Downtime within the song: only LONG pauses (≥ _IDLE_DOWNTIME_MEASURES) drop the
     # instrument to [idle] and resume afterwards. The book's 2-measure minimum was too
     # twitchy for sparse riffs (a guitar that plays a 3-4 beat burst then rests 2-3

@@ -455,6 +455,88 @@ def section_energy_scores(paths, sections, tempo_map, tpb: int,
     return out
 
 
+def section_energy_subspans(paths, sections, tempo_map, tpb: int,
+                            hop_s: float = 0.1, smooth_s: float = 0.5,
+                            min_span_s: float = 3.0):
+    """Per-section SUB-SPANS of energy tier, following the music WITHIN a section.
+    Instead of one mean tier per section (which washes out a chorus that starts calm
+    and builds, and collapses a compressed song to all-'mid'), this segments the
+    per-frame feel_envelope into ['calm'/'mid'/'high'] runs. Two safeguards keep it
+    from flickering: the envelope is smoothed over `smooth_s`, and any run shorter
+    than `min_span_s` is merged into its nearest-tier neighbour. The 3.0s floor is the
+    official venues' p10 mood-span length (median 16s) — they hold a mood far longer
+    than the audio flickers, so anything shorter would over-animate. Because the
+    envelope is MAGNITUDE-scaled song-relative (_scale01: p90→1), the song's own
+    loudest ~10%+ of frames always reach 'high' — so even a less-dynamic / compressed
+    song gets its peaks back here without any structural/kind promotion.
+    Returns list[list[(start_tick, end_tick, tier)]] (one list per section, covering
+    the whole section, runs contiguous), or None on audio failure."""
+    if not sections:
+        return None
+    env, stft_s = feel_envelope(paths, hop_s)
+    if env is None:
+        return None
+    import numpy as np
+    w = max(1, int(round(smooth_s / stft_s)))
+    if w > 1:
+        env = np.convolve(env, np.ones(w) / w, mode="same")
+    tier = np.where(env < 0.45, 0, np.where(env < 0.62, 1, 2)).astype(int)
+    min_frames = max(1, int(round(min_span_s / stft_s)))
+    names = ("calm", "mid", "high")
+    out: list[list[tuple[int, int, str]]] = []
+    for s in sections:
+        a_s = tick_to_ms(s.start, tempo_map, tpb) / 1000.0
+        b_s = tick_to_ms(s.end, tempo_map, tpb) / 1000.0
+        j0 = max(0, int(a_s / stft_s))
+        j1 = min(len(env), max(j0 + 1, int(b_s / stft_s)))
+        seg = tier[j0:j1]
+        if len(seg) == 0:
+            out.append([(s.start, s.end, "calm")])
+            continue
+        # contiguous runs of equal tier: [start_frame, end_frame, tier]
+        runs: list[list[int]] = []
+        cs = 0
+        for k in range(1, len(seg) + 1):
+            if k == len(seg) or seg[k] != seg[cs]:
+                runs.append([cs, k, int(seg[cs])])
+                cs = k
+        # merge any run shorter than min_frames into the closest-tier neighbour
+        while len(runs) > 1:
+            i = min(range(len(runs)), key=lambda r: runs[r][1] - runs[r][0])
+            if runs[i][1] - runs[i][0] >= min_frames:
+                break
+            left = runs[i - 1] if i > 0 else None
+            right = runs[i + 1] if i < len(runs) - 1 else None
+            if left is None:
+                tgt = i + 1
+            elif right is None:
+                tgt = i - 1
+            else:
+                dl, dr = abs(left[2] - runs[i][2]), abs(right[2] - runs[i][2])
+                if dl != dr:
+                    tgt = i - 1 if dl < dr else i + 1
+                else:  # tie → merge into the larger neighbour
+                    tgt = i - 1 if (left[1] - left[0]) >= (right[1] - right[0]) else i + 1
+            lo = min(runs[i][0], runs[tgt][0])
+            hi = max(runs[i][1], runs[tgt][1])
+            runs[tgt] = [lo, hi, runs[tgt][2]]
+            del runs[i]
+        # collapse any adjacent equal-tier runs left after merging
+        collapsed: list[list[int]] = []
+        for r in runs:
+            if collapsed and collapsed[-1][2] == r[2]:
+                collapsed[-1][1] = r[1]
+            else:
+                collapsed.append(r)
+        spans: list[tuple[int, int, str]] = []
+        for ri, (f0, f1, tr) in enumerate(collapsed):
+            start_tick = s.start if ri == 0 else _ms_to_tick((j0 + f0) * stft_s * 1000.0, tempo_map, tpb)
+            end_tick = s.end if ri == len(collapsed) - 1 else _ms_to_tick((j0 + f1) * stft_s * 1000.0, tempo_map, tpb)
+            spans.append((start_tick, end_tick, names[tr]))
+        out.append(spans)
+    return out
+
+
 def section_energy_tiers(paths, sections, tempo_map, tpb: int,
                          hop_s: float = 0.1) -> list[str] | None:
     """Energy tier ('calm'/'mid'/'high') per section from the composite FEEL score
