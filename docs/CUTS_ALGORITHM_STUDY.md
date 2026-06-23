@@ -147,6 +147,14 @@ aponta a câmara a quem carrega a música (eventos #3/#4/#6 informam isto).
       directed domina, máx 2-3/tipo); vocal_peak robustecido e ativo (D_Vox_CLS volta);
       `detect_technical` desligado (duplicava CLS). Falta: kick→KD preciso (sem kick
       isolado hoje); subir directed share ~6-7%→~13% se quisermos mais presença.
-- [ ] Fase 3 — Stagedive/Crowdsurf
-- [ ] Fase 4 — framing segue o instrumento em destaque
+- [x] Fase 3 — Stagedive/Crowdsurf ligados (`detect_stagedive` na janela de gap vocal
+      ≥16 compassos + cap 1/música em `build_camera`). Dispara só com gap vocal real;
+      validar in-game numa música com esse padrão.
+- [x] Fase 4 — a cama de framing **segue o instrumento que LIDERA** cada secção
+      (`_featured_instrument` song-relative = onsets-na-janela / total do instrumento →
+      evita que a bateria ganhe sempre; realça guitarra no riff, voz no refrão).
+      `_bias_pool` põe à frente os framings desse instrumento (lean suave: anti-recência
+      + sem-repetição mantêm variedade e a quota calibrada). Solos intactos (SOLO_CAMERA).
+      Stats sem regressão (BM 92/7, Elegy 93/6, 20-23 distinct, top-cut 13%); o top da
+      Elegy passou a `G_Near` (a guitarra lidera) — a câmara aponta a quem carrega.
 </content>

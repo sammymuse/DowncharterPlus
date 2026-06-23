@@ -1008,6 +1008,52 @@ def _absent_framings(inst_onsets: dict[str, list[int]] | None) -> set[str]:
     if not inst_onsets.get("vocal"):  bad |= _VOCAL_FRAMINGS
     return bad
 
+
+# Framing → instrument(s) it features (used to bias the bed toward whoever LEADS a
+# section). Each maps to the same per-instrument framing sets used by the absent-filter.
+_INST_FRAMINGS = {"keys": _KEYS_FRAMINGS, "bass": _BASS_FRAMINGS,
+                  "guitar": _GUITAR_FRAMINGS, "drums": _DRUMS_FRAMINGS,
+                  "vocal": _VOCAL_FRAMINGS}
+
+
+def _featured_instrument(inst_onsets: dict[str, list[int]] | None,
+                         start: int, end: int,
+                         totals: dict[str, int]) -> str | None:
+    """Who CARRIES this section, song-relative. We rank by onsets-in-window / total
+    onsets of that instrument across the whole song — the instrument that 'steps up'
+    here relative to its own baseline. Using a raw count would always pick drums (they
+    play continuously); the relative measure surfaces the guitar in a riff, the vocal
+    in a chorus, etc. Returns None when nothing clearly leads (keeps the bed neutral)."""
+    if not inst_onsets:
+        return None
+    import bisect
+    best, best_score = None, 0.0
+    for inst in ("guitar", "bass", "drums", "keys", "vocal"):
+        ons = inst_onsets.get(inst)
+        tot = totals.get(inst, 0)
+        if not ons or tot < 4:
+            continue
+        cnt = bisect.bisect_left(ons, end) - bisect.bisect_left(ons, start)
+        if cnt < 2:
+            continue
+        score = cnt / tot
+        if score > best_score:
+            best, best_score = inst, score
+    return best
+
+
+def _bias_pool(pool: list[str], inst: str | None) -> list[str]:
+    """Reorder a framing pool so the cuts that feature `inst` come FIRST (the bed leans
+    toward the featured instrument, especially the section's opening cut). Anti-recency
+    + no-immediate-repeat still rotate through the rest, so variety and the calibrated
+    instrument quota are largely preserved — this is a gentle lean, not a lock."""
+    if not inst:
+        return pool
+    fr = _INST_FRAMINGS.get(inst, set())
+    lead = [c for c in pool if c in fr]
+    return lead + [c for c in pool if c not in fr] if lead else pool
+
+
 # Directed cut per section SEPARATED BY ENERGY (study of the 20 venues, normalized):
 # the official ones NEVER put performance with jumps/kicks in mellow parts. CALM tier
 # (no jumps: closeups `_cls`, camera `_cam_pt`, `drums_lt/kd`) for calm+mid; ENERGETIC
@@ -1280,6 +1326,9 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     min_gap = tpb // 2               # never two cuts less than 1/8 apart
     max_floor = tpb * 6              # but never slower than 1 cut / 6 beats
     bad_framings = _absent_framings(inst_onsets)
+    # Song-wide onset totals per instrument (for the featured-instrument bias, Phase 4).
+    inst_totals = ({k: len(v) for k, v in inst_onsets.items() if v}
+                   if inst_onsets else {})
     # Full-band cuts are spaced ≥ this (book: "use sparingly"; ~4/song like the officials).
     fullband_gap = tpb * 32
 
@@ -1329,6 +1378,9 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             pool = _framing_only(SECTION_CAMERA.get(s.kind, SECTION_CAMERA["default"]))
         if bad_framings:                             # don't film absent instruments
             pool = _safe_framing(pool, bad_framings)
+        if s.kind != "solo":                         # solos already focus via SOLO_CAMERA
+            pool = _bias_pool(pool, _featured_instrument(
+                inst_onsets, s.start, s.end, inst_totals))
         pace_ms = SECTION_PACE_S.get(s.kind, 3.0) * 1000.0 * pace_scale
         # Audio nudge: a quieter-than-structural section cuts slower.
         _E = {"calm": 0, "mid": 1, "high": 2}
