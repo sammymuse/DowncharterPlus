@@ -937,19 +937,24 @@ SECTION_PACE_S = {
 # we hammered the vocalist (V_Near+V_Closeup in almost the whole section) and forgot the
 # bassist (only in duos) and the keys → vocalist 86, bass 21, keys 6.
 # Now each section gives SINGLE presence to bass/drums/keys and ≤1 vocal cut.
+# Framing pools per section type. ENRICHED with the under-used head-closeup and behind
+# variants after the coop variety study (the 20 official venues use a MEDIAN of 33
+# DISTINCT coop framings/song with the top one only ~11%; we sat at 12 distinct / 24%).
+# Bigger pools + the anti-recency window (recent_coop) widen the variety per song and
+# pull the top-cut share down toward the official ~11%.
 SECTION_CAMERA = {
-    "intro":      ["All_Far", "B_Near", "All_Behind", "D_Near", "K_Hand", "G_Hand", "V_Closeup", "Front_Near"],
-    "verse":      ["V_Near", "B_Near", "B_Hand", "D_Hand", "K_Near", "G_Near", "DV_Near"],
-    "prechorus":  ["B_Near", "K_Hand", "V_Near", "All_Near", "D_Hand", "K_Near", "BG_Near"],
-    "chorus":     ["V_Near", "B_Near", "All_Near", "D_Hand", "K_Near", "G_Near", "All_Behind", "KV_Near"],
-    "postchorus": ["B_Near", "All_Behind", "K_Near", "V_Closeup", "D_Near", "Front_Behind", "All_Near"],
-    "bridge":     ["B_Near", "B_Hand", "K_Near", "K_Hand", "D_Near", "BK_Near", "KV_Near"],
-    "build":      ["D_Near", "D_Hand", "B_Near", "K_Near", "BD_Near", "All_Near"],
-    "drop":       ["All_Near", "D_Hand", "B_Near", "K_Near", "V_Near", "All_Behind", "D_Near"],
-    "breakdown":  ["D_Hand", "D_Near", "B_Near", "D_Head", "BK_Near", "DG_Near", "All_Behind"],
-    "riff":       ["G_Hand", "G_Near", "B_Near", "D_Hand", "K_Near", "GK_Near", "BG_Near"],
-    "outro":      ["All_Far", "All_Behind", "B_Near", "D_Near", "K_Near", "V_Closeup", "All_Near"],
-    "default":    ["V_Near", "B_Near", "D_Hand", "K_Near", "G_Near", "All_Near"],
+    "intro":      ["All_Far", "B_Near", "All_Behind", "D_Near", "K_Hand", "G_Hand", "V_Closeup", "Front_Near", "G_Behind", "D_Head", "B_Behind"],
+    "verse":      ["V_Near", "B_Near", "B_Hand", "D_Hand", "K_Near", "G_Near", "DV_Near", "V_Closeup", "G_Head", "D_Head", "B_Behind", "K_Hand"],
+    "prechorus":  ["B_Near", "K_Hand", "V_Near", "All_Near", "D_Hand", "K_Near", "BG_Near", "G_Near", "V_Closeup", "B_Head", "D_Behind"],
+    "chorus":     ["V_Near", "B_Near", "All_Near", "D_Hand", "K_Near", "G_Near", "All_Behind", "KV_Near", "V_Closeup", "G_Hand", "B_Hand", "D_Head", "Front_Near"],
+    "postchorus": ["B_Near", "All_Behind", "K_Near", "V_Closeup", "D_Near", "Front_Behind", "All_Near", "G_Near", "B_Hand", "D_Hand", "V_Near"],
+    "bridge":     ["B_Near", "B_Hand", "K_Near", "K_Hand", "D_Near", "BK_Near", "KV_Near", "B_Head", "K_Head", "G_Near", "D_Behind"],
+    "build":      ["D_Near", "D_Hand", "B_Near", "K_Near", "BD_Near", "All_Near", "D_Head", "B_Hand", "G_Near", "All_Behind"],
+    "drop":       ["All_Near", "D_Hand", "B_Near", "K_Near", "V_Near", "All_Behind", "D_Near", "G_Hand", "D_Head", "B_Behind"],
+    "breakdown":  ["D_Hand", "D_Near", "B_Near", "D_Head", "BK_Near", "DG_Near", "All_Behind", "G_Hand", "B_Head", "K_Near", "All_Near"],
+    "riff":       ["G_Hand", "G_Near", "B_Near", "D_Hand", "K_Near", "GK_Near", "BG_Near", "G_Head", "G_Behind", "D_Head", "B_Hand"],
+    "outro":      ["All_Far", "All_Behind", "B_Near", "D_Near", "K_Near", "V_Closeup", "All_Near", "Front_Behind", "G_Behind", "B_Head", "D_Behind"],
+    "default":    ["V_Near", "B_Near", "D_Hand", "K_Near", "G_Near", "All_Near", "V_Closeup", "B_Hand", "D_Head", "G_Head"],
 }
 
 # Framings that involve each instrument — only valid if that instrument exists
@@ -1284,6 +1289,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     dsel = 0                          # alternates the directed pair between sections
     from collections import deque
     recent_directed: deque = deque(maxlen=5)   # anti-recency: last 5 emitted directed cuts
+    recent_coop: deque = deque(maxlen=6)       # anti-recency: last 6 emitted framings
     erank = {"calm": 0, "mid": 1, "high": 2}
     prev_energy = "calm"              # previous section's energy (for dircut_at_start)
     last_allband = -10 ** 9           # throttle for the full-band directed_all*
@@ -1417,6 +1423,15 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             if cut == last_cut:                      # avoid immediate repetition
                 idx += 1
                 cut = pool[idx % len(pool)]
+            # Anti-recency for FRAMINGS: skip a coop framing used in the recent window so
+            # the camera rotates through the whole pool (official top-cut ~11%, 33 distinct/
+            # song) instead of leaning on a couple. Bounded scan; if all are recent, keeps it.
+            if cut in CAMERA_CUTS:
+                for _ in range(len(pool)):
+                    if cut not in recent_coop and cut != last_cut:
+                        break
+                    idx += 1
+                    cut = pool[idx % len(pool)]
             # When the pool lands on a DIRECTED slot, re-pick a fresh one from the
             # section pool avoiding the recent window → a long section rotates through
             # several directed cuts instead of repeating the same one.
@@ -1438,6 +1453,8 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 last_dramatic = placed
             if cut in DIRECTED_CUTS:                 # remember emitted directed (anti-recency)
                 recent_directed.append(cut)
+            elif cut in CAMERA_CUTS:                 # remember emitted framing (anti-recency)
+                recent_coop.append(cut)
             ev = _cut_event(placed, cut)
             if ev is not None and placed < s.end:
                 out.append(ev)
