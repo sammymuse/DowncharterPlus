@@ -1584,19 +1584,35 @@ def _idle_state(s: Section) -> str:
     return "[idle_intense]" if section_energy(s) == "high" else "[idle]"
 
 
+_MOOD_LADDER = ["mellow", "play", "intense"]
+_ENERGY_LEVEL = {"calm": 0, "mid": 1, "high": 2}
+# Order used to STAGGER which instruments soften their mood per section, so the band
+# is not a uniform wall of one mood. mood_study of the 20 official venues: the band
+# has >=2 distinct playing-moods ~43% of moments (median) — they are NOT in unison —
+# and the time-share is play 32% / intense 38% / mellow 12% (we sat at play 72% /
+# intense 0%, a flat [play] wall that reads as robotic head-nodding out of the music).
+# The rhythm section (drums/bass) holds the energy; the expressive instruments
+# (guitar/keys/vocal) soften one notch on alternating sections → organic, non-unison.
+_INST_VARY_RANK = {"drums": 0, "bass": 1, "guitar": 2, "keys": 3, "vocal": 4}
+
+
 def _anim_state(s: Section, playing: bool, instrument: str,
-                intense_theme: bool) -> str:
-    """Decide an instrument's mood marker in a section."""
+                sec_idx: int = 0) -> str:
+    """Decide an instrument's mood marker in a section. Mood follows the section
+    energy (calm→mellow / mid→play / high→intense, full vocabulary across ALL genres
+    like the official venues), then a per-instrument stagger breaks the band unison."""
     if not playing:
         return _idle_state(s)
     if s.kind == "solo" and _solo_instrument(s.name) == instrument:
         return "[play_solo]"
-    energy = section_energy(s)
-    if energy == "high" and intense_theme:
-        return "[intense]"
-    if energy == "calm":
-        return "[mellow]"
-    return "[play]"
+    level = _ENERGY_LEVEL[section_energy(s)]
+    # Stagger: soften the expressive instruments one notch on alternating sections so
+    # the band isn't a single mood (official median ~43% of moments NOT in unison). This
+    # also pulls the over-used [play] share down toward the official ~32%.
+    rank = _INST_VARY_RANK.get(instrument, 2)
+    if rank >= 2 and level > 0 and (sec_idx + rank) % 2 == 0:
+        level -= 1
+    return f"[{_MOOD_LADDER[level]}]"
 
 
 def build_animations(part_onsets: list[int], sections: list[Section],
@@ -1610,12 +1626,11 @@ def build_animations(part_onsets: list[int], sections: list[Section],
         return [_txt(0, "[idle_realtime]")]
     floor = onsets[0]
     eighth = max(1, tpb // 2)
-    intense = theme_name in _INTENSE_THEMES
     timeline: list[tuple[int, str]] = []
     # State per section (transitions start 1/8 before the boundary).
     for i, s in enumerate(sections):
         playing = _count_onsets(onsets, s.start, s.end) > 0
-        state = _anim_state(s, playing, instrument, intense)
+        state = _anim_state(s, playing, instrument, i)
         tick = s.start if i == 0 else max(s.start - eighth, floor)
         timeline.append((max(tick, floor), state))
     # Downtime within the song: only LONG pauses (≥ _IDLE_DOWNTIME_MEASURES) drop the
@@ -1633,7 +1648,8 @@ def build_animations(part_onsets: list[int], sections: list[Section],
             sec = _section_at(sections, b)
             if sec is not None:
                 timeline.append((max(b - eighth, a + eighth + 1),
-                                 _anim_state(sec, True, instrument, intense)))
+                                 _anim_state(sec, True, instrument,
+                                             sections.index(sec))))
     timeline.sort(key=lambda x: x[0])
     out: list[AbsEvent] = []
     last: str | None = None
