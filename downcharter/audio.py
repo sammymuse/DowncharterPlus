@@ -347,66 +347,101 @@ def _rank01(values):
     return order / (n - 1)
 
 
-def section_energy_scores(paths, sections, tempo_map, tpb: int,
-                          hop_s: float = 0.1) -> list[float] | None:
-    """Composite AUDIO energy score per section in [0, 1], blending three cues
-    (each rank-normalized song-relative, so nothing is hard-coded to dB/BPM):
-      • loudness  — mean RMS (the previous, sole signal)         weight 0.50
-      • flux      — mean spectral flux = how 'busy'/attacky        weight 0.30
-      • brightness— mean spectral centroid = cymbals/distortion    weight 0.20
-    This separates loud-but-dark/static (sustained bass pad) from a truly intense
-    bright, busy chorus — which plain loudness conflated. Returns None on failure."""
-    if not sections:
-        return None
+# Empirical FEEL weights — derived from feel_study.py over the 20 venue learn
+# songs (HIGH = pyro/strobe/intense/keyframe vs CALM = blackout). Each cue is the
+# song-relative percentile rank; the weight is its discrimination gap (HIGH−CALM
+# median), normalized. Intensity is FEEL, not amplitude: loudness/flux lead, but
+# heaviness (low-end), wall/distortion (flatness) and transient hardness (density)
+# add real signal — and BRIGHTNESS IS INVERTED (high intensity is DARKER/heavier,
+# gap −16.5; the old code added it positively, pulling the wrong way).
+_FEEL_W = {"loud": 0.34, "flux": 0.27, "flat": 0.11,
+           "low": 0.11, "dens": 0.06, "bright": -0.11}
+
+
+def _feel_frames(mono, sr):
+    """Per-STFT-frame FEEL cues for the intensity score. Returns (feats, stft_s)
+    where feats maps name→array: loud, flux, bright, low (=<150 Hz power ratio),
+    dens (smoothed transient density), flat (spectral flatness)."""
+    import numpy as np
+    mag, hop = _stft_mag(mono, sr)
+    if mag.shape[0] < 4:
+        return None, None
+    P = mag ** 2
+    win = (mag.shape[1] - 1) * 2
+    freqs = np.fft.rfftfreq(win, 1.0 / sr)
+    tot = P.sum(axis=1) + 1e-9
+    loud = np.sqrt(P.mean(axis=1))
+    flux = np.concatenate([[0.0], np.maximum(0.0, np.diff(mag, axis=0)).sum(axis=1)])
+    bright = (P * freqs[None, :]).sum(axis=1) / tot
+    low = P[:, freqs < 150].sum(axis=1) / tot
+    gm = np.exp(np.log(P + 1e-12).mean(axis=1))
+    flat = gm / (P.mean(axis=1) + 1e-12)
+    stft_s = hop / sr
+    thr = np.percentile(flux, 70)
+    hot = (flux > thr).astype("float32")
+    k = max(1, int(0.5 / stft_s))                 # ~0.5 s smoothing
+    dens = np.convolve(hot, np.ones(k) / k, mode="same")
+    return ({"loud": loud, "flux": flux, "bright": bright,
+             "low": low, "dens": dens, "flat": flat}, stft_s)
+
+
+def feel_envelope(paths, hop_s: float = 0.1):
+    """Continuous FEEL intensity envelope in [0, 1], one value per STFT frame.
+    Each cue is percentile-ranked song-relative, blended with the empirical
+    _FEEL_W weights (brightness inverted). This is the song's REAL intensity shape
+    — used both for per-section means and for sub-section (within-section) dynamics.
+    Returns (env, stft_s) or (None, None) on failure."""
     if isinstance(paths, str):
         paths = [paths]
     try:
         import numpy as np
         mono, sr = load_mono_mix(paths)
-        env = rms_envelope(mono, sr, hop_s)        # loudness, one frame / hop_s
-        mag, hop = _stft_mag(mono, sr)             # frames × bins (for flux+centroid)
+        feats, stft_s = _feel_frames(mono, sr)
     except Exception:
-        return None
-    if len(env) == 0 or mag.shape[0] < 4:
-        return None
+        return None, None
+    if feats is None:
+        return None, None
+    import numpy as np
+    n = len(feats["loud"])
+    comp = np.zeros(n, dtype="float64")
+    for k, w in _FEEL_W.items():
+        r = np.asarray(_rank01(feats[k].tolist()))     # song-relative percentile
+        comp += abs(w) * (1.0 - r if w < 0 else r)
+    return comp, stft_s
 
-    # Per-STFT-frame flux (busy-ness) and spectral centroid (brightness).
-    flux = np.concatenate([[0.0], np.maximum(0.0, np.diff(mag, axis=0)).sum(axis=1)])
-    win = (mag.shape[1] - 1) * 2
-    freqs = np.fft.rfftfreq(win, 1.0 / sr)
-    centroid = (mag * freqs[None, :]).sum(axis=1) / (mag.sum(axis=1) + 1e-9)
-    stft_s = hop / sr                              # seconds per STFT frame
 
-    loud: list[float] = []
-    busy: list[float] = []
-    bright: list[float] = []
+def section_energy_scores(paths, sections, tempo_map, tpb: int,
+                          hop_s: float = 0.1) -> list[float] | None:
+    """Composite FEEL energy score per section in [0, 1] — the mean of the
+    continuous feel_envelope over each section. See _FEEL_W / feel_envelope:
+    loudness+flux lead, heaviness/wall/hardness add the 'feel', brightness is
+    inverted (heavy = dark). Returns None on failure."""
+    if not sections:
+        return None
+    env, stft_s = feel_envelope(paths, hop_s)
+    if env is None:
+        return None
+    import numpy as np
+    out: list[float] = []
     for s in sections:
         a_s = tick_to_ms(s.start, tempo_map, tpb) / 1000.0
         b_s = tick_to_ms(s.end, tempo_map, tpb) / 1000.0
-        i0 = max(0, int(a_s / hop_s)); i1 = min(len(env), max(i0 + 1, int(b_s / hop_s)))
-        seg = env[i0:i1]
-        loud.append(float(np.mean(seg)) if len(seg) else 0.0)
-        j0 = max(0, int(a_s / stft_s)); j1 = min(mag.shape[0], max(j0 + 1, int(b_s / stft_s)))
-        busy.append(float(np.mean(flux[j0:j1])) if j1 > j0 else 0.0)
-        bright.append(float(np.mean(centroid[j0:j1])) if j1 > j0 else 0.0)
-
-    rl, rf, rb = _rank01(loud), _rank01(busy), _rank01(bright)
-    return [float(0.50 * rl[i] + 0.30 * rf[i] + 0.20 * rb[i])
-            for i in range(len(sections))]
+        j0 = max(0, int(a_s / stft_s))
+        j1 = min(len(env), max(j0 + 1, int(b_s / stft_s)))
+        out.append(float(np.mean(env[j0:j1])) if j1 > j0 else 0.0)
+    return out
 
 
 def section_energy_tiers(paths, sections, tempo_map, tpb: int,
                          hop_s: float = 0.1) -> list[str] | None:
-    """Energy tier ('calm'/'mid'/'high') per section, via thirds of the composite
-    audio score (loudness+flux+brightness; see section_energy_scores). Returns None
-    if the audio can't be read. Kept for callers that want tiers directly."""
+    """Energy tier ('calm'/'mid'/'high') per section from the composite FEEL score
+    (see section_energy_scores / _FEEL_W). FIXED thresholds on the song-relative
+    score (NOT forced thirds): 'high' is rare and a near-flat song reads all-'mid'.
+    Returns None if the audio can't be read. Kept for callers that want tiers directly."""
     scores = section_energy_scores(paths, sections, tempo_map, tpb, hop_s)
     if scores is None:
         return None
-    s = sorted(scores)
-    lo = s[len(s) // 3]
-    hi = s[2 * len(s) // 3]
-    return ["calm" if v <= lo else ("mid" if v < hi else "high") for v in scores]
+    return ["calm" if v < 0.42 else ("mid" if v < 0.62 else "high") for v in scores]
 
 
 def section_brightness_tiers(paths, sections, tempo_map, tpb: int,
@@ -575,12 +610,12 @@ def find_drops(paths, tempo_map, tpb: int, win_s: float = 0.5,
 def energy_envelope(paths, sections, tempo_map, tpb: int, sub_beats: int = 2,
                     hop_s: float = 0.1) -> list[tuple[int, str]] | None:
     """Within-section energy envelope at SUB-SECTION resolution. Splits the whole song
-    into spans of `sub_beats` beats and scores each with the same composite cue as
-    section_energy_scores (loudness+flux+brightness), ranked song-relative across ALL
-    spans, then thirds → 'calm'/'mid'/'high'. Returns a sorted list of
-    (start_tick, tier) breakpoints, or None. Lets the lightshow speed up in the loud
-    half of a long section and ease off in the quiet half — a continuous feel instead
-    of a single tier per section."""
+    into spans of `sub_beats` beats and scores each with the composite FEEL cue
+    (section_energy_scores / _FEEL_W: loud+flux lead, heaviness/wall/hardness add the
+    feel, brightness inverted), then FIXED thresholds → 'calm'/'mid'/'high'. Returns a
+    sorted list of (start_tick, tier) breakpoints, or None. Intensity is NOT locked to
+    section boundaries: a chorus can start 'calm' and ramp to 'mid' mid-way — the
+    lightshow/camera follow the real moment-to-moment feel, not one tier per section."""
     if not sections:
         return None
     from types import SimpleNamespace
@@ -596,9 +631,6 @@ def energy_envelope(paths, sections, tempo_map, tpb: int, sub_beats: int = 2,
     scores = section_energy_scores(paths, spans, tempo_map, tpb, hop_s)
     if scores is None:
         return None
-    sv = sorted(scores)
-    lo = sv[len(sv) // 3]
-    hi = sv[2 * len(sv) // 3]
     return [(spans[i].start,
-             "calm" if scores[i] <= lo else ("mid" if scores[i] < hi else "high"))
+             "calm" if scores[i] < 0.42 else ("mid" if scores[i] < 0.62 else "high"))
             for i in range(len(spans))]

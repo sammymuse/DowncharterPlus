@@ -112,19 +112,23 @@ def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
     comp: list[float] = []
     for i in range(len(sections)):
         if au is not None:
-            # Audio leads (0.45); MIDI performance cues 0.40; structure a light prior.
-            comp.append(0.45 * au[i] + 0.25 * rfull[i] + 0.15 * rvel[i] + 0.15 * struct[i])
+            # FEEL audio dominates (0.78). MIDI note-density cues are a weak support
+            # only (they track note count, not felt intensity) and the structural
+            # prior is barely-there (0.05) so energy is NOT locked to section type —
+            # a busy chorus no longer auto-reads 'high'.
+            comp.append(0.78 * au[i] + 0.12 * rfull[i] + 0.05 * rvel[i] + 0.05 * struct[i])
         else:
             # No audio: MIDI fullness leads, velocity + structure follow.
             comp.append(0.50 * rfull[i] + 0.25 * rvel[i] + 0.25 * struct[i])
 
-    # Tier by thirds of the song's own distribution (same density-driven logic used
-    # elsewhere; nothing hard-coded to absolute levels).
-    sc = sorted(comp)
-    lo = sc[len(sc) // 3]
-    hi = sc[2 * len(sc) // 3]
+    # Tier by FIXED thresholds on the composite itself — NOT forced thirds, and NOT
+    # re-normalized to this song's range (which would undo the song-relative meaning
+    # and re-force a spread). The cues are already percentile-ranked WITHIN the song
+    # (au/rfull/rvel in [0,1]), so a fixed threshold is itself song-relative: 'high'
+    # is rare (only sections that sit near the top of the song's own intensity), and
+    # a near-flat song collapses every cue to ~0.5 → all 'mid' (no fake extremes).
     for s, c in zip(sections, comp):
-        s.energy = "calm" if c <= lo else ("mid" if c < hi else "high")
+        s.energy = "calm" if c < 0.42 else ("mid" if c < 0.62 else "high")
     return au is not None
 
 
