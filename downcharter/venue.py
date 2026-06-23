@@ -1272,42 +1272,40 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     If `onsets` is given, does NOT cut faster than the music moves: in sparse
     sections (few notes) the pace is stretched to the real note spacing (avoids
     over-cutting in slow ballads/post-metal)."""
+    from collections import deque
+    from .cut_events import detect_events
     out: list[AbsEvent] = []
-    # Book p.349: the BRE cut goes on the FINAL NOTE of the BRE (the "hit" is the drop;
-    # almost everything is pre-roll). We use the end of the span, not the start.
-    bre_hits = {e for _, e in (bre_spans or [])}
     accents = sorted(accents) if accents else []
     onsets = sorted(onsets) if onsets else []
     min_gap = tpb // 2               # never two cuts less than 1/8 apart
     max_floor = tpb * 6              # but never slower than 1 cut / 6 beats
+    bad_framings = _absent_framings(inst_onsets)
+    # Full-band cuts are spaced ≥ this (book: "use sparingly"; ~4/song like the officials).
+    fullband_gap = tpb * 32
+
+    def _framing_only(pool: list[str]) -> list[str]:
+        """Keep only coop_* framings (the directed are now injected by the event layer)."""
+        f = [c for c in pool if c in CAMERA_CUTS]
+        return f or ["All_Near"]
+
+    # ── PASS 1: framing bed (coop_* only) → list of (tick, cut) slots ─────────────
+    # The bed is the paced, snapped, anti-recency framing camera. Directed cuts are
+    # NOT chosen here anymore; they come from PASS 2 (musical events) and replace the
+    # nearby filler. This separates "who/where to point the camera" (bed) from "react
+    # to a musical moment" (events) — see docs/CUTS_ALGORITHM_STUDY.md.
+    slots: list[tuple[int, str]] = []
     last_cut: str | None = None
     last_tick = -10 ** 9
-    last_dramatic = -10 ** 9          # space out full-band cuts (book: "sparingly")
-    has_vocal = bool(inst_onsets and inst_onsets.get("_vocal_real"))
-    # Framings to exclude because they film an absent instrument (keys/bass/guitar/drums/
-    # vocal). Computed once; applied to every framing pool.
-    bad_framings = _absent_framings(inst_onsets)
-    dsel = 0                          # alternates the directed pair between sections
-    from collections import deque
-    recent_directed: deque = deque(maxlen=5)   # anti-recency: last 5 emitted directed cuts
-    recent_coop: deque = deque(maxlen=6)       # anti-recency: last 6 emitted framings
-    erank = {"calm": 0, "mid": 1, "high": 2}
-    prev_energy = "calm"              # previous section's energy (for dircut_at_start)
-    last_allband = -10 ** 9           # throttle for the full-band directed_all*
-    ab_idx = 0
-    ab_seen = 0                       # impact sections seen (skips ~1 in 3)
-    # Lead-in (study of the 20 official ones): they ALL cut the camera from tick 0 to the
-    # 1st practice section (~2 cuts), instead of leaving the screen frozen on the
-    # instrumental intro (some songs only start 8-43 beats after 0). We replicate it: coop
-    # framings of the 1st section, at its pace, from the start. Framing only (no directed/full-band).
+    recent_coop: deque = deque(maxlen=6)
+
+    # Lead-in: cut from tick 0 to the 1st section (officials never freeze on the intro).
     if sections and sections[0].start > tpb:
         s0 = sections[0]
-        framing0 = SECTION_CAMERA.get(s0.kind, SECTION_CAMERA["default"])
+        framing0 = _framing_only(SECTION_CAMERA.get(s0.kind, SECTION_CAMERA["default"]))
         if bad_framings:
             framing0 = _safe_framing(framing0, bad_framings)
         pace_ms0 = SECTION_PACE_S.get(s0.kind, 3.0) * 1000.0 * pace_scale
-        t = 0
-        idx = 0
+        t = idx = 0
         while t < s0.start:
             placed = _snap_to_music(t, accents, tpb, floor=last_tick + min_gap)
             if placed <= last_tick:
@@ -1318,104 +1316,25 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             if cut == last_cut:
                 idx += 1
                 cut = framing0[idx % len(framing0)]
-            ev = _cut_event(placed, cut)
-            if ev is not None:
-                out.append(ev)
-                last_cut, last_tick = cut, placed
+            slots.append((placed, cut))
+            last_cut, last_tick = cut, placed
             idx += 1
             t += max(ms_to_ticks(pace_ms0, t, tempo_map, tpb), min_gap)
+
     for s in sections:
-        energy = _camera_energy(s)   # heaviness-gated tier (no jumps on sung loud choruses)
+        energy = _camera_energy(s)
         if s.kind == "solo":
-            inst = _solo_instrument(s.name)
-            solo_pool = SOLO_CAMERA[inst]
-            if bad_framings:                     # don't film an absent soloist
-                solo_pool = _safe_framing(solo_pool, bad_framings)
-            pool = solo_pool
-            section_dir = _SOLO_DIRECTED.get(inst, ["D_Drums_LT"])
+            pool = _framing_only(SOLO_CAMERA[_solo_instrument(s.name)])
         else:
-            framing = SECTION_CAMERA.get(s.kind, SECTION_CAMERA["default"])
-            if bad_framings:                     # don't film absent instruments
-                framing = _safe_framing(framing, bad_framings)
-            # Section's directed cut chosen by ENERGY: high → energetic
-            # (jumps/kicks), calm/mid → calm (closeups/cam) — avoids jumps/kicks
-            # in mellow parts, like the official venues. Injected in the middle of the pool.
-            calm_pool, energetic_pool = _SECTION_DIRECTED.get(
-                s.kind, _SECTION_DIRECTED["default"])
-            # Directed options for this section = energy-biased pool (the matching tier
-            # first, the other as overflow), rotated with the anti-recency guard so no
-            # single directed dominates (official top-cut ~20%, ~14 distinct/song).
-            section_dir = (list(energetic_pool) + list(calm_pool) if energy == "high"
-                           else list(calm_pool) + list(energetic_pool))
-            energetic_pair = energetic_pool          # kept name for dircut_at_start below
-            dc = _fresh_directed(section_dir, recent_directed, has_vocal)
-            dsel += 1
-            # Normalizes the framing pool to 7 entries (cycling the original framing) →
-            # the directed becomes ~1/8 of the cuts (≈13%), compensating the at-start cuts.
-            base = list(framing)
-            orig_n = len(base)
-            while len(base) < 8 and orig_n:
-                base.append(framing[len(base) % orig_n])
-            pool = base
-            if dc is not None:
-                pool.insert(min(2, len(pool)), dc)
-            # dircut_at_start (book p.337): only on the UPWARD transition to an intense
-            # section (previous < current AND current=high) does it nail the energetic
-            # cut on the entry's downbeat — a "kick" synced with the drop in the music.
-            # Not always: only on real rises, and the 2:1 audio guarantees intensity.
-            start_cut = False
-            if energy == "high" and erank[energy] > erank[prev_energy]:
-                ecut = _fresh_directed(list(energetic_pair), recent_directed, has_vocal)
-                start = _snap_to_music(s.start, accents, tpb, floor=last_tick + min_gap)
-                g = _guard_directed(ecut, start, tpb, inst_onsets) if ecut else None
-                if g and not (g in _DIRECTED_DRAMATIC and start - last_dramatic < tpb * 8):
-                    ev0 = _cut_event(start, g)
-                    if ev0 is not None and s.start <= start < s.end:
-                        out.append(ev0)
-                        last_cut, last_tick = g, start
-                        recent_directed.append(g)
-                        start_cut = True
-                        if g in _DIRECTED_DRAMATIC:
-                            last_dramatic = start
-            # Full-band on the entry of impact sections (~4/song, like the official ones).
-            # Doesn't duplicate with dircut_at_start; throttle ≥ ~10 measures. all_yeah falls
-            # to all_lt (via the cycle) if there are no vocals (guard → None → next).
-            elig = s.kind in _ALLBAND_KINDS
-            if elig:
-                ab_seen += 1
-            if (not start_cut and elig and ab_seen % 3 != 0        # skips ~1 in 3
-                    and s.start - last_allband >= tpb * 32):
-                cand = _ALLBAND_CYCLE[ab_idx % len(_ALLBAND_CYCLE)]
-                ab_idx += 1
-                # all_yeah is the energetic full-band JUMP ("yeah!"). On a non-heavy
-                # section (gated cam energy < high — e.g. a sung loud chorus) skip it
-                # for a neutral full-band shot, so the band doesn't jump like a
-                # breakdown. The full-band PRESENCE (calibrated to the officials) stays.
-                if cand == "D_All_Yeah" and energy != "high":
-                    cand = _ALLBAND_CYCLE[ab_idx % len(_ALLBAND_CYCLE)]
-                    ab_idx += 1
-                    if cand == "D_All_Yeah":
-                        cand = "D_All_LT"
-                start = _snap_to_music(s.start, accents, tpb, floor=last_tick + min_gap)
-                g = _guard_directed(cand, start, tpb, inst_onsets)
-                # No substitution: if the candidate (e.g. all_yeah without vocals) doesn't
-                # pass the guard, places NOTHING — instrumentals get less full-band, like the
-                # official ones, and it avoids inflating a single bucket.
-                if g is not None and s.start <= start < s.end:
-                    ev0 = _cut_event(start, g)
-                    if ev0 is not None:
-                        out.append(ev0)
-                        last_cut, last_tick = g, start
-                        recent_directed.append(g)
-                        last_allband = last_dramatic = start
+            pool = _framing_only(SECTION_CAMERA.get(s.kind, SECTION_CAMERA["default"]))
+        if bad_framings:                             # don't film absent instruments
+            pool = _safe_framing(pool, bad_framings)
         pace_ms = SECTION_PACE_S.get(s.kind, 3.0) * 1000.0 * pace_scale
-        # Audio nudge: if the real loudness differs from the structural energy, adjusts the
-        # rate (a quieter section → cuts slower). Without audio, delta=0.
+        # Audio nudge: a quieter-than-structural section cuts slower.
         _E = {"calm": 0, "mid": 1, "high": 2}
         delta = _E[energy] - _E[SECTION_ENERGY.get(s.kind, "calm")]
         pace_ms *= 1.18 ** (-delta)
-        # Density floor: don't cut faster than the note spacing
-        # (avoids over-cutting in slow ballads/post-metal).
+        # Density floor: don't cut faster than the note spacing (slow ballads/post-metal).
         density_floor = 0
         if onsets:
             g = _section_onset_gap(onsets, s.start, s.end)
@@ -1425,7 +1344,6 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
         t = s.start
         while t < s.end:
             step = max(ms_to_ticks(pace_ms, t, tempo_map, tpb), density_floor)
-            # Snap to music time (accent or beat), without violating the spacing.
             placed = _snap_to_music(t, accents, tpb, floor=last_tick + min_gap)
             if placed <= last_tick:
                 placed = max(t, last_tick + min_gap)
@@ -1433,51 +1351,78 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             if cut == last_cut:                      # avoid immediate repetition
                 idx += 1
                 cut = pool[idx % len(pool)]
-            # Anti-recency for FRAMINGS: skip a coop framing used in the recent window so
-            # the camera rotates through the whole pool (official top-cut ~11%, 33 distinct/
-            # song) instead of leaning on a couple. Bounded scan; if all are recent, keeps it.
-            if cut in CAMERA_CUTS:
-                for _ in range(len(pool)):
-                    if cut not in recent_coop and cut != last_cut:
-                        break
-                    idx += 1
-                    cut = pool[idx % len(pool)]
-            # When the pool lands on a DIRECTED slot, re-pick a fresh one from the
-            # section pool avoiding the recent window → a long section rotates through
-            # several directed cuts instead of repeating the same one.
-            if cut in DIRECTED_CUTS:
-                fresh = _fresh_directed(section_dir, recent_directed, has_vocal)
-                if fresh is not None:
-                    cut = fresh
-            # Semantic guard: a directed cut has to make sense in the context.
-            guarded = _guard_directed(cut, placed, tpb, inst_onsets)
-            # Throttle for the dramatic full-band ones: ≥8 beats between them.
-            if guarded in _DIRECTED_DRAMATIC and placed - last_dramatic < tpb * 8:
-                guarded = None
-            if guarded is None:                      # discarded → neutral framing
-                fallback = next((c for c in pool
-                                 if c not in DIRECTED_CUTS and c != last_cut), "All_Near")
-                guarded = fallback
-            cut = guarded
-            if cut in _DIRECTED_DRAMATIC:
-                last_dramatic = placed
-            if cut in DIRECTED_CUTS:                 # remember emitted directed (anti-recency)
-                recent_directed.append(cut)
-            elif cut in CAMERA_CUTS:                 # remember emitted framing (anti-recency)
+            # Anti-recency: skip a framing used in the recent window (wider variety).
+            for _ in range(len(pool)):
+                if cut not in recent_coop and cut != last_cut:
+                    break
+                idx += 1
+                cut = pool[idx % len(pool)]
+            if placed < s.end:
+                slots.append((placed, cut))
                 recent_coop.append(cut)
-            ev = _cut_event(placed, cut)
-            if ev is not None and placed < s.end:
-                out.append(ev)
-                last_cut = cut
-                last_tick = placed
+                last_cut, last_tick = cut, placed
             idx += 1
             t += step
-        prev_energy = energy
 
-    # Big Rock Endings: dramatic cut on the BRE's final note (book p.349).
-    for hit in sorted(bre_hits):
-        out.append(_txt(hit, f"[{DIRECTED_CUTS['D_BRE_Jump']}]"))
-        last_cut = "D_BRE_Jump"
+    # ── PASS 2: directed cuts from MUSICAL EVENTS (precise hit ticks) ─────────────
+    # Each event owns candidate cuts (most→least specific); the guard adapts them to
+    # context (_NP if idle, None if it makes no sense). Full-band cuts are throttled to
+    # `fullband_gap`; one stage dive per song; anti-recency on the rest.
+    events = detect_events(sections, inst_onsets, accents, bre_spans, time_sig_map, tpb)
+    accepted: list[tuple[int, str]] = []
+    recent_dir: deque = deque(maxlen=5)
+    last_fullband = -10 ** 9
+    did_stagedive = False
+    for e in events:
+        chosen = None
+        for cand in e.cuts:                          # 1st candidate that passes the guard
+            g = _guard_directed(cand, e.tick, tpb, inst_onsets)
+            if g is None:
+                continue
+            if g in recent_dir and chosen is None:
+                chosen = g                           # fallback if everything is recent
+                continue
+            if g not in recent_dir:
+                chosen = g
+                break
+        if chosen is None:
+            continue
+        is_fullband = chosen in ("D_All", "D_All_Cam", "D_All_LT", "D_All_Yeah")
+        if is_fullband and e.tick - last_fullband < fullband_gap:
+            continue                                 # space out full-band (sparingly)
+        if chosen in ("D_Stagedive", "D_Crowdsurf"):
+            if did_stagedive:
+                continue                             # at most one per song
+            did_stagedive = True
+        accepted.append((e.tick, chosen))
+        recent_dir.append(chosen)
+        if is_fullband:
+            last_fullband = e.tick
+
+    # ── MERGE: directed wins near a framing slot; drop the filler within min_gap ──
+    import bisect
+    dir_ticks = sorted(t for t, _ in accepted)
+
+    def _near_directed(tk: int) -> bool:
+        i = bisect.bisect_left(dir_ticks, tk)
+        for ci in (i - 1, i):
+            if 0 <= ci < len(dir_ticks) and abs(dir_ticks[ci] - tk) < min_gap:
+                return True
+        return False
+
+    merged = [(tk, c) for tk, c in slots if not _near_directed(tk)]
+    merged += list(accepted)
+    merged.sort(key=lambda x: x[0])
+
+    prev_tick = -10 ** 9
+    prev_cut: str | None = None
+    for tk, cut in merged:
+        if tk - prev_tick < min_gap or cut == prev_cut:
+            continue
+        ev = _cut_event(tk, cut)
+        if ev is not None:
+            out.append(ev)
+            prev_tick, prev_cut = tk, cut
     return out
 
 

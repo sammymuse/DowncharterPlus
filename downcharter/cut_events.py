@@ -68,19 +68,20 @@ def _nearest_accent(t: int, accents: list[int], tpb: int) -> int:
     return best
 
 
-def _phrases(vocal: list[int], time_sig_map: list, tpb: int) -> list[tuple[int, int]]:
-    """Group vocal onsets into phrases: a gap ≥ 1 measure splits phrases.
-    Returns (start, last_onset) per phrase."""
+def _phrases(vocal: list[int], time_sig_map: list, tpb: int) -> list[tuple[int, int, int]]:
+    """Group vocal onsets into phrases: a gap >= 1 measure splits phrases.
+    Returns (start, last_onset, n_notes) per phrase."""
     if not vocal:
         return []
     vocal = sorted(vocal)
-    phrases, ps, prev = [], vocal[0], vocal[0]
+    phrases, ps, prev, n = [], vocal[0], vocal[0], 1
     for o in vocal[1:]:
         if o - prev >= measure_ticks_at(prev, time_sig_map, tpb):
-            phrases.append((ps, prev))
-            ps = o
+            phrases.append((ps, prev, n))
+            ps, n = o, 0
         prev = o
-    phrases.append((ps, prev))
+        n += 1
+    phrases.append((ps, prev, n))
     return phrases
 
 
@@ -175,12 +176,16 @@ def detect_vocal_peaks(inst_onsets: dict[str, list[int]] | None,
     if not inst_onsets:
         return out
     vocal = inst_onsets.get("_vocal_real") or []
-    for ps, last in _phrases(vocal, time_sig_map, tpb):
-        if last - ps < tpb:           # skip tiny one-note phrases
+    last_emit = -10 ** 9
+    for ps, last, n in _phrases(vocal, time_sig_map, tpb):
+        if n < 2:                     # an isolated stab is not a phrase to peak on
+            continue
+        if last - last_emit < tpb * 4:  # throttle: at most ~1 vocal close-up / 4 beats
             continue
         out.append(CutEvent(_nearest_accent(last, accents, tpb), "vocal_peak",
                             ["D_Vox_CLS", "D_Vox_Cam_PT"], PRIO["vocal_peak"],
                             note="vocal phrase peak"))
+        last_emit = last
     return out
 
 

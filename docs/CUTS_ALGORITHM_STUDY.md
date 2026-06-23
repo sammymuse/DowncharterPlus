@@ -136,8 +136,16 @@ aponta a câmara a quem carrega a música (eventos #3/#4/#6 informam isto).
       `dev/cut_events_timeline.py`). Zero mudança de comportamento. Validado em
       Broken Mirror (20 eventos) e Elegy (21). Aprendizagens: excluir a voz do downtime
       (descanso entre frases é normal); BRE vem só da track de guitarra.
-- [ ] Fase 1 — refactor dos triggers existentes para o motor
-- [ ] Fase 2 — eventos novos (downtime/vox/duo/kick)
+- [x] Fase 1 — `build_camera` reescrita em 2 passos: (1) cama de framing `coop_*`,
+      (2) overlay de directed a partir de `detect_events` nos ticks de hit, com merge
+      (directed ganha ao filler perto), throttle de full-band (≥32 beats), 1 stagedive/
+      música, anti-recência e guards. Stats BM 95/4→**90/9**, top-cut 18%→12%, cuts
+      antes mortos (`D_Drums_NP`) vivos. Harness `dev/cut_stats.py`. Pools antigas
+      (`_SECTION_DIRECTED`/`_ALLBAND_*`/`_SOLO_DIRECTED`/`_fresh_directed`) ficaram
+      mortas — remover na limpeza final.
+- [ ] Fase 2 — afinar os detetores novos (diversidade de duo/technical; ativar
+      vocal_peak com `_vocal_real` real; kick→KD) + budget por-tipo
+- [ ] ~~Fase 2 — eventos novos~~ (já wired na Fase 1; falta afinar)
 - [ ] Fase 3 — Stagedive/Crowdsurf
 - [ ] Fase 4 — framing segue o instrumento em destaque
 </content>
