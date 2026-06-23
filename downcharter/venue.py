@@ -932,7 +932,7 @@ SECTION_PACE_S = {
 # ones remain guarded by _guard_directed (_NP if not playing; crowd only with vocals).
 # FRAMING (coop) pools per section — distribution calibrated to the official ones (closeup
 # ~37% > single_near > duo_near > behind > group > far). The directed cut is NOT here;
-# it's injected by energy (see _SECTION_DIRECTED + build_camera).
+# it comes from the event layer (see cut_events.detect_events + build_camera PASS 2).
 # Per-instrument distribution RE-BALANCED to the 20 official ones: there the camera is
 # split evenly (bass 70 ≳ drums 65 ≈ guitar 62 > vocals 52 > keys 36 per song). Before
 # we hammered the vocalist (V_Near+V_Closeup in almost the whole section) and forgot the
@@ -1054,66 +1054,10 @@ def _bias_pool(pool: list[str], inst: str | None) -> list[str]:
     return lead + [c for c in pool if c not in fr] if lead else pool
 
 
-# Directed cut per section SEPARATED BY ENERGY (study of the 20 venues, normalized):
-# the official ones NEVER put performance with jumps/kicks in mellow parts. CALM tier
-# (no jumps: closeups `_cls`, camera `_cam_pt`, `drums_lt/kd`) for calm+mid; ENERGETIC
-# tier (jumps/kicks: `D_All*`, plain `D_Gtr/Bass/Vocals`, duos, crowd) only for high.
-# `build_camera` chooses by the real `section_energy` (refined by audio).
-_SECTION_DIRECTED = {       # (calm pool, energetic pool) — POOLS (not pairs) for variety
-    # The directed_study over the 20 official venues showed they use a MEDIAN of 14
-    # distinct directed cuts/song with the top one ~20% (not one cut hammered). We were
-    # offering only 2 per kind → a single cut dominated (Elegy crowd_b 67%). So each tier
-    # is a 4-5 wide pool the generator rotates through with an anti-recency guard.
-    # Calm = closeups / duos (2 members interacting, no jumps). Energetic = lt/kd/yeah/
-    # cam / points (climax, sing-along). Drawn from the official frequency ranking
-    # (vocals_cam_pt, guitar_cls, drums_lt, bass_cls, drums_kd, all_yeah, duo_gb...).
-    "intro":      (["D_Bass_CLS", "D_Drums_LT", "D_Gtr_CLS", "D_Keys_Cam"],
-                   ["D_Bass", "D_All_Cam", "D_Drums_LT", "D_All_LT"]),
-    "verse":      (["D_Bass_CLS", "D_Duo_KB", "D_Gtr_CLS", "D_Vox_CLS", "D_Duo_GB"],
-                   ["D_Bass", "D_Duo_GB", "D_Gtr_Cam_PT", "D_Drums_LT"]),
-    "prechorus":  (["D_Bass_CLS", "D_Duo_KG", "D_Gtr_CLS", "D_Vox_Cam_PT"],
-                   ["D_Duo_GB", "D_All_Cam", "D_Drums_KD", "D_All_LT"]),
-    "chorus":     (["D_Vox_CLS", "D_Keys_Cam", "D_Gtr_CLS", "D_Vox_Cam_PT"],
-                   ["D_All_Yeah", "D_Crowd_Bass", "D_All_LT", "D_All_Cam", "D_Drums_LT"]),
-    "postchorus": (["D_Keys_Cam", "D_Duo_Bass", "D_Vox_CLS", "D_Gtr_CLS"],
-                   ["D_Crowd", "D_All_Cam", "D_All_Yeah", "D_All_LT"]),
-    "bridge":     (["D_Duo_KB", "D_Keys_Cam", "D_Bass_CLS", "D_Vox_Cam_PT", "D_Duo_KG"],
-                   ["D_Duo_KG", "D_Duo_KB", "D_All_Cam", "D_Drums_LT"]),
-    "build":      (["D_Drums_KD", "D_Duo_KB", "D_Bass_CLS", "D_Gtr_CLS"],
-                   ["D_Drums", "D_All_LT", "D_Drums_KD", "D_All_Cam"]),
-    "drop":       (["D_Drums_LT", "D_Bass_CLS", "D_Gtr_CLS"],
-                   ["D_All_LT", "D_Drums", "D_All_Yeah", "D_Drums_KD"]),
-    "breakdown":  (["D_Drums_LT", "D_Drums_Point", "D_Bass_CLS", "D_Gtr_CLS"],
-                   ["D_Drums", "D_All_Cam", "D_Drums_LT", "D_All_LT"]),
-    "riff":       (["D_Gtr_CLS", "D_Duo_KB", "D_Bass_CLS", "D_Gtr_Cam_PT"],
-                   ["D_Gtr", "D_Duo_GB", "D_Gtr_Cam_PT", "D_Drums_LT"]),
-    "solo":       (["D_Gtr_CLS", "D_Bass_CLS", "D_Drums_LT", "D_Keys_Cam"],
-                   ["D_Gtr", "D_Drums", "D_Gtr_Cam_PT", "D_All_LT"]),
-    "outro":      (["D_Bass_CLS", "D_Keys_Cam", "D_Vox_CLS", "D_Gtr_CLS"],
-                   ["D_All_Cam", "D_Crowd", "D_All_LT", "D_All_Yeah"]),
-    "default":    (["D_Drums_LT", "D_Duo_KB", "D_Bass_CLS", "D_Gtr_CLS"],
-                   ["D_Keys", "D_All_Cam", "D_Drums_LT", "D_All_LT"]),
-}
-
-# Substitution for songs WITHOUT real vocals (instrumentals): the cuts that depend
-# on vocals/crowd (crowd, vox_*, duos with vocal) fell into the guard → framing, leaving
-# the camera monotonous. We swap them for guitar/bass/drums equivalents to keep
-# variety in instrumentals.
-_NO_VOCAL_SUB = {
-    "D_Vox_Cam_PT": "D_Gtr_Cam_PT", "D_Vox_CLS": "D_Gtr_CLS", "D_Vocals": "D_Gtr",
-    "D_Crowd": "D_Drums", "D_Crowd_Gtr": "D_Gtr", "D_Duo_Gtr": "D_Duo_GB",
-    "D_Duo_KV": "D_Duo_KB", "D_Duo_Bass": "D_Bass_CLS", "D_Duo_Drums": "D_Drums",
-}
-
-# Full-band cuts (`directed_all*`) — 12% of the official directed ones, in 17/20 songs
-# (~3-4/song). Before they were stuck to the energetic 'high' tier (rare) → 0 emitted.
-# Own injector: full-band at the ENTRY of impact sections, independent of 'high',
-# with a dedicated throttle. all_yeah/all require vocals (guard); all_lt/all_cam don't.
-_ALLBAND_KINDS = {"intro", "chorus", "drop", "breakdown", "outro"}
-# Cycle weighted by the official distribution (all_yeah 29 > all_lt 25 > all_cam 19 > all 12).
-# 5 slots: only all_yeah (unreliable, requires vocals) gets a double slot; lt/cam/all 1 each →
-# no reliable token fills 2 slots. Reproduces ~yeah>lt≈cam>all of the official ones.
-_ALLBAND_CYCLE = ["D_All_Yeah", "D_All_LT", "D_All_Cam", "D_All_Yeah", "D_All"]
+# NOTE: the old section/energy directed POOLS (`_SECTION_DIRECTED`), the instrumental
+# substitution map (`_NO_VOCAL_SUB`) and the full-band injector cycle (`_ALLBAND_*`)
+# were removed with the event-engine rewrite — directed cuts now come from detected
+# musical events (see cut_events.py / docs/CUTS_ALGORITHM_STUDY.md), not pool rotation.
 
 # Solo pools per instrument — featuring the soloist via closeups/coop framing with
 # 1 directed CLS as an accent (solos justify more focus than the rest of the song).
@@ -1124,17 +1068,6 @@ SOLO_CAMERA = {
     "keys":   ["K_Near", "K_Hand", "K_Head", "KV_Near", "K_Behind", "D_Keys"],
     "vocal":  ["V_Near", "V_Closeup", "GV_Near", "DV_Near", "V_Behind", "D_Vox_CLS"],
 }
-
-# Directed options for a solo section, rotated with the anti-recency guard (the
-# soloist filmed several ways instead of the same closeup repeating).
-_SOLO_DIRECTED = {
-    "guitar": ["D_Gtr_CLS", "D_Gtr", "D_Gtr_Cam_PT"],
-    "bass":   ["D_Bass_CLS", "D_Bass", "D_Bass_Cam"],
-    "drums":  ["D_Drums_LT", "D_Drums", "D_Drums_KD"],
-    "keys":   ["D_Keys_Cam", "D_Keys"],
-    "vocal":  ["D_Vox_CLS", "D_Vocals", "D_Vox_Cam_PT"],
-}
-
 
 def _solo_instrument(name: str) -> str:
     n = name.lower()
@@ -1223,9 +1156,6 @@ _DIRECTED_NOTPLAYING = {
 # Cuts that involve the crowd/sing-along — only make sense with vocals/lyrics.
 _DIRECTED_SING = {"D_Crowd", "D_Crowd_Gtr", "D_Crowd_Bass", "D_All_Yeah",
                   "D_Stagedive", "D_Crowdsurf"}
-# Full-band/dramatic cuts — use sparingly (book: "use sparingly").
-_DIRECTED_DRAMATIC = {"D_All", "D_All_Cam", "D_All_LT", "D_All_Yeah",
-                      "D_Stagedive", "D_Crowdsurf"}
 # DUOS (book p.349): two members interacting. Only make sense if BOTH play nearby
 # (e.g. duo_kb with no keys doesn't exist). Suffixes: _g=gtr, _b=bass, _k=keys, _v=vox.
 _DIRECTED_DUO = {
@@ -1283,26 +1213,6 @@ def _guard_directed(cut: str, tick: int, tpb: int,
         if real is None or not _playing_near(real, tick, tpb * 4):
             return None                          # no real vocals → no crowd/sing
     return cut
-
-
-def _fresh_directed(options: list[str], recent, has_vocal: bool) -> str | None:
-    """Pick a directed cut from `options` not used in the recent window (anti-monotony).
-    Resolves no-vocal substitutions first; if every option is recent, returns the
-    least-recently used one (first in list). Keeps the per-song variety near the
-    official ~14 distinct cuts and the top-cut share near ~20% instead of one
-    directed dominating."""
-    seen, opts = set(), []
-    for c in options:
-        c2 = c if has_vocal else _NO_VOCAL_SUB.get(c, c)
-        if c2 not in seen:
-            seen.add(c2)
-            opts.append(c2)
-    if not opts:
-        return None
-    for c in opts:
-        if c not in recent:
-            return c
-    return opts[0]
 
 
 def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,

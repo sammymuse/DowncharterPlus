@@ -141,8 +141,9 @@ aponta a câmara a quem carrega a música (eventos #3/#4/#6 informam isto).
       (directed ganha ao filler perto), throttle de full-band (≥32 beats), 1 stagedive/
       música, anti-recência e guards. Stats BM 95/4→**90/9**, top-cut 18%→12%, cuts
       antes mortos (`D_Drums_NP`) vivos. Harness `dev/cut_stats.py`. Pools antigas
-      (`_SECTION_DIRECTED`/`_ALLBAND_*`/`_SOLO_DIRECTED`/`_fresh_directed`) ficaram
-      mortas — remover na limpeza final.
+      (`_SECTION_DIRECTED`/`_NO_VOCAL_SUB`/`_ALLBAND_*`/`_SOLO_DIRECTED`/`_fresh_directed`/
+      `_DIRECTED_DRAMATIC`) **removidas na limpeza final** (stats idênticas → era código
+      morto); `SOLO_CAMERA` e os guards mantêm-se.
 - [x] Fase 2 — `detect_features` (rotação de duos/closeups/vocal por secção → nenhum
       directed domina, máx 2-3/tipo); vocal_peak robustecido e ativo (D_Vox_CLS volta);
       `detect_technical` desligado (duplicava CLS). Falta: kick→KD preciso (sem kick
