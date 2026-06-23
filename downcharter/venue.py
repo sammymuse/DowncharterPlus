@@ -1504,6 +1504,53 @@ def _idle_state(s: Section) -> str:
     return "[idle_intense]" if _camera_energy(s) == "high" else "[idle]"
 
 
+def _energy_tier_at(s: Section, tick: int) -> str:
+    """Energy tier of the sub-span COVERING `tick` (not the section peak). A calm pocket
+    inside an otherwise-loud section reads calm; falls back to the section energy when
+    there are no audio spans (MIDI-only path)."""
+    if s.energy_spans:
+        for a, b, t in s.energy_spans:
+            if a <= tick < b:
+                return t
+        return (s.energy_spans[0][2] if tick < s.energy_spans[0][0]
+                else s.energy_spans[-1][2])
+    return section_energy(s)
+
+
+def _idle_marker_at(sections: list[Section], tick: int) -> str:
+    """The right 'not playing' marker for the EXACT tick of a rest — keyed to the LOCAL
+    energy there, so an idle that begins in a loud section and runs into a calm one stops
+    standing intense and slackens (fixes idle_intense bleeding past a section boundary)."""
+    s = _section_at(sections, tick)
+    if s is None:
+        return "[idle]"
+    if s.kind in ("intro", "outro"):
+        return "[idle_realtime]"
+    return "[idle_intense]" if _energy_tier_at(s, tick) == "high" else "[idle]"
+
+
+def _idle_segments(sections: list[Section], start: int, b: int,
+                   floor: int) -> list[tuple[int, str]]:
+    """Break a rest [start, b) into idle markers that FOLLOW the local energy: one at the
+    rest start, then one at every section / energy sub-span boundary crossed, each tier-
+    correct. A 4-bar drum break spanning a loud→calm boundary idles intense, then slack."""
+    pts = [max(start, floor)]
+    for s in sections:
+        if start < s.start < b:
+            pts.append(s.start)
+        for sa, _sb, _t in (s.energy_spans or []):
+            if pts[0] < sa < b:
+                pts.append(sa)
+    pts = sorted(p for p in set(pts) if p >= pts[0])
+    out, last = [], None
+    for p in pts:
+        m = _idle_marker_at(sections, p)
+        if m != last:
+            out.append((p, m))
+            last = m
+    return out
+
+
 _MOOD_LADDER = ["mellow", "play", "intense"]
 _ENERGY_LEVEL = {"calm": 0, "mid": 1, "high": 2}
 _LEVEL_ENERGY = {0: "calm", 1: "mid", 2: "high"}
@@ -1564,6 +1611,21 @@ def build_animations(part_onsets: list[int], sections: list[Section],
         return [_txt(0, "[idle_realtime]")]
     floor = onsets[0]
     eighth = max(1, tpb // 2)
+    # LONG rests of THIS instrument (≥ _IDLE_DOWNTIME_MEASURES). Computed first because
+    # the instrument is genuinely NOT playing across these windows: no 'playing' mood
+    # ([mellow]/[play]/[intense]) may be emitted inside one (that read as the character
+    # drumming/strumming while resting), and the idle within must follow the LOCAL energy.
+    # Only multi-bar breaks idle the character — a phrase-length rest keeps the steady mood
+    # (a sparse riff that bursts then rests 2-3 measures must NOT flicker idle every phrase).
+    idle_spans: list[tuple[int, int]] = []
+    for a, b in zip(onsets, onsets[1:]):
+        mt = measure_ticks_at(a, time_sig_map, tpb)
+        if b - a >= _IDLE_DOWNTIME_MEASURES * mt:
+            idle_spans.append((a, b))
+
+    def _in_idle(tick: int) -> bool:
+        return any(a < tick < b for a, b in idle_spans)
+
     timeline: list[tuple[int, str]] = []
     # State per section (transitions start 1/8 before the boundary). When the section
     # carries audio sub-spans, the mood FOLLOWS the music within the section (a chorus
@@ -1574,30 +1636,25 @@ def build_animations(part_onsets: list[int], sections: list[Section],
         solo = s.kind == "solo" and _solo_instrument(s.name) == instrument
         if playing and not solo and s.energy_spans:
             for j, (a, b, tier) in enumerate(s.energy_spans):
-                state = _mood_for_level(_ENERGY_LEVEL[tier], instrument, i)
-                tick = s.start if (i == 0 and j == 0) else max(a - eighth, floor)
-                timeline.append((max(tick, floor), state))
+                tick = max(s.start if (i == 0 and j == 0) else a - eighth, floor)
+                if _in_idle(tick):              # instrument is resting here → idle owns it
+                    continue
+                timeline.append((tick, _mood_for_level(_ENERGY_LEVEL[tier], instrument, i)))
         else:
-            state = _anim_state(s, playing, instrument, i)
-            tick = s.start if i == 0 else max(s.start - eighth, floor)
-            timeline.append((max(tick, floor), state))
-    # Downtime within the song: only LONG pauses (≥ _IDLE_DOWNTIME_MEASURES) drop the
-    # instrument to [idle] and resume afterwards. The book's 2-measure minimum was too
-    # twitchy for sparse riffs (a guitar that plays a 3-4 beat burst then rests 2-3
-    # measures would put the instrument DOWN and pick it UP on every phrase — the
-    # character flickers out of sync with the music). A phrase-length rest now keeps the
-    # steady mood ([mellow]/[play]); only a genuine multi-bar break idles the instrument.
-    for a, b in zip(onsets, onsets[1:]):
-        mt = measure_ticks_at(a, time_sig_map, tpb)
-        if b - a >= _IDLE_DOWNTIME_MEASURES * mt:
-            sec_a = _section_at(sections, a)
-            idle = _idle_state(sec_a) if sec_a is not None else "[idle]"
-            timeline.append((a + eighth, idle))
-            sec = _section_at(sections, b)
-            if sec is not None:
-                timeline.append((max(b - eighth, a + eighth + 1),
-                                 _anim_state(sec, True, instrument,
-                                             sections.index(sec))))
+            tick = max(s.start if i == 0 else s.start - eighth, floor)
+            if not _in_idle(tick):
+                timeline.append((tick, _anim_state(s, playing, instrument, i)))
+    # Emit each rest as idle markers that track the local energy, then resume on the note
+    # that ends the rest. The idle starts 1/8 after the last onset; its tier is read AT
+    # that point (and at every boundary crossed), so an intense idle stops being intense
+    # the moment the music under it calms — no bleed of the loud section into the next.
+    for a, b in idle_spans:
+        for tick, marker in _idle_segments(sections, a + eighth, b, floor):
+            timeline.append((tick, marker))
+        sec = _section_at(sections, b)
+        if sec is not None:
+            timeline.append((max(b - eighth, a + eighth + 1),
+                             _anim_state(sec, True, instrument, sections.index(sec))))
     timeline.sort(key=lambda x: x[0])
     out: list[AbsEvent] = []
     last: str | None = None
