@@ -1524,6 +1524,11 @@ def resolve_sections(events_track: list[AbsEvent], song_end: int,
 
 _INTENSE_THEMES = {"metal", "punk"}
 
+# How many measures of rest WITHIN a section before the instrument visibly idles
+# (puts the instrument down). The book's floor is 2 measures, but that flickers on
+# sparse riffs; 4 keeps the character steady through phrase-length rests.
+_IDLE_DOWNTIME_MEASURES = 4
+
 
 def phrase_end_ticks(track) -> list[int]:
     """Ticks of the note_offs of the vocal phrase markers (pitch 105/106) — end of each
@@ -1613,10 +1618,15 @@ def build_animations(part_onsets: list[int], sections: list[Section],
         state = _anim_state(s, playing, instrument, intense)
         tick = s.start if i == 0 else max(s.start - eighth, floor)
         timeline.append((max(tick, floor), state))
-    # Downtime within the song: pauses ≥ 2 measures → [idle], resumes afterwards.
+    # Downtime within the song: only LONG pauses (≥ _IDLE_DOWNTIME_MEASURES) drop the
+    # instrument to [idle] and resume afterwards. The book's 2-measure minimum was too
+    # twitchy for sparse riffs (a guitar that plays a 3-4 beat burst then rests 2-3
+    # measures would put the instrument DOWN and pick it UP on every phrase — the
+    # character flickers out of sync with the music). A phrase-length rest now keeps the
+    # steady mood ([mellow]/[play]); only a genuine multi-bar break idles the instrument.
     for a, b in zip(onsets, onsets[1:]):
         mt = measure_ticks_at(a, time_sig_map, tpb)
-        if b - a >= 2 * mt:
+        if b - a >= _IDLE_DOWNTIME_MEASURES * mt:
             sec_a = _section_at(sections, a)
             idle = _idle_state(sec_a) if sec_a is not None else "[idle]"
             timeline.append((a + eighth, idle))
