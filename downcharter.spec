@@ -24,6 +24,12 @@ for pkg in ("soundfile",):
 
 hiddenimports += ["mido", "numpy"]
 
+# Bundled data (CMUdict for English lipsync G2P) → keep the package layout so
+# lipsync._data_path() finds it at <_MEIPASS>/downcharter/data/.
+_dc_data = os.path.join("downcharter", "data")
+if os.path.isdir(_dc_data):
+    datas.append((_dc_data, "downcharter/data"))
+
 # soundfile is a single module (not a package) → collect_all does NOT pick up
 # libsndfile. The DLL lives in <site-packages>/_soundfile_data/ and soundfile
 # looks for it relative to itself, so we place it at the bundle root.
