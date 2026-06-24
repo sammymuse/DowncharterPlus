@@ -1822,6 +1822,55 @@ def generate_animations(part_onsets_by_track: dict[str, list[int]],
     return res
 
 
+# Crowd intensity follows the SAME song-relative energy map as the rest of the venue
+# (calm→mellow / mid→normal / high→intense), so the audience reads coherent with the
+# performers, lights and pyro. The dead-quiet bookends (intro/outro) and the multi-bar
+# pauses freeze the crowd (crowd_realtime) — the band stopped, so does the room.
+_CROWD_MOOD = {"calm": "crowd_mellow", "mid": "crowd_normal", "high": "crowd_intense"}
+
+
+def build_crowd(sections: list[Section], tpb: int,
+                pause_spans: list[tuple[int, int]] | None = None) -> list[AbsEvent]:
+    """Crowd state events on the VENUE track, driven by the section/sub-span energy.
+
+    Mood: calm→[crowd_mellow], mid→[crowd_normal], high→[crowd_intense]. Intro/outro
+    and ≥2-measure pauses → [crowd_realtime] (frozen, no animation). Clap: [crowd_clap]
+    once the crowd is energetic (mid/high), [crowd_noclap] when it drops back to calm or
+    freezes. Tracks the LOCAL energy (energy_spans) so the audience swells and eases
+    inside a long section instead of holding one tier. Dedups consecutive states."""
+    pause_spans = pause_spans or []
+    # Breakpoints: each section start, each energy sub-span boundary, each pause edge.
+    pts: list[int] = []
+    for s in sections:
+        pts.append(s.start)
+        for a, _b, _t in (s.energy_spans or []):
+            pts.append(a)
+    for a, b in pause_spans:
+        pts.append(a)
+        pts.append(b)
+    pts = sorted(p for p in set(pts) if p >= 0)
+    out: list[AbsEvent] = []
+    last_mood: str | None = None
+    last_clap: str | None = None
+    for p in pts:
+        s = _section_at(sections, p)
+        if s is None:
+            continue
+        if _in_span(p, pause_spans) or s.kind in ("intro", "outro"):
+            mood, clap = "crowd_realtime", "crowd_noclap"
+        else:
+            tier = _energy_tier_at(s, p)
+            mood = _CROWD_MOOD[tier]
+            clap = "crowd_clap" if tier in ("mid", "high") else "crowd_noclap"
+        if mood != last_mood:
+            out.append(_txt(p, f"[{mood}]"))
+            last_mood = mood
+        if clap != last_clap:
+            out.append(_txt(p, f"[{clap}]"))
+            last_clap = clap
+    return out
+
+
 def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]],
                    song_end: int, tempo_map: list, time_sig_map: list,
                    tpb: int, theme: str = DEFAULT_THEME,
@@ -1867,6 +1916,7 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     pyro_accents = (sorted(set(accents or []) | set(audio_onsets))
                     if audio_onsets else accents)
     out += build_pyro(sections, drum_onsets or [], tpb, accents=pyro_accents)
+    out += build_crowd(sections, tpb, pause_spans)
     out += build_camera(sections, tempo_map, time_sig_map, tpb, bre_spans,
                         pace_scale=th["pace"], accents=accents, onsets=onsets,
                         inst_onsets=inst_onsets)
