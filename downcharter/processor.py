@@ -888,6 +888,8 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
     n = len(syl)
     trimmed = 0
     gems: list[tuple[int, int]] = []
+    # (start_s, end_s, text, gain) per syllable → drives the LIPSYNC1 viseme track.
+    lip_spans: list[tuple[float, float, str, float]] = []
     for i, e in enumerate(syl):
         t = e.abs_tick
         nxt = syl[i + 1].abs_tick if i + 1 < n else None
@@ -918,6 +920,12 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
         cur = e.msg.text
         if not cur.rstrip().endswith(("#", "^")):
             e.msg = e.msg.copy(text=cur + "#")
+        # Record the span (seconds) + loudness gain for the viseme track.
+        if tempo_map is not None:
+            s_s = tick_to_ms(t, tempo_map, tpb) / 1000.0
+            e_s = tick_to_ms(end, tempo_map, tpb) / 1000.0
+            gain = _audio.syllable_gain(va, s_s, e_s) if va is not None else 1.0
+            lip_spans.append((s_s, e_s, cur, gain))
 
     # phrase markers (105) if the track doesn't have them — RB needs them for the vocals.
     have_phrases = any(e.msg.type == "note_on" and getattr(e.msg, "velocity", 0) > 0
@@ -941,14 +949,58 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
         stats["vocals_trimmed"] = trimmed
     if phrase_spans:
         stats["vocal_phrases_gen"] = len(phrase_spans)
+    return lip_spans
 
 
 def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats) -> None:
-    """Chart talky vocals in PART VOCALS from the lyrics. This is the path that
-    RB/Onyx actually uses: charted vocals → autoLipsync on the tubes → good lipsync.
-    (We don't produce LIPSYNC# tracks — Onyx ignores them on the `.ini` import.)"""
+    """Two complementary lipsync outputs from the lyrics:
+
+    1. Talky vocals in PART VOCALS — the path RB/Onyx's `.ini` import actually uses
+       (charted tubes → autoLipsync). Works in-game today.
+    2. A LIPSYNC1 viseme track — text-commands `[<viseme> <weight>]`, the exact format
+       Onyx parses (confirmed in `Onyx/MIDI/Track/Lipsync.hs`: track name `LIPSYNC1`,
+       `[viseme N]` linear / `+hold` / `+ease`). Consumed by Onyx's milo workflow and
+       future-proof for YARG (its `LoadLipsyncFromMilo` has a TODO to parse lipsync
+       from MIDI). Timing/weight are audio-guided from the same spans as (1), beating
+       both engines' built-in geometric generators."""
     folder = os.path.dirname(os.path.abspath(dst_path))
-    _chart_vocals_from_lyrics(new_mid, tpb, stats, tempo_map, folder)
+    spans = _chart_vocals_from_lyrics(new_mid, tpb, stats, tempo_map, folder) or []
+    if spans and tempo_map is not None and song_end > 0:
+        try:
+            from . import lipsync as _lip
+            song_len_s = tick_to_ms(song_end, tempo_map, tpb) / 1000.0
+            events = _lip.lipsync_events_from_spans(spans, song_len_s)
+            if events:
+                tr = _build_lipsync_track(events, tempo_map, tpb)
+                li = next((i for i, t in enumerate(new_mid.tracks)
+                           if t.name.strip().upper() == "LIPSYNC1"), None)
+                if li is not None:
+                    new_mid.tracks[li] = tr
+                else:
+                    new_mid.tracks.append(tr)
+                stats["lipsync_events"] = len(events)
+        except Exception:
+            pass
+
+
+def _build_lipsync_track(events, tempo_map, tpb):
+    """A `LIPSYNC1` MIDI track of `[viseme weight]` text-commands from the delta
+    events (frame_idx, [(viseme, weight)]). Frames are 30 fps → converted to ticks
+    via the tempo map. Opens with `[lang en]` so the renderer picks the right rules."""
+    from . import audio as _audio
+    from .lipsync import FPS
+    abs_evts = [
+        AbsEvent(0, mido.MetaMessage("track_name", name="LIPSYNC1", time=0)),
+        AbsEvent(0, mido.MetaMessage("text", text="[lang en]", time=0)),
+    ]
+    for frame, deltas in events:
+        tick = _audio._ms_to_tick(frame / float(FPS) * 1000.0, tempo_map, tpb)
+        for viseme, weight in deltas:
+            abs_evts.append(AbsEvent(tick, mido.MetaMessage(
+                "text", text=f"[{viseme} {weight}]", time=0)))
+    tr = to_track(abs_evts)
+    tr.append(mido.MetaMessage("end_of_track", time=0))
+    return tr
 
 
 def _restore_ps_sysex(path: str) -> None:
