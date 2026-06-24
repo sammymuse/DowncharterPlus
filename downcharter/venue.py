@@ -1593,11 +1593,19 @@ def _mood_for_level(level: int, instrument: str, sec_idx: int) -> str:
     """Map an energy level (0/1/2) to a mood marker, with the per-instrument stagger.
     Stagger: soften the expressive instruments one notch on alternating sections so the
     band isn't a single mood (official median ~43% of moments NOT in unison). This also
-    pulls the over-used [play] share down toward the official ~32%."""
+    pulls the over-used [play] share down toward the official ~32%.
+
+    TIER-EXACT FLOOR: `level` is the LOCAL energy tier at this exact tick (callers pass
+    `_energy_tier_at`), so a demote would emit a mood WEAKER than the music playing right
+    then — the character laying back while the part is loud. We keep the stagger machinery
+    but clamp the result to never drop below the local tier, so no marker reads under its
+    own moment. (Non-unison only survives where the demote would not undercut the local
+    energy — never, while `level` is the local tier — so this is tier-exact by design.)"""
     rank = _INST_VARY_RANK.get(instrument, 2)
+    staggered = level
     if rank >= 2 and level > 0 and (sec_idx + rank) % 2 == 0:
-        level -= 1
-    return f"[{_MOOD_LADDER[level]}]"
+        staggered -= 1
+    return f"[{_MOOD_LADDER[max(staggered, level)]}]"
 
 
 def build_animations(part_onsets: list[int], sections: list[Section],
