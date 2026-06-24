@@ -108,6 +108,29 @@ def voice_offset_s(va, start_s: float, ceil_s: float,
     return None
 
 
+def syllable_gain(va, start_s: float, end_s: float,
+                  floor: float = 0.55) -> float:
+    """Loudness of a syllable's window [start_s, end_s] as a viseme-weight gain in
+    [floor, 1.0]. Uses the vocal-stem RMS envelope from `voice_activity`: the louder
+    the singer holds the vowel, the wider the mouth opens. Song-relative (peak of the
+    whole stem), never absolute dB. Returns 1.0 if no audio (no scaling)."""
+    if va is None:
+        return 1.0
+    try:
+        env, hop_s, _thr = va
+        a = max(0, int(start_s / hop_s))
+        b = max(a + 1, int(end_s / hop_s))
+        seg = env[a:b]
+        peak = float(env.max())
+        if len(seg) == 0 or peak <= 0:
+            return 1.0
+        amp = float(seg.max()) / peak
+        amp = max(0.0, min(1.0, amp))
+        return floor + (1.0 - floor) * amp
+    except Exception:
+        return 1.0
+
+
 def find_song_audio(folder: str) -> list[str]:
     """Song audio in the folder (YARG layout). Returns a LIST:
       - 1 multichannel .mogg (already contains every stem) → [that one], OR

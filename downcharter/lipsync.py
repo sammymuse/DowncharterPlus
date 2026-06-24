@@ -337,6 +337,32 @@ def lipsync_delta_events(lyrics: list[tuple[float, str]], song_len_s: float,
     return list(_delta_frames(frames, n_frames))
 
 
+def lipsync_events_from_spans(spans, song_len_s: float):
+    """(frame_idx, [(viseme, weight)]) for a LIPSYNC# MIDI track, driven by the REAL
+    syllable spans (audio-guided start/end) instead of a geometric onset window.
+
+    `spans` = list of (start_s, end_s, text[, gain]) where gain ∈ (0, 1] scales the
+    viseme weight by the syllable's loudness (1.0 = full). The mouth opens at
+    start_s, sustains the vowel, and closes by end_s — the true note length the audio
+    confirmed — so the lipsync matches when the singer actually stops. This is what
+    sets us apart from Onyx/YARG's built-in generators (both geometric, audio-blind)."""
+    frames: dict[int, dict] = {}
+    for sp in spans:
+        t, end, text = sp[0], sp[1], sp[2]
+        gain = sp[3] if len(sp) > 3 else 1.0
+        dur = end - t
+        if dur <= 0:
+            continue
+        pts = _syllable_points(t, dur, _syllable_shape(text))
+        if gain != 1.0:
+            pts = [(pt_t, {n: max(0, min(255, int(round(w * gain))))
+                           for n, w in st.items()})
+                   for pt_t, st in pts]
+        _sample_into(frames, pts)
+    n_frames = max(1, int(math.ceil(song_len_s * FPS)) + 1)
+    return list(_delta_frames(frames, n_frames))
+
+
 def _serialize(frames: dict[int, dict], n_frames: int) -> bytes:
     """Per-frame states (name→weight) → delta-encoded CharLipSync, 34 visemes."""
     body = bytearray()
