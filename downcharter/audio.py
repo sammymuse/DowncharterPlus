@@ -412,8 +412,12 @@ def _scale01(values):
 # heaviness (low-end), wall/distortion (flatness) and transient hardness (density)
 # add real signal — and BRIGHTNESS IS INVERTED (high intensity is DARKER/heavier,
 # gap −16.5; the old code added it positively, pulling the wrong way).
-_FEEL_W = {"loud": 0.34, "flux": 0.27, "flat": 0.11,
-           "low": 0.11, "dens": 0.06, "bright": -0.11}
+# Rebalanced toward HEAVINESS (low 0.11→0.16, flat→0.12, bright −0.11→−0.13; flux
+# 0.27→0.24 and dens 0.06→0.04 trimmed to keep Σ|w|≈1.0 so the calibrated tier
+# thresholds don't drift). Effect: dark/heavy moderate-loudness sections (e.g. a
+# heavy instrumental outro/riff) lift a tier; pure bright-loud peaks ease a hair.
+_FEEL_W = {"loud": 0.34, "flux": 0.24, "flat": 0.12,
+           "low": 0.16, "dens": 0.04, "bright": -0.13}
 
 
 def _feel_frames(mono, sr):
