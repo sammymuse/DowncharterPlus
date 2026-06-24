@@ -1445,6 +1445,13 @@ _INTENSE_THEMES = {"metal", "punk"}
 # (puts the instrument down). The book's floor is 2 measures, but that flickers on
 # sparse riffs; 4 keeps the character steady through phrase-length rests.
 _IDLE_DOWNTIME_MEASURES = 4
+# …BUT in a high-energy pocket the steady mood is [intense] (the big-arm flail), and
+# holding THAT across a 2-3 measure pause reads as the character thrashing at empty air
+# instead of waiting for the re-entry. So in 'high' local energy we drop to idle after
+# the book's 2-measure floor: the performer goes [idle_intense] (standing energetic,
+# ready — not hitting) through the pause and resumes [intense] synced 1/8 before the note
+# that ends it. The flicker concern only ever applied to sparse CALM riffs, which keep 4.
+_IDLE_DOWNTIME_INTENSE = 2
 
 
 def phrase_end_ticks(track) -> list[int]:
@@ -1628,7 +1635,14 @@ def build_animations(part_onsets: list[int], sections: list[Section],
     idle_spans: list[tuple[int, int]] = []
     for a, b in zip(onsets, onsets[1:]):
         mt = measure_ticks_at(a, time_sig_map, tpb)
-        if b - a >= _IDLE_DOWNTIME_MEASURES * mt:
+        # A heavy ([intense]) hold flails at empty air over a pause, so it idles after the
+        # shorter 2-measure floor; calmer holds keep the steadier 4 (no flicker on sparse
+        # calm riffs). Energy read at the rest start, where the held mood was set.
+        sec = _section_at(sections, a)
+        thresh = (_IDLE_DOWNTIME_INTENSE
+                  if sec is not None and _energy_tier_at(sec, a) == "high"
+                  else _IDLE_DOWNTIME_MEASURES)
+        if b - a >= thresh * mt:
             idle_spans.append((a, b))
 
     def _in_idle(tick: int) -> bool:
