@@ -56,8 +56,11 @@ def find_vocal_stems(folder: str) -> list[str]:
 def voice_activity(paths, hop_s: float = 0.05):
     """RMS envelope of the vocal stem(s) plus a 'voice-present' threshold.
     Returns (env, hop_s, thr) or None on failure. The threshold is relative:
-    floor (20th pct) + 12% of the dynamic range, so 'voice present' adapts to the
-    stem's own noise floor. Used to confirm a singer is actually holding a note."""
+    floor (20th pct) + 8% of the dynamic range, so 'voice present' adapts to the
+    stem's own noise floor. Used to confirm a singer is actually holding a note.
+    Kept low (8%, was 12%) because a SUSTAINED sung vowel modulates in amplitude
+    with vibrato — its troughs dip well below a 12% line while the singer is still
+    clearly holding the note — and a high threshold clipped those sustains short."""
     if isinstance(paths, str):
         paths = [paths]
     if not paths:
@@ -72,18 +75,23 @@ def voice_activity(paths, hop_s: float = 0.05):
         floor = float(np.percentile(env, 20))
         if peak <= 0:
             return None
-        thr = floor + 0.12 * (peak - floor)
+        thr = floor + 0.08 * (peak - floor)
         return env, hop_s, thr
     except Exception:
         return None
 
 
 def voice_offset_s(va, start_s: float, ceil_s: float,
-                   gap_s: float = 0.15) -> float | None:
+                   gap_s: float = 0.25) -> float | None:
     """Second at which the voice falls silent after `start_s` (silence sustained
     for at least `gap_s`), searching up to `ceil_s`. Returns None if the voice
     persists all the way to the ceiling (genuine sustain). `va` is the tuple from
-    `voice_activity`."""
+    `voice_activity`.
+
+    `gap_s` is 0.25s (was 0.15) so a single vibrato trough — the brief amplitude
+    dip inside a held vowel, ~0.1s at 5-6 Hz — can NOT masquerade as the end of the
+    syllable. Real inter-phrase silence runs much longer (>0.4s), so genuine cuts
+    still register; only the mid-note vibrato dips are now ignored."""
     if va is None:
         return None
     env, hop_s, thr = va
