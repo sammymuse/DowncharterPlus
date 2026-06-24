@@ -1,0 +1,35 @@
+name: Release
+
+# Fires only when a version tag is pushed (e.g. v1.0.2). A normal push to main
+# does nothing — this keeps day-to-day commits cheap and only builds on release.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write  # needed to create the GitHub Release and upload the asset
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Build (PyInstaller onedir + zip)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File build.ps1
+
+      - name: Publish release with the zip asset
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Downcharter+ ${{ github.ref_name }}
+          files: dist/Downcharter+.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
