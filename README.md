@@ -4,6 +4,13 @@
 
 # Downcharter+
 
+<p align="center">
+  <a href="https://github.com/sammymuse/Downcharter/releases/latest"><img src="https://img.shields.io/github/v/release/sammymuse/Downcharter?label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/sammymuse/Downcharter" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/platform-Windows-blue" alt="Platform: Windows">
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
+</p>
+
 Chart reducer and venue/talkies generator for [YARG](https://yarg.in/), [Rock Band 3](https://en.wikipedia.org/wiki/Rock_Band_3) and [Clone Hero](https://clonehero.net/).
 
 Most customs ship with only an Expert chart. Downcharter+ takes that `.mid` or
