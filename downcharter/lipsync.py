@@ -6,10 +6,12 @@ lyric events instead of the charted vocal notes (tubes). This way it works on
 songs that "only have lyrics" (no pitched gems in PART VOCALS).
 
 Deliberate differences from Onyx (so as NOT to copy its code):
-  * OWN grapheme→phoneme, rule-based (without the 3.5 MB cmudict). Each lyric
-    event is already a syllable (the charter splits words with '-'/'='), so we run
-    G2P on the syllable fragment directly — no dictionary lookup and no
-    syllable-count matching.
+  * grapheme→phoneme: CMUdict (English, public domain) for COMPLETE words +
+    OWN rule-based G2P as fallback for hyphenated fragments, out-of-vocabulary
+    words and non-English (German/Spanish spelling is phonetic, so the rules
+    suffice and no dict is used). Each lyric event is already a syllable (the
+    charter splits words with '-'/'='); whole-word fragments hit the dict, the
+    rest run G2P directly — no syllable-count matching.
   * The viseme map (vowels/consonants → facial morphs) is the only data table
     reused from Onyx (rb3.yml) — inlined; it's data, not logic.
 
@@ -35,8 +37,11 @@ The keyframes are DELTA (each frame only lists the visemes that CHANGED; the gam
 holds the previous value), just like the official files.
 """
 from __future__ import annotations
+import gzip
 import math
+import os
 import struct
+import sys
 
 from .midi_utils import tick_to_ms
 
@@ -119,12 +124,51 @@ _CONS_SINGLE = {
 }
 
 
-def grapheme_to_phonemes(frag: str) -> list[str]:
+# ───────────────────────── CMUdict (English only) ───────────────────────────
+# Whole-word ARPABET lookup. English spelling is irregular, so for COMPLETE
+# words the dictionary beats the rules. Multi-syllable HYPHENATED fragments
+# (e.g. "el-e-gy") are not whole words → they fall back to the rules. German /
+# Spanish have phonetic spelling, so the rules already suffice there (no dict).
+_CMUDICT: dict[str, list[str]] | None = None
+
+
+def _data_path(name: str) -> str:
+    """Bundled data file, working both in dev and in a PyInstaller onedir."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return os.path.join(base, "downcharter", "data", name)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", name)
+
+
+def _cmudict() -> dict[str, list[str]]:
+    """Lazy-loaded English pronunciation dictionary (word → ARPABET phones)."""
+    global _CMUDICT
+    if _CMUDICT is None:
+        d: dict[str, list[str]] = {}
+        try:
+            with gzip.open(_data_path("cmudict.en.txt.gz"), "rt",
+                           encoding="utf-8") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        d[parts[0]] = parts[1:]
+        except Exception:
+            d = {}  # missing/corrupt dict → rules-only, never crash
+        _CMUDICT = d
+    return _CMUDICT
+
+
+def grapheme_to_phonemes(frag: str, lang: str = "en") -> list[str]:
     """Convert a text fragment (syllable) into a list of phonemes.
 
-    Rule-based approximation — good enough for mouth shapes (visemes), not meant
-    to be an exact pronunciation. No dictionary."""
+    For English COMPLETE words, looks them up in CMUdict (accurate). Otherwise
+    (hyphenated fragments, non-English, or out-of-vocabulary) falls back to the
+    rule-based approximation — good enough for mouth shapes (visemes)."""
     s = "".join(c for c in frag.lower() if c.isalpha())
+    if lang == "en" and s:
+        hit = _cmudict().get(s)
+        if hit:
+            return list(hit)
     out: list[str] = []
     i = 0
     n = len(s)
@@ -175,11 +219,11 @@ def grapheme_to_phonemes(frag: str) -> list[str]:
     return out
 
 
-def _syllable_shape(text: str) -> tuple[list[dict], tuple[dict, dict | None], list[dict]]:
+def _syllable_shape(text: str, lang: str = "en") -> tuple[list[dict], tuple[dict, dict | None], list[dict]]:
     """Lyric fragment → (initial consonants, (vowel, end|None), final consonants).
 
     Visemes already resolved (name→weight dicts). No vowel → AH fallback (neutral mouth)."""
-    phones = grapheme_to_phonemes(text)
+    phones = grapheme_to_phonemes(text, lang)
     # index of the 1st vowel
     vi = next((k for k, p in enumerate(phones) if p in _VOWEL_SET), None)
     if vi is None:
@@ -337,7 +381,7 @@ def lipsync_delta_events(lyrics: list[tuple[float, str]], song_len_s: float,
     return list(_delta_frames(frames, n_frames))
 
 
-def lipsync_events_from_spans(spans, song_len_s: float):
+def lipsync_events_from_spans(spans, song_len_s: float, lang: str = "en"):
     """(frame_idx, [(viseme, weight)]) for a LIPSYNC# MIDI track, driven by the REAL
     syllable spans (audio-guided start/end) instead of a geometric onset window.
 
@@ -353,7 +397,7 @@ def lipsync_events_from_spans(spans, song_len_s: float):
         dur = end - t
         if dur <= 0:
             continue
-        pts = _syllable_points(t, dur, _syllable_shape(text))
+        pts = _syllable_points(t, dur, _syllable_shape(text, lang))
         if gain != 1.0:
             pts = [(pt_t, {n: max(0, min(255, int(round(w * gain))))
                            for n, w in st.items()})
