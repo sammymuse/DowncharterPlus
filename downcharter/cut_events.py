@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .venue import (Section, section_energy, _camera_energy, find_pause_spans,
-                    measure_ticks_at)
+from .venue import (Section, section_energy, _camera_energy, _energy_tier_at,
+                    find_pause_spans, measure_ticks_at)
 
 
 @dataclass
@@ -42,6 +42,15 @@ PRIO = {
 _MELODIC = ("guitar", "bass", "keys")
 _IMPACT_KINDS = {"intro", "chorus", "drop", "breakdown", "outro"}
 _RANK = {"calm": 0, "mid": 1, "high": 2}
+
+
+def _entry_tier(s: Section) -> str:
+    """Energy AT the section's first instant (entry sub-span), not the section peak —
+    so a chorus/breakdown that opens calm and only builds later is treated as the calm
+    moment it actually is at the downbeat. Drives where dramatic directeds may land."""
+    if s.energy_spans:
+        return _energy_tier_at(s, s.start)
+    return _camera_energy(s)
 
 
 def _onsets_in(onsets: list[int] | None, a: int, b: int) -> list[int]:
@@ -93,7 +102,15 @@ def detect_rises(sections: list[Section], accents: list[int], tpb: int) -> list[
     for s in sections:
         e = _camera_energy(s)
         if e == "high" and _RANK[e] > _RANK[prev]:
-            out.append(CutEvent(_nearest_accent(s.start, accents, tpb), "rise",
+            # Land ON the climb, not the section downbeat: if the section opens calm and
+            # only reaches 'high' later, anchor at that first high sub-span so the
+            # band-wide kick hits the actual energy rise (not a still-calm intro).
+            hi = s.start
+            for a, _b, t in (s.energy_spans or []):
+                if t == "high":
+                    hi = a
+                    break
+            out.append(CutEvent(_nearest_accent(hi, accents, tpb), "rise",
                                 ["D_All_Yeah", "D_All_LT", "D_All_Cam"], PRIO["rise"],
                                 dramatic=True, note=f"rise→high @{s.kind}"))
         prev = e
@@ -111,7 +128,10 @@ def detect_impacts(sections: list[Section], accents: list[int], tpb: int) -> lis
     entries still get their dramatic cut (here or via detect_rises)."""
     out = []
     for s in sections:
-        if s.kind in _IMPACT_KINDS and _RANK[_camera_energy(s)] >= 1:
+        # Gate on the ENTRY energy, not the section peak: a section that OPENS calm (the
+        # high→calm drop into a quiet chorus start) must not get a band-wide pan whose
+        # held frame then outlives the energy and lingers into the calm (user's note).
+        if s.kind in _IMPACT_KINDS and _RANK[_entry_tier(s)] >= 1:
             out.append(CutEvent(_nearest_accent(s.start, accents, tpb), "impact",
                                 ["D_All_Cam", "D_All_LT"], PRIO["impact"],
                                 dramatic=True, note=f"impact entry @{s.kind}"))
