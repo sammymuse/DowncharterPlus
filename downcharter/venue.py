@@ -1638,6 +1638,26 @@ def build_animations(part_onsets: list[int], sections: list[Section],
         i = bisect.bisect_left(onsets, a)
         return onsets[i] if i < len(onsets) and onsets[i] < b else None
 
+    # The 1/8 anticipation pulls a mood change BACKWARD across the boundary so it lands
+    # just before the player digs in. That is right when the energy stays equal or DROPS
+    # (the calmer mood may settle early). But on a RISING transition it dragged the louder
+    # gesture — e.g. [intense] (a kick/jump) — an 1/8 into the PRECEDING calmer region,
+    # making the character kick while a calm section is still onscreen. So the anticipated
+    # tick may only land where the LOCAL energy is still ≥ the mood's tier; otherwise it
+    # would cross into a lower-energy pocket — snap forward to the note. Checking the local
+    # tier at the candidate tick (not a stale prev_level) also covers the case where the
+    # instrument RESTED through the calmer span and prev_level kept an old, higher value.
+    def _anchor(on: int, first: bool, cur_level: int) -> int:
+        if first:
+            return max(s.start, floor)
+        cand = on - eighth
+        if cand < floor:
+            return floor
+        sec = _section_at(sections, cand)
+        if sec is not None and _ENERGY_LEVEL[_energy_tier_at(sec, cand)] < cur_level:
+            return on                       # anticipating would bleed into a calmer region
+        return cand
+
     for i, s in enumerate(sections):
         playing = _count_onsets(onsets, s.start, s.end) > 0
         solo = s.kind == "solo" and _solo_instrument(s.name) == instrument
@@ -1651,13 +1671,20 @@ def build_animations(part_onsets: list[int], sections: list[Section],
                 on = _first_onset_in(a, b)
                 if on is None:
                     continue
-                tick = max(s.start if (i == 0 and j == 0) else on - eighth, floor)
+                cur_level = _ENERGY_LEVEL[tier]
+                tick = _anchor(on, i == 0 and j == 0, cur_level)
                 if _in_idle(tick):              # instrument is resting here → idle owns it
                     continue
-                timeline.append((tick, _mood_for_level(_ENERGY_LEVEL[tier], instrument, i)))
+                timeline.append((tick, _mood_for_level(cur_level, instrument, i)))
         elif playing:
             on = _first_onset_in(s.start, s.end)
-            tick = max(s.start if i == 0 else (on - eighth if on else s.start - eighth), floor)
+            cur_level = _ENERGY_LEVEL[section_energy(s)]
+            if i == 0:
+                tick = max(s.start, floor)
+            elif on:
+                tick = _anchor(on, False, cur_level)
+            else:
+                tick = max(s.start - eighth, floor)
             if not _in_idle(tick):
                 timeline.append((tick, _anim_state(s, playing, instrument, i)))
         else:
@@ -1673,7 +1700,15 @@ def build_animations(part_onsets: list[int], sections: list[Section],
             timeline.append((tick, marker))
         sec = _section_at(sections, b)
         if sec is not None:
-            timeline.append((max(b - eighth, a + eighth + 1),
+            # Resume on the note that ends the rest, 1/8 early — but, like the section
+            # loop, never let that 1/8 drag a louder mood ([intense]) back into a calmer
+            # pocket of the rest (the character would kick while the screen is still calm).
+            res_level = _ENERGY_LEVEL[_energy_tier_at(sec, b)]
+            cand = max(b - eighth, a + eighth + 1)
+            csec = _section_at(sections, cand)
+            if csec is not None and _ENERGY_LEVEL[_energy_tier_at(csec, cand)] < res_level:
+                cand = b
+            timeline.append((cand,
                              _anim_state(sec, True, instrument, sections.index(sec))))
     timeline.sort(key=lambda x: x[0])
     out: list[AbsEvent] = []
