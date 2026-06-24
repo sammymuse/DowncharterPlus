@@ -18,6 +18,7 @@ from .venue import (
     generate_venue, find_bre_spans, build_venue_track, load_genre, genre_to_theme,
     resolve_sections, generate_animations, _part_instrument,
     build_beat_track, extend_beat_track, find_end_tick, phrase_end_ticks,
+    build_crowd, find_pause_spans,
 )
 
 
@@ -687,6 +688,20 @@ def process_midi(
             new_mid.tracks.append(build_venue_track(venue_events))
             stats["venue_events"] = len(venue_events)
             stats["venue_theme"] = theme
+            # Crowd state events ([crowd_*]) belong on the EVENTS track (RB3/YARG read
+            # them there, NOT from VENUE). Tie them to the same energy map and inject.
+            if sections:
+                pause_spans = find_pause_spans(onsets, time_sig_map, tpb)
+                crowd_events = build_crowd(sections, tpb, pause_spans)
+                if crowd_events:
+                    ei = next((i for i, t in enumerate(new_mid.tracks)
+                               if t.name.strip().upper() == "EVENTS"), None)
+                    if ei is not None:
+                        new_mid.tracks[ei] = _inject_meta(new_mid.tracks[ei], crowd_events)
+                    else:
+                        new_mid.tracks.append(
+                            _inject_meta(_named_track("EVENTS"), crowd_events))
+                    stats["crowd_events"] = len(crowd_events)
 
         # Per-PART-track character animations (mood markers).
         # Vocal phrase ends (105/106) → the vocalist only lowers the mic at the end

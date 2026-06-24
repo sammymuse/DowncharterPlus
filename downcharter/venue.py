@@ -1831,7 +1831,7 @@ _CROWD_MOOD = {"calm": "crowd_mellow", "mid": "crowd_normal", "high": "crowd_int
 
 def build_crowd(sections: list[Section], tpb: int,
                 pause_spans: list[tuple[int, int]] | None = None) -> list[AbsEvent]:
-    """Crowd state events on the VENUE track, driven by the section/sub-span energy.
+    """Crowd state events on the EVENTS track, driven by the section/sub-span energy.
 
     Mood: calm→[crowd_mellow], mid→[crowd_normal], high→[crowd_intense]. Intro/outro
     and ≥2-measure pauses → [crowd_realtime] (frozen, no animation). Clap: [crowd_clap]
@@ -1916,7 +1916,9 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     pyro_accents = (sorted(set(accents or []) | set(audio_onsets))
                     if audio_onsets else accents)
     out += build_pyro(sections, drum_onsets or [], tpb, accents=pyro_accents)
-    out += build_crowd(sections, tpb, pause_spans)
+    # NOTE: crowd state events ([crowd_*]) are NOT VENUE-track events — RB3/YARG read
+    # them from the EVENTS track. They are emitted via build_crowd() and injected into
+    # EVENTS by the processor, not appended here.
     out += build_camera(sections, tempo_map, time_sig_map, tpb, bre_spans,
                         pace_scale=th["pace"], accents=accents, onsets=onsets,
                         inst_onsets=inst_onsets)
