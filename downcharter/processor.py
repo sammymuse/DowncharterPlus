@@ -957,9 +957,10 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats) -> None:
 
     1. Talky vocals in PART VOCALS — the path RB/Onyx's `.ini` import actually uses
        (charted tubes → autoLipsync). Works in-game today.
-    2. A LIPSYNC1 viseme track — text-commands `[<viseme> <weight>]`, the exact format
-       Onyx parses (confirmed in `Onyx/MIDI/Track/Lipsync.hs`: track name `LIPSYNC1`,
-       `[viseme N]` linear / `+hold` / `+ease`). Consumed by Onyx's milo workflow and
+    2. A LIPSYNC1 viseme track — text-commands `[<viseme> <weight>[ hold|ease]]`, the
+       exact format Onyx parses (confirmed in `Onyx/MIDI/Track/Lipsync.hs`: track name
+       `LIPSYNC1`, graph token = curve out of the keyframe). Sparse keyframes (held vowels,
+       diphthong glides), not dense 30fps deltas. Consumed by Onyx's milo workflow and
        future-proof for YARG (its `LoadLipsyncFromMilo` has a TODO to parse lipsync
        from MIDI). Timing/weight are audio-guided from the same spans as (1), beating
        both engines' built-in geometric generators."""
@@ -968,36 +969,38 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats) -> None:
     if spans and tempo_map is not None and song_end > 0:
         try:
             from . import lipsync as _lip
-            song_len_s = tick_to_ms(song_end, tempo_map, tpb) / 1000.0
-            events = _lip.lipsync_events_from_spans(spans, song_len_s)
-            if events:
-                tr = _build_lipsync_track(events, tempo_map, tpb)
+            keyframes = _lip.lipsync_keyframes_from_spans(spans)
+            if keyframes:
+                tr = _build_lipsync_track(keyframes, tempo_map, tpb)
                 li = next((i for i, t in enumerate(new_mid.tracks)
                            if t.name.strip().upper() == "LIPSYNC1"), None)
                 if li is not None:
                     new_mid.tracks[li] = tr
                 else:
                     new_mid.tracks.append(tr)
-                stats["lipsync_events"] = len(events)
+                stats["lipsync_events"] = len(keyframes)
         except Exception:
             pass
 
 
-def _build_lipsync_track(events, tempo_map, tpb):
-    """A `LIPSYNC1` MIDI track of `[viseme weight]` text-commands from the delta
-    events (frame_idx, [(viseme, weight)]). Frames are 30 fps → converted to ticks
-    via the tempo map. Opens with `[lang en]` so the renderer picks the right rules."""
+_LIPSYNC_GRAPH_TOKEN = {"linear": "", "hold": " hold", "ease": " ease"}
+
+
+def _build_lipsync_track(keyframes, tempo_map, tpb):
+    """A `LIPSYNC1` MIDI track of `[<viseme> <weight>[ hold|ease]]` text-commands from
+    sparse keyframes (time_s, viseme, weight, graph). Times → ticks via the tempo map.
+    The graph token is the Onyx curve OUT of the keyframe (default linear, omitted).
+    Opens with `[lang en]` so the renderer picks the right rules."""
     from . import audio as _audio
-    from .lipsync import FPS
     abs_evts = [
         AbsEvent(0, mido.MetaMessage("track_name", name="LIPSYNC1", time=0)),
         AbsEvent(0, mido.MetaMessage("text", text="[lang en]", time=0)),
     ]
-    for frame, deltas in events:
-        tick = _audio._ms_to_tick(frame / float(FPS) * 1000.0, tempo_map, tpb)
-        for viseme, weight in deltas:
-            abs_evts.append(AbsEvent(tick, mido.MetaMessage(
-                "text", text=f"[{viseme} {weight}]", time=0)))
+    for time_s, viseme, weight, graph in keyframes:
+        tick = _audio._ms_to_tick(time_s * 1000.0, tempo_map, tpb)
+        tok = _LIPSYNC_GRAPH_TOKEN.get(graph, "")
+        abs_evts.append(AbsEvent(tick, mido.MetaMessage(
+            "text", text=f"[{viseme} {weight}{tok}]", time=0)))
     tr = to_track(abs_evts)
     tr.append(mido.MetaMessage("end_of_track", time=0))
     return tr
