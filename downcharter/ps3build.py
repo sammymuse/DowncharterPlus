@@ -34,10 +34,166 @@ import mido
 
 from . import milo as _milo
 from . import convert as _convert
+from . import mogg as _mogg
 
 
 def _noop_log(msg, tag=None):
     pass
+
+
+# ── song.ini → songs.dta generation (YARG/CH source has no dta) ────────────────
+_GENRE_MAP = {
+    "metal": "metal", "heavy metal": "metal", "metalcore": "metal",
+    "rock": "rock", "hard rock": "rock", "alternative": "alternative",
+    "punk": "punk", "pop": "pop", "indie": "indierock", "indie rock": "indierock",
+    "electronic": "electronic", "hip hop": "hiphop", "rap": "hiphop",
+    "classical": "classical", "jazz": "jazz", "blues": "blues",
+    "country": "country", "emo": "emo", "prog": "prog",
+}
+
+
+def _parse_song_ini(path: str) -> dict:
+    """Parse a CH/YARG song.ini into a flat dict (lowercased keys)."""
+    meta: dict = {}
+    try:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("[") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                meta[k.strip().lower()] = v.strip()
+    except Exception:
+        pass
+    return meta
+
+
+def _sanitize_shortname(meta: dict, fallback: str, mode: str) -> str:
+    raw = (meta.get("artist", "") + meta.get("name", "")) or fallback
+    short = re.sub(r"[^a-z0-9]", "", raw.lower()) or "song"
+    return f"{short[:28]}{mode}"   # mode suffix → 1x and 2x stay distinct installs
+
+
+def _song_id(shortname: str) -> int:
+    """Stable positive 32-bit-ish numeric id from the shortname."""
+    h = 0
+    for c in shortname:
+        h = (h * 131 + ord(c)) & 0x7FFFFFFF
+    return 1000000000 + (h % 900000000)
+
+
+def _tier_to_rank(tier) -> int:
+    table = {0: 1, 1: 130, 2: 200, 3: 270, 4: 350, 5: 450, 6: 600}
+    try:
+        return table.get(int(tier), 270)
+    except (TypeError, ValueError):
+        return 270
+
+
+def _build_dta(meta: dict, shortname: str, layout, mode: str) -> str:
+    """Generate a Rock Band 3 songs.dta from song.ini metadata + the mogg channel
+    layout. `layout` = [(track_name, [ch...])] from mogg.build_mogg_from_stems."""
+    label = "2x Bass Pedal" if mode == "2x" else "1x Bass Pedal"
+    title = (meta.get("name") or shortname).strip()
+    artist = (meta.get("album_artist") or meta.get("artist") or "Unknown").strip()
+    album = (meta.get("album") or "").strip()
+    genre = _GENRE_MAP.get((meta.get("genre") or "").strip().lower(), "rock")
+    try:
+        year = int(re.sub(r"[^0-9]", "", meta.get("year", "")) or 0) or 2020
+    except ValueError:
+        year = 2020
+    song_len = 0
+    try:
+        song_len = int(float(meta.get("song_length") or 0))
+    except (TypeError, ValueError):
+        song_len = 0
+
+    # Channel lists.
+    inst_tracks = {"drum", "bass", "guitar", "keys", "vocals"}
+    total_ch = sum(len(idxs) for _, idxs in layout)
+    cores = []
+    for track, idxs in layout:
+        for _ in idxs:
+            cores.append("1" if track == "guitar" else "-1")
+    # Pans: stereo pairs → -1 / 1; lone channel → 0.
+    pans = []
+    for track, idxs in layout:
+        if len(idxs) == 2:
+            pans += ["-1.0", "1.0"]
+        elif len(idxs) == 1:
+            pans += ["0.0"]
+        else:
+            for i in range(len(idxs)):
+                pans.append("-1.0" if i % 2 == 0 else "1.0")
+
+    track_lines = []
+    for track, idxs in layout:
+        if track in inst_tracks and idxs:
+            chans = " ".join(str(i) for i in idxs)
+            track_lines.append(f"            ({track} ({chans}))")
+    tracks_block = "\n".join(track_lines)
+
+    has_vox = any(t == "vocals" for t, _ in layout)
+    rank_band = _tier_to_rank(meta.get("diff_band", meta.get("diff_guitar")))
+    rank_g = _tier_to_rank(meta.get("diff_guitar"))
+    rank_b = _tier_to_rank(meta.get("diff_bass", meta.get("diff_guitar")))
+    rank_d = _tier_to_rank(meta.get("diff_drums"))
+    rank_v = _tier_to_rank(meta.get("diff_vocals", 0)) if has_vox else 0
+
+    sid = _song_id(shortname)
+    pans_s = " ".join(pans)
+    vols_s = " ".join("0.0" for _ in range(total_ch))
+    cores_s = " ".join(cores)
+    preview_a = min(30000, max(0, song_len // 3)) if song_len else 30000
+    preview_b = preview_a + 30000
+
+    dta = f"""({shortname}
+   (name "{title} ({label})")
+   (artist "{artist}")
+   (master TRUE)
+   (song_id {sid})
+   (song
+      (name "songs/{shortname}/{shortname}")
+      (tracks
+         (
+{tracks_block}
+         )
+      )
+      (pans ({pans_s}))
+      (vols ({vols_s}))
+      (cores ({cores_s}))
+      (vocal_parts {1 if has_vox else 0})
+      (drum_solo (seqs (kick.cue snare.cue tom1.cue tom2.cue crash.cue)))
+      (drum_freestyle (seqs (kick.cue snare.cue hat.cue ride.cue crash.cue)))
+   )
+   (bank "sfx/tambourine_bank.milo")
+   (drum_bank "sfx/kit01_bank.milo")
+   (anim_tempo kTempoMedium)
+   (song_scroll_speed 2300)
+   (preview {preview_a} {preview_b})
+   (song_length {song_len})
+   (rank
+      (drum {rank_d})
+      (guitar {rank_g})
+      (bass {rank_b})
+      (vocals {rank_v})
+      (band {rank_band})
+   )
+   (format 10)
+   (version 30)
+   (game_origin ugc_plus)
+   (rating 4)
+   (genre {genre})
+   (vocal_gender male)
+   (year_released {year})
+   (album_art TRUE)
+   (album_name "{album}")
+   (album_track_number 1)
+   (encoding utf8)
+   ;2xBass={'1' if mode == '2x' else '0'}
+)
+"""
+    return dta
 
 
 # ── source-folder discovery ──────────────────────────────────────────────────
@@ -107,8 +263,11 @@ def _patch_dta(dta_text: str, shortname: str, mode: str) -> str:
 
 
 def _pkg_folder_name(shortname: str, dta_text: str, mode: str) -> str:
-    """A unique PS3 package folder name, e.g. O123_ELEGY_2X."""
+    """A unique PS3 package folder name, e.g. ELEGY_2X. If the shortname already
+    carries the pedal mode (generated names do), don't append it twice."""
     base = shortname.upper()
+    if base.endswith(mode.upper()):
+        return base
     return f"{base}_{mode.upper()}"
 
 
@@ -139,19 +298,24 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
     mid_path = _find_source_mid(src_folder)
     if not mid_path:
         raise FileNotFoundError("no plain .mid found in source folder")
-    mogg_path = _find_source_mogg(src_folder)
-    if not mogg_path:
-        raise FileNotFoundError("no .mogg found in source folder")
-    dta_path = _find_source_dta(src_folder)
+    mogg_path = _find_source_mogg(src_folder)          # may be None (YARG/CH stems)
+    dta_path = _find_source_dta(src_folder)            # may be None (YARG/CH)
     milo_path = _find_source_milo(src_folder, mid_path)
     art_path = _find_source_art(src_folder)
+    ini_path = _find_one(src_folder, lambda p: os.path.basename(p).lower() == "song.ini")
+    meta = _parse_song_ini(ini_path) if ini_path else {}
 
+    # Existing dta (Onyx-style source) gives us the shortname; otherwise we mint
+    # one from song.ini (artist+title+mode) so 1x and 2x install side by side.
     dta_text = ""
     if dta_path:
         with open(dta_path, "r", encoding="latin1") as f:
             dta_text = f.read()
-    shortname = (_dta_shortname(dta_text) if dta_text else None) \
-        or re.sub(r"[^a-z0-9_]", "_", os.path.splitext(os.path.basename(mid_path))[0].lower())
+    if dta_text and _dta_shortname(dta_text):
+        shortname = _dta_shortname(dta_text)
+    else:
+        fallback = os.path.splitext(os.path.basename(mid_path))[0]
+        shortname = _sanitize_shortname(meta, fallback, mode)
 
     pkg = _pkg_folder_name(shortname, dta_text, mode)
     out_root = os.path.join(os.path.dirname(os.path.abspath(src_folder)), pkg)
@@ -170,9 +334,15 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
     else:
         log(f"    ◇ mid: {ks['removed']} double-kick(s) removed (1x playable)\n", "info")
 
-    # 2) MOGG: copy verbatim (per the keep-as-is decision)
-    shutil.copy2(mogg_path, os.path.join(song_dir, f"{shortname}.mogg"))
-    log(f"    ◇ mogg: copied ({os.path.basename(mogg_path)})\n", "info")
+    # 2) MOGG: reuse the source mogg verbatim if present, else build one from the
+    #    separate YARG/CH stems. The built layout drives the dta channel lists.
+    mogg_layout = None
+    out_mogg = os.path.join(song_dir, f"{shortname}.mogg")
+    if mogg_path:
+        shutil.copy2(mogg_path, out_mogg)
+        log(f"    ◇ mogg: copied ({os.path.basename(mogg_path)})\n", "info")
+    else:
+        mogg_layout = _mogg.build_mogg_from_stems(src_folder, out_mogg, log)
 
     # 3) MILO: our native lipsync milo
     if milo_path:
@@ -188,15 +358,20 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
         shutil.copy2(art_path, os.path.join(gen_dir, f"{shortname}_keep.png_ps3"))
         log(f"    ◇ art: copied\n", "info")
 
-    # 5) songs.dta (patched for the pedal mode)
+    # 5) songs.dta: patch an existing one, else generate from song.ini + layout.
+    out_dta_path = os.path.join(out_root, "songs", "songs.dta")
     if dta_text:
         out_dta = _patch_dta(dta_text, shortname, mode)
-        with open(os.path.join(out_root, "songs", "songs.dta"), "w",
-                  encoding="latin1") as f:
+        with open(out_dta_path, "w", encoding="latin1") as f:
             f.write(out_dta)
-        log(f"    ◇ dta: written ({mode})\n", "info")
+        log(f"    ◇ dta: patched ({mode})\n", "info")
+    elif mogg_layout is not None:
+        out_dta = _build_dta(meta, shortname, mogg_layout, mode)
+        with open(out_dta_path, "w", encoding="latin1") as f:
+            f.write(out_dta)
+        log(f"    ◇ dta: generated from song.ini ({mode})\n", "info")
     else:
-        log(f"    ⚠ dta: no songs.dta in source — skipped\n", "warn")
+        log(f"    ⚠ dta: no songs.dta and no built mogg layout — skipped\n", "warn")
 
     log(f"  ✓ {pkg}\n", "ok")
     return out_root
