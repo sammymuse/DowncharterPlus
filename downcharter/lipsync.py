@@ -444,6 +444,20 @@ def lipsync_events_from_spans(spans, song_len_s: float, lang: str = "en"):
 
     NOTE: this is the dense 30fps-delta path, kept as reference/fallback. The production
     path is `lipsync_keyframes_from_spans` (sparse keyframes with hold/ease graphs)."""
+    frames, n_frames = frames_from_spans(spans, song_len_s, lang)
+    return list(_delta_frames(frames, n_frames))
+
+
+def frames_from_spans(spans, song_len_s: float,
+                      lang: str = "en") -> tuple[dict[int, dict], int]:
+    """Dense per-frame viseme states (name→weight, 30 fps) from audio-guided spans.
+
+    The shared core of the dense path: resolves one mouth shape per span (grouping
+    same-word syllables for CMUdict alignment), samples each syllable's control points
+    at 30 fps and merges them (max per viseme), scaling by the per-syllable loudness
+    `gain`. Returns `(frames, n_frames)`. `lipsync_events_from_spans` delta-encodes it
+    for the MIDI track; `milo.build_song_lipsync` serializes it into the CharLipSync
+    that goes inside the .milo (guaranteeing the same lipsync reaches the game)."""
     spans = list(spans)
     shapes = _resolve_shapes(spans, lang)
     frames: dict[int, dict] = {}
@@ -460,7 +474,7 @@ def lipsync_events_from_spans(spans, song_len_s: float, lang: str = "en"):
                    for pt_t, st in pts]
         _sample_into(frames, pts)
     n_frames = max(1, int(math.ceil(song_len_s * FPS)) + 1)
-    return list(_delta_frames(frames, n_frames))
+    return frames, n_frames
 
 
 def _resolve_shapes(spans, lang: str = "en") -> list:
