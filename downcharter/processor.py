@@ -981,6 +981,18 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats) -> None:
                 stats["lipsync_events"] = len(keyframes)
         except Exception:
             pass
+        # Build the .milo ourselves (downcharter/milo.py) from the SAME spans, so
+        # the lipsync we generate is guaranteed to reach the game (Onyx re-packed
+        # stale milos). Written as a sidecar next to the .mid; drop it into a PS3
+        # pack's gen/ folder to A/B test in-game. Additive, never fatal.
+        try:
+            from . import ps3build as _ps3
+            song_len_s = tick_to_ms(song_end, tempo_map, tpb) / 1000.0
+            written = _ps3.write_milo_sidecar(dst_path, spans, song_len_s)
+            if written:
+                stats["milo_written"] = len(written)
+        except Exception:
+            pass
 
 
 _LIPSYNC_GRAPH_TOKEN = {"linear": "", "hold": " hold", "ease": " ease"}
@@ -1179,6 +1191,9 @@ def process_folder(
                 tr_txt = f" · {tr} trimmed by audio" if tr else ""
                 log_fn(f"    ◇ talkies: {s['vocals_charted']} charted vocals"
                        f"{ph_txt}{tr_txt}\n", "info")
+            if s.get("milo_written"):
+                log_fn(f"    ◇ milo: built our lipsync (.milo_ps3/.milo_xbox) "
+                       f"— swap into a pack's gen/ to test in-game\n", "info")
             for sk in s.get("diffs_skipped", []):
                 log_fn(f"    ↷ skipped {sk} (already charted)\n", "info")
             # Groove-check warnings are recorded only in the session log file,
