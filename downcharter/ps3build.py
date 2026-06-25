@@ -41,18 +41,51 @@ def _noop_log(msg, tag=None):
 
 
 # ── song.ini → songs.dta generation (YARG/CH source has no dta) ────────────────
+# Clone Hero / YARG genre strings → the RB3 genre SYMBOL the game knows. RB3 only
+# renders a fixed set of genre symbols; anything unknown falls back to "rock".
 _GENRE_MAP = {
     "metal": "metal", "heavy metal": "metal", "metalcore": "metal",
-    "rock": "rock", "hard rock": "rock", "alternative": "alternative",
-    "punk": "punk", "pop": "pop", "indie": "indierock", "indie rock": "indierock",
-    "electronic": "electronic", "hip hop": "hiphop", "rap": "hiphop",
-    "classical": "classical", "jazz": "jazz", "blues": "blues",
-    "country": "country", "emo": "emo", "prog": "prog",
+    "death metal": "metal", "black metal": "metal", "thrash": "metal",
+    "thrash metal": "metal", "nu metal": "metal", "nu-metal": "metal",
+    "rock": "rock", "hard rock": "rock", "classic rock": "rock",
+    "arena rock": "rock", "garage rock": "rock", "southern rock": "rock",
+    "alternative": "alternative", "alt": "alternative", "alt rock": "alternative",
+    "grunge": "grunge", "punk": "punk", "punk rock": "punk", "pop punk": "punk",
+    "hardcore": "punk", "post-hardcore": "punk",
+    "pop": "poprock", "pop rock": "poprock", "pop/rock": "poprock",
+    "indie": "indierock", "indie rock": "indierock", "indierock": "indierock",
+    "electronic": "popdanceelectronic", "electronica": "popdanceelectronic",
+    "edm": "popdanceelectronic", "dance": "popdanceelectronic",
+    "techno": "popdanceelectronic", "house": "popdanceelectronic",
+    "synthpop": "popdanceelectronic", "synth-pop": "popdanceelectronic",
+    "hip hop": "urban", "hip-hop": "urban", "hiphop": "urban", "rap": "urban",
+    "r&b": "rbsoulfunk", "rnb": "rbsoulfunk", "soul": "rbsoulfunk",
+    "funk": "rbsoulfunk", "classical": "classical", "orchestral": "classical",
+    "jazz": "jazz", "blues": "blues", "country": "country", "folk": "country",
+    "bluegrass": "country", "emo": "emo", "screamo": "emo",
+    "prog": "prog", "progressive": "prog", "progressive rock": "prog",
+    "progressive metal": "prog", "fusion": "fusion", "reggae": "reggaeska",
+    "ska": "reggaeska", "latin": "latin", "world": "world",
+    "new wave": "newwave", "novelty": "novelty", "soundtrack": "other",
+    "video game": "other", "vgm": "other", "other": "other",
+}
+
+# RB3 valid genre symbols (so an already-RB-style genre in the ini passes through).
+_RB_GENRES = {
+    "alternative", "blues", "classical", "classicrock", "country", "emo",
+    "fusion", "glam", "grunge", "indierock", "inspirational", "jazz", "jrock",
+    "latin", "metal", "new", "newwave", "novelty", "numetal", "other", "popdanceelectronic",
+    "poprock", "prog", "punk", "rbsoulfunk", "reggaeska", "rock", "southernrock",
+    "world", "urban",
 }
 
 
 def _parse_song_ini(path: str) -> dict:
-    """Parse a CH/YARG song.ini into a flat dict (lowercased keys)."""
+    """Parse a CH/YARG song.ini into a flat dict (lowercased keys).
+
+    song.ini is a simple key=value INI: a leading ``[Song]`` (or ``[song]``)
+    section header, then ``key = value`` lines. We keep it flat (one logical
+    section) and lowercase every key, since the spec uses a single section."""
     meta: dict = {}
     try:
         with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
@@ -65,6 +98,33 @@ def _parse_song_ini(path: str) -> dict:
     except Exception:
         pass
     return meta
+
+
+def _dta_str(s: str) -> str:
+    """Make `s` safe to embed inside a DTA double-quoted string literal.
+
+    The Harmonix DTA format (per maxton/DtxCS) has NO escape sequences: a raw
+    double quote terminates the string and a raw newline is taken literally. So
+    any title/artist/album text must have its quotes neutralised (→ typographic
+    quote) and newlines/control chars flattened to spaces, or the whole songs.dta
+    fails to parse."""
+    s = (s or "").replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    s = s.replace('"', "”")          # " → ” (DTA can't escape a literal quote)
+    s = "".join(ch for ch in s if ch >= " ")  # drop remaining control chars
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _ini_int(meta: dict, *keys) -> int | None:
+    """First parseable integer among `keys` in `meta` (handles '2,003'-style)."""
+    for k in keys:
+        v = meta.get(k)
+        if v is None or str(v).strip() == "":
+            continue
+        try:
+            return int(float(re.sub(r"[^0-9.\-]", "", str(v)) or "x"))
+        except ValueError:
+            continue
+    return None
 
 
 def _sanitize_shortname(meta: dict, fallback: str, mode: str) -> str:
@@ -192,25 +252,27 @@ def _charted_instruments(mid) -> set:
 
 
 def _build_dta(meta: dict, shortname: str, layout, mode: str,
-               charted: set | None = None) -> str:
+               charted: set | None = None, has_art: bool = False) -> str:
     """Generate a Rock Band 3 songs.dta from song.ini metadata + the mogg channel
     layout. `layout` = [(track_name, [ch...])] from mogg.build_mogg_from_stems.
     `charted` limits which instruments are exposed as playable (ranked) parts;
     audio stems for un-charted instruments stay as backing channels."""
     label = "2x Bass Pedal" if mode == "2x" else "1x Bass Pedal"
-    title = (meta.get("name") or shortname).strip()
-    artist = (meta.get("album_artist") or meta.get("artist") or "Unknown").strip()
-    album = (meta.get("album") or "").strip()
-    genre = _GENRE_MAP.get((meta.get("genre") or "").strip().lower(), "rock")
-    try:
-        year = int(re.sub(r"[^0-9]", "", meta.get("year", "")) or 0) or 2020
-    except ValueError:
-        year = 2020
-    song_len = 0
-    try:
-        song_len = int(float(meta.get("song_length") or 0))
-    except (TypeError, ValueError):
-        song_len = 0
+    title = _dta_str(meta.get("name") or shortname)
+    artist = _dta_str(meta.get("album_artist") or meta.get("artist") or "Unknown")
+    album = _dta_str(meta.get("album") or "")
+    charter = _dta_str(meta.get("charter") or meta.get("frets") or "")
+    # genre: map the CH/YARG string → an RB3 genre symbol; if it's already a valid
+    # RB symbol, keep it; otherwise fall back to rock.
+    g_raw = (meta.get("genre") or "").strip().lower()
+    g_key = re.sub(r"[^a-z0-9]", "", g_raw)
+    genre = _GENRE_MAP.get(g_raw) or (g_key if g_key in _RB_GENRES else "rock")
+    year = _ini_int(meta, "year") or 2020
+    song_len = _ini_int(meta, "song_length") or 0
+    # vocal_gender: female if the ini says so, else male (RB3 default).
+    vgender = "female" if (meta.get("vocal_gender") or "").strip().lower() \
+        .startswith("f") else "male"
+    album_track = _ini_int(meta, "album_track", "track") or 1
 
     # Only instruments that are actually charted are exposed as playable tracks.
     # If `charted` is None (caller didn't detect), fall back to "all instruments
@@ -240,22 +302,47 @@ def _build_dta(meta: dict, shortname: str, layout, mode: str,
     tracks_block = "\n".join(track_lines)
 
     # A rank of 0 = instrument not playable. Only rank the charted instruments.
+    # Each diff_* in the ini is an independent 0-6 intensity — never borrow one
+    # instrument's tier for another.
     has_vox = "vocals" in inst_tracks
     rank_g = _tier_to_rank(meta.get("diff_guitar")) if "guitar" in inst_tracks else 0
-    rank_b = _tier_to_rank(meta.get("diff_bass", meta.get("diff_guitar"))) if "bass" in inst_tracks else 0
+    rank_b = _tier_to_rank(meta.get("diff_bass")) if "bass" in inst_tracks else 0
     rank_d = _tier_to_rank(meta.get("diff_drums")) if "drum" in inst_tracks else 0
-    rank_v = _tier_to_rank(meta.get("diff_vocals", 0)) if has_vox else 0
+    rank_k = _tier_to_rank(meta.get("diff_keys")) if "keys" in inst_tracks else 0
+    rank_v = _tier_to_rank(meta.get("diff_vocals")) if has_vox else 0
     # Band rank = average of the charted instrument ranks (RB uses this for sort).
-    _ranks = [r for r in (rank_g, rank_b, rank_d, rank_v) if r > 0]
+    _ranks = [r for r in (rank_g, rank_b, rank_d, rank_k, rank_v) if r > 0]
     rank_band = _tier_to_rank(meta.get("diff_band")) if meta.get("diff_band") \
         else (sum(_ranks) // len(_ranks) if _ranks else 270)
+    has_keys = rank_k > 0
 
     sid = _song_id(shortname)
     pans_s = " ".join(pans)
     vols_s = " ".join("0.0" for _ in range(total_ch))
     cores_s = " ".join(cores)
-    preview_a = min(30000, max(0, song_len // 3)) if song_len else 30000
-    preview_b = preview_a + 30000
+    # preview: honour the ini's preview_start_time/preview_end_time (ms) when set;
+    # otherwise start a 30 s clip a third of the way in.
+    preview_a = _ini_int(meta, "preview_start_time")
+    if preview_a is None or preview_a < 0:
+        preview_a = min(30000, max(0, song_len // 3)) if song_len else 30000
+    preview_b = _ini_int(meta, "preview_end_time")
+    if preview_b is None or preview_b <= preview_a:
+        preview_b = preview_a + 30000
+
+    # rank block: keys line only when keys are actually charted.
+    rank_lines = [f"      (drum {rank_d})", f"      (guitar {rank_g})",
+                  f"      (bass {rank_b})", f"      (vocals {rank_v})"]
+    if has_keys:
+        rank_lines.append(f"      (keys {rank_k})")
+        rank_lines.append(f"      (real_keys {rank_k})")
+    rank_lines.append(f"      (band {rank_band})")
+    rank_block = "\n".join(rank_lines)
+    # ESRB-style content rating: 4 = "no rating supplied" (CH/YARG carries none).
+    rating = _ini_int(meta, "rating")
+    if rating is None or not (1 <= rating <= 4):
+        rating = 4
+    # optional author/charter credit (RB3DX surfaces it; harmless on stock RB3).
+    author_line = f'\n   (author "{charter}")' if charter else ""
 
     dta = f"""({shortname}
    (name "{title} ({label})")
@@ -283,22 +370,18 @@ def _build_dta(meta: dict, shortname: str, layout, mode: str,
    (preview {preview_a} {preview_b})
    (song_length {song_len})
    (rank
-      (drum {rank_d})
-      (guitar {rank_g})
-      (bass {rank_b})
-      (vocals {rank_v})
-      (band {rank_band})
+{rank_block}
    )
    (format 10)
    (version 30)
    (game_origin ugc_plus)
-   (rating 4)
+   (rating {rating})
    (genre {genre})
-   (vocal_gender male)
+   (vocal_gender {vgender})
    (year_released {year})
-   (album_art TRUE)
+   (album_art {'TRUE' if has_art else 'FALSE'})
    (album_name "{album}")
-   (album_track_number 1)
+   (album_track_number {album_track}){author_line}
    (encoding utf8)
    ;2xBass={'1' if mode == '2x' else '0'}
 )
@@ -509,8 +592,11 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
             f.write(out_dta)
         log(f"    ◇ dta: patched ({mode})\n", "info")
     elif mogg_layout is not None:
-        out_dta = _build_dta(meta, shortname, mogg_layout, mode, charted)
-        with open(out_dta_path, "w", encoding="latin1") as f:
+        out_dta = _build_dta(meta, shortname, mogg_layout, mode, charted,
+                             has_art=bool(art_path))
+        # The generated dta declares (encoding utf8); write it as UTF-8 so accented
+        # / non-latin1 titles (and the typographic quote _dta_str emits) survive.
+        with open(out_dta_path, "w", encoding="utf-8") as f:
             f.write(out_dta)
         log(f"    ◇ dta: generated from song.ini ({mode})\n", "info")
     else:
