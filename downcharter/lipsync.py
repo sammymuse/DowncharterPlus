@@ -440,23 +440,12 @@ def lipsync_events_from_spans(spans, song_len_s: float, lang: str = "en"):
 
     Consecutive spans of the SAME word (trailing '-'/'=') are grouped so the whole word
     is looked up in CMUdict and its phonemes aligned per written syllable
-    (`align_word_phonemes`); on a miss each fragment falls back to per-fragment G2P."""
-    spans = list(spans)
-    n = len(spans)
-    # Pre-resolve each span's mouth shape, grouping syllables into words for the dict.
-    shapes: list = [None] * n
-    i = 0
-    while i < n:
-        j = i
-        while j < n - 1 and _word_continues(spans[j][2]):
-            j += 1
-        group = spans[i:j + 1]                      # the fragments of one word
-        aligned = align_word_phonemes([sp[2] for sp in group], lang)
-        for k in range(len(group)):
-            shapes[i + k] = (_shape_from_phones(aligned[k]) if aligned is not None
-                             else _syllable_shape(group[k][2], lang))
-        i = j + 1
+    (`align_word_phonemes`); on a miss each fragment falls back to per-fragment G2P.
 
+    NOTE: this is the dense 30fps-delta path, kept as reference/fallback. The production
+    path is `lipsync_keyframes_from_spans` (sparse keyframes with hold/ease graphs)."""
+    spans = list(spans)
+    shapes = _resolve_shapes(spans, lang)
     frames: dict[int, dict] = {}
     for sp, shape in zip(spans, shapes):
         t, end = sp[0], sp[1]
@@ -472,6 +461,126 @@ def lipsync_events_from_spans(spans, song_len_s: float, lang: str = "en"):
         _sample_into(frames, pts)
     n_frames = max(1, int(math.ceil(song_len_s * FPS)) + 1)
     return list(_delta_frames(frames, n_frames))
+
+
+def _resolve_shapes(spans, lang: str = "en") -> list:
+    """One mouth shape per span, grouping consecutive same-word syllables (trailing
+    '-'/'=') so the whole word is looked up in CMUdict and aligned per syllable."""
+    n = len(spans)
+    shapes: list = [None] * n
+    i = 0
+    while i < n:
+        j = i
+        while j < n - 1 and _word_continues(spans[j][2]):
+            j += 1
+        group = spans[i:j + 1]
+        aligned = align_word_phonemes([sp[2] for sp in group], lang)
+        for k in range(len(group)):
+            shapes[i + k] = (_shape_from_phones(aligned[k]) if aligned is not None
+                             else _syllable_shape(group[k][2], lang))
+        i = j + 1
+    return shapes
+
+
+# ─────────────────── sparse keyframes with hold/ease graphs ───────────────────
+# Onyx graph semantics (Lipsync.hs): the token is the curve OUT of this keyframe to
+# the viseme's NEXT event — `hold` keeps the weight flat, `linear` ramps, `ease`
+# ramps exponentially (diphthong glide). Default (no token) = linear.
+
+def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, str]]:
+    """Like `_syllable_points` but each point carries the graph of the segment that
+    STARTS at it: a held vowel plateau (`hold`) and the diphthong glide (`ease`)."""
+    initial, (vmain, vend), final = shape
+    n_i, n_f = len(initial), len(final)
+    attack = min(0.04, dur * 0.25)
+    release = min(0.05, dur * 0.25)
+    inner = max(1e-3, dur - attack - release)
+    u = inner / (n_i + 3 + n_f)        # the vowel is worth 3 units
+    pts: list[tuple[float, dict, str]] = [(t, {}, "linear")]   # ramp up from closed
+    cur = t + attack
+    for c in initial:
+        pts.append((cur, c, "linear"))
+        cur += u
+    if vend is not None:               # diphthong: glide main → final (ease)
+        pts.append((cur, vmain, "ease"))
+        cur += 1.5 * u
+        pts.append((cur, vend, "linear"))
+        cur += 1.5 * u
+    else:                              # monophthong: reach, HOLD the plateau, release
+        pts.append((cur, vmain, "hold"))
+        cur += 3 * u
+        pts.append((cur, vmain, "linear"))
+    for c in final:
+        pts.append((cur, c, "linear"))
+        cur += u
+    pts.append((t + dur, {}, "linear"))   # close
+    return pts
+
+
+def _keyframes_from_points(pts, gain: float):
+    """Per-viseme keyframes (time, viseme, weight, graph) from graphed control points.
+
+    A viseme's keyframe takes the point's graph only when it's active there (weight>0);
+    a viseme sitting at 0 always uses linear (so it ramps in/out, never 'holds' 0).
+    Redundant collinear keyframes are dropped (linear interpolation reconstructs them)
+    and leading/trailing zero runs trimmed to one bracketing zero (the ramp endpoints)."""
+    names: set[str] = set()
+    for _t, st, _g in pts:
+        names |= set(st)
+    out: list[tuple[float, str, int, str]] = []
+    for nm in names:
+        ser: list[list] = []
+        for time, st, pg in pts:
+            w = st.get(nm, 0)
+            if w and gain != 1.0:
+                w = max(0, min(255, int(round(w * gain))))
+            ser.append([time, int(w), (pg if w > 0 else "linear")])
+        ser = _simplify_series(ser)
+        for time, w, g in ser:
+            out.append((time, nm, w, g))
+    return out
+
+
+def _simplify_series(ser: list[list]) -> list[list]:
+    """Drop collinear linear keyframes and trim zero runs to one bracketing zero."""
+    if len(ser) > 2:
+        keep = [ser[0]]
+        for i in range(1, len(ser) - 1):
+            t0, w0, g0 = keep[-1]
+            t1, w1, g1 = ser[i]
+            t2, w2, _g2 = ser[i + 1]
+            if g0 == "linear" and g1 == "linear" and t2 > t0:
+                pred = w0 + (w2 - w0) * ((t1 - t0) / (t2 - t0))
+                if abs(pred - w1) <= 0.5:      # collinear → linear interp rebuilds it
+                    continue
+            keep.append(ser[i])
+        keep.append(ser[-1])
+        ser = keep
+    nz = [k for k, (_t, w, _g) in enumerate(ser) if w > 0]
+    if not nz:
+        return []
+    return ser[max(0, nz[0] - 1):nz[-1] + 2]   # keep one zero on each side
+
+
+def lipsync_keyframes_from_spans(spans, lang: str = "en"):
+    """(time_s, viseme, weight, graph) sparse keyframes for a LIPSYNC# MIDI track.
+
+    Production path. Same audio-guided spans as `lipsync_events_from_spans`, but emits
+    sparse keyframes with Onyx graph tokens (held vowels = `hold`, diphthong glides =
+    `ease`, transitions = linear) instead of baking the curve into dense 30fps deltas.
+    Far fewer events and closer to how Onyx itself authors the milo. Syllable windows
+    are disjoint (audio gap between gems) so each closes the mouth before the next."""
+    spans = list(spans)
+    shapes = _resolve_shapes(spans, lang)
+    out: list[tuple[float, str, int, str]] = []
+    for sp, shape in zip(spans, shapes):
+        t, end = sp[0], sp[1]
+        gain = sp[3] if len(sp) > 3 else 1.0
+        if end - t <= 0:
+            continue
+        out.extend(_keyframes_from_points(_syllable_points_g(t, end - t, shape), gain))
+    out.sort(key=lambda e: (e[0], e[1]))
+    return out
 
 
 def _serialize(frames: dict[int, dict], n_frames: int) -> bytes:
