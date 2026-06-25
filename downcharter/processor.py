@@ -785,6 +785,17 @@ def process_midi(
                         new_mid.tracks[bi] = ext
                         stats["beat_extended"] = True
 
+    # Drummer limb animations (PART DRUMS notes 24-51): RB3 needs them authored or
+    # the drummer stays idle. Synthesise them HERE, into the notes.mid track, from the
+    # Expert gems — NOT at conversion time. No-op if the drums track is already animated.
+    try:
+        from . import convert as _convert
+        new_mid, drum_anim_stats = _convert.generate_drum_animations(new_mid)
+        if drum_anim_stats.get("added"):
+            stats["drum_anim_events"] = drum_anim_stats["added"]
+    except Exception:
+        pass
+
     # Generate talkies: for songs with lyrics, chart PART VOCALS as talky/unpitched
     # vocals (extended to the next syllable + gap). Onyx generates the lipsync itself
     # from the length of these tubes in the .ini→RB3/PS3 build.
