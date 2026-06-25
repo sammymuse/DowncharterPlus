@@ -30,6 +30,7 @@ from . import milo as _milo
 from . import convert as _convert
 from . import mogg as _mogg
 from . import edat as _edat
+from . import art as _art
 from .midi_utils import build_tempo_map, tick_to_ms, to_abs
 
 # PART VOCALS talky pitch authored by processor._chart_vocals_from_lyrics.
@@ -579,10 +580,29 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
     except Exception as e:
         log(f"    ⚠ milo: lipsync build failed ({e}) — skipped\n", "warn")
 
-    # 4) Album art (optional)
+    # 4) Album art. Prefer a pre-converted .png_ps3 from the source; otherwise
+    #    generate one natively from the cover (album.png/cover.jpg) — a 256×256
+    #    DXT1 HMX texture — so YARG/CH sources no longer depend on Onyx's art.
+    art_out = os.path.join(gen_dir, f"{shortname}_keep.png_ps3")
+    has_art = False
     if art_path:
-        shutil.copy2(art_path, os.path.join(gen_dir, f"{shortname}_keep.png_ps3"))
-        log(f"    ◇ art: copied\n", "info")
+        shutil.copy2(art_path, art_out)
+        has_art = True
+        log(f"    ◇ art: copied (.png_ps3)\n", "info")
+    else:
+        cover = _art.find_cover(src_folder)
+        if cover and _art.available():
+            try:
+                with open(art_out, "wb") as f:
+                    f.write(_art.build_png_ps3(cover))
+                has_art = True
+                log(f"    ◇ art: generated from {os.path.basename(cover)}\n", "info")
+            except Exception as e:
+                log(f"    ⚠ art: cover convert failed ({e}) — skipped\n", "warn")
+        elif cover and not _art.available():
+            log(f"    ⚠ art: cover found but Pillow/numpy missing — skipped\n", "warn")
+        else:
+            log(f"    ⚠ art: no cover image found — skipped\n", "warn")
 
     # 5) songs.dta: patch an existing one, else generate from song.ini + layout.
     out_dta_path = os.path.join(out_root, "songs", "songs.dta")
@@ -593,7 +613,7 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
         log(f"    ◇ dta: patched ({mode})\n", "info")
     elif mogg_layout is not None:
         out_dta = _build_dta(meta, shortname, mogg_layout, mode, charted,
-                             has_art=bool(art_path))
+                             has_art=has_art)
         # The generated dta declares (encoding utf8); write it as UTF-8 so accented
         # / non-latin1 titles (and the typographic quote _dta_str emits) survive.
         with open(out_dta_path, "w", encoding="utf-8") as f:
