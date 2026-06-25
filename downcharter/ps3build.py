@@ -372,6 +372,10 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
         log(f"    ◇ mid: {os_stats['converted']} open note(s) remapped to green\n", "info")
     # b) bass-pedal variant on the drums kick lane
     out_mid, ks = _convert.apply_pedal_variant(src_mid, mode)
+    # c) synthesise drummer limb animations (RB3 needs them; YARG auto-animates)
+    out_mid, anim_stats = _convert.generate_drum_animations(out_mid)
+    if anim_stats["added"]:
+        log(f"    ◇ mid: {anim_stats['added']} drum animation note(s) added\n", "info")
     charted = _charted_instruments(out_mid)
     # song.ini rarely carries song_length; derive it from the chart itself.
     if not meta.get("song_length"):

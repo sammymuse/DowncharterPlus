@@ -69,6 +69,109 @@ def convert_open_notes(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
     return out, {"converted": converted}
 
 
+# ── drum limb animations ───────────────────────────────────────────────────────
+# RB3 animates the drummer from dedicated animation notes (24-51 on PART DRUMS).
+# YARG auto-animates from the chart, but RB3 needs them authored, so a YARG chart
+# with no animation notes leaves the drummer idle. We synthesise them from the
+# Expert gems using the classic rock sticking: right hand leads the cymbals/ride,
+# left hand plays the snare; pro-tom markers (110/111/112) turn the
+# yellow/blue/green lanes into toms.
+_ANIM_KICK      = 24
+_ANIM_SNARE_LH  = 26   # hard
+_ANIM_HIHAT_RH  = 31
+_ANIM_RIDE_RH   = 42
+_ANIM_CRASH_RH  = 36   # crash 1, right hand, hard
+_ANIM_TOM1_RH   = 47   # yellow tom
+_ANIM_TOM2_RH   = 49   # blue tom
+_ANIM_FLOOR_RH  = 51   # green/floor tom
+_TOM_MARKERS    = (110, 111, 112)
+
+
+def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
+    """Return a NEW MidiFile with drummer limb-animation notes (24-51) synthesised
+    on PART DRUMS from its Expert gems. No-op for a drums track that is already
+    animated. Returns (new_mid, {"added": n}). Never mutates the input."""
+    out = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
+    tpb = mid.ticks_per_beat
+    anim_len = max(1, tpb // 8)
+    added = 0
+
+    for track in mid.tracks:
+        if not _is_drums_track(track):
+            new_tr = mido.MidiTrack()
+            for m in track:
+                new_tr.append(m.copy())
+            out.tracks.append(new_tr)
+            continue
+
+        # Absolute-tick view of the track.
+        abs_msgs, t = [], 0
+        already_animated = False
+        for m in track:
+            t += m.time
+            abs_msgs.append((t, m))
+            if m.type == "note_on" and 24 <= m.note <= 51:
+                already_animated = True
+
+        if already_animated:
+            new_tr = mido.MidiTrack()
+            for m in track:
+                new_tr.append(m.copy())
+            out.tracks.append(new_tr)
+            continue
+
+        # Pro-tom marker spans → know whether a lane is a tom at a given tick.
+        spans = {n: [] for n in _TOM_MARKERS}
+        opening: dict[int, int] = {}
+        for tick, m in abs_msgs:
+            if m.type in ("note_on", "note_off") and m.note in _TOM_MARKERS:
+                if m.type == "note_on" and m.velocity > 0:
+                    opening[m.note] = tick
+                elif m.note in opening:
+                    spans[m.note].append((opening.pop(m.note), tick))
+
+        def _is_tom(marker: int, tick: int) -> bool:
+            return any(a <= tick < b for a, b in spans[marker])
+
+        # Map each Expert gem to one animation note.
+        anim: list[tuple[int, int]] = []
+        for tick, m in abs_msgs:
+            if not (m.type == "note_on" and m.velocity > 0):
+                continue
+            n = m.note
+            if n in (DRUM_KICK_EXPERT, DRUM_KICK_2X):
+                note = _ANIM_KICK
+            elif n == 97:                                   # red → snare
+                note = _ANIM_SNARE_LH
+            elif n == 98:                                   # yellow → tom1 / hihat
+                note = _ANIM_TOM1_RH if _is_tom(110, tick) else _ANIM_HIHAT_RH
+            elif n == 99:                                   # blue → tom2 / ride
+                note = _ANIM_TOM2_RH if _is_tom(111, tick) else _ANIM_RIDE_RH
+            elif n in (100, 101):                           # green → floor / crash
+                note = _ANIM_FLOOR_RH if _is_tom(112, tick) else _ANIM_CRASH_RH
+            else:
+                continue
+            anim.append((tick, note))
+
+        # Merge gems + animation pairs, drop the old end-of-track, re-time.
+        merged = [(tick, m) for tick, m in abs_msgs if m.type != "end_of_track"]
+        for tick, note in anim:
+            merged.append((tick, mido.Message("note_on", note=note, velocity=96, time=0)))
+            merged.append((tick + anim_len, mido.Message("note_off", note=note, velocity=0, time=0)))
+            added += 1
+        merged.sort(key=lambda tm: tm[0])
+
+        new_tr = mido.MidiTrack()
+        last = 0
+        for tick, m in merged:
+            new_tr.append(m.copy(time=tick - last))
+            last = tick
+        new_tr.append(mido.MetaMessage("end_of_track", time=0))
+        out.tracks.append(new_tr)
+
+    return out, {"added": added}
+
+
 def apply_pedal_variant(mid: mido.MidiFile, mode: str) -> tuple[mido.MidiFile, dict]:
     """Return a NEW MidiFile with PART DRUMS kicks adjusted for `mode`.
 
