@@ -103,6 +103,57 @@ class CheckTile(tk.Canvas):
                          fill=fc, anchor="w")
 
 
+class TabButton(tk.Canvas):
+    """A flat tab header that underlines in RED when its tab is active."""
+    def __init__(self, parent, text, command, app, width=110, height=30):
+        super().__init__(parent, width=width, height=height,
+                         bg=BG, highlightthickness=0, bd=0, cursor="hand2")
+        self._text = text; self._cmd = command; self._app = app
+        self._active = False; self._hover = False
+        self._draw()
+        self.bind("<Enter>",    lambda _: self._sh(True))
+        self.bind("<Leave>",    lambda _: self._sh(False))
+        self.bind("<Button-1>", lambda _: self._cmd())
+
+    def set_active(self, v):
+        self._active = bool(v); self._draw()
+
+    def _sh(self, v):
+        self._hover = v; self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        w, h = int(self["width"]), int(self["height"])
+        fg = FG if (self._active or self._hover) else FG2
+        self.create_text(w//2, h//2 - 2, text=self._text,
+                         font=(MONO, 10, "bold"), fill=fg, anchor="center")
+        if self._active:
+            self.create_rectangle(0, h-2, w, h, fill=RED, outline=RED)
+
+
+class RadioTile(tk.Canvas):
+    """A single-choice tile bound to a StringVar (radio behaviour)."""
+    def __init__(self, parent, text, variable, value, color=RED, width=120, height=30):
+        super().__init__(parent, width=width, height=height,
+                         bg=BG, highlightthickness=0, bd=0, cursor="hand2")
+        self._text = text; self._var = variable; self._value = value
+        self._color = color
+        self._draw()
+        variable.trace_add("write", lambda *_: self._draw())
+        self.bind("<Button-1>", lambda _: self._var.set(self._value))
+
+    def _draw(self):
+        self.delete("all")
+        on = self._var.get() == self._value
+        bc = self._color if on else BORDER2
+        self.create_oval(3, 8, 17, 22, outline=bc, width=2,
+                         fill=bc if on else BG)
+        if on:
+            self.create_oval(7, 12, 13, 18, fill=BG, outline=BG)
+        self.create_text(26, 15, text=self._text, font=(MONO, 9),
+                         fill=FG if on else FG3, anchor="w")
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -121,10 +172,13 @@ class App(tk.Tk):
         self._do_venue       = tk.BooleanVar(value=cfg.get("venue", True))
         self._do_hide_bg     = tk.BooleanVar(value=cfg.get("hide_bg", False))
         self._do_lipsync     = tk.BooleanVar(value=cfg.get("lipsync", False))
+        # ── Convert tab (native PS3 package generation) ──
+        self._conv_folder = cfg.get("conv_folder", "") or ""
+        self._conv_pedal  = tk.StringVar(value=cfg.get("conv_pedal", "2x"))  # 1x | 2x | both
         # Persist whenever a toggle/slider changes
         for var in (self._threshold_ms, self._do_expert_plus, self._do_hard,
                     self._do_medium, self._do_easy, self._do_venue,
-                    self._do_hide_bg, self._do_lipsync):
+                    self._do_hide_bg, self._do_lipsync, self._conv_pedal):
             var.trace_add("write", lambda *_: self._save_settings())
         self._build()
         if self._folder and os.path.isdir(self._folder):
@@ -153,8 +207,24 @@ class App(tk.Tk):
         tk.Frame(self, bg=RED,    height=1).pack(fill="x")
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
-        body = tk.Frame(self, bg=BG, padx=22, pady=16)
-        body.pack(fill="both")
+        # ── Tab bar ──
+        self._tabs: dict[str, tk.Frame] = {}
+        self._tab_btns: dict[str, "TabButton"] = {}
+        tabbar = tk.Frame(self, bg=BG, padx=22, pady=0)
+        tabbar.pack(fill="x", pady=(10, 0))
+        TabButton(tabbar, "PROCESS", lambda: self._show_tab("process"),
+                  self).pack(side="left")
+        self._tab_btns["process"] = tabbar.winfo_children()[-1]
+        TabButton(tabbar, "CONVERT", lambda: self._show_tab("convert"),
+                  self).pack(side="left", padx=(6, 0))
+        self._tab_btns["convert"] = tabbar.winfo_children()[-1]
+
+        # ── Tab container (only one child shown at a time) ──
+        container = tk.Frame(self, bg=BG)
+        container.pack(fill="both")
+
+        body = tk.Frame(container, bg=BG, padx=22, pady=16)
+        self._tabs["process"] = body
 
         # ── Folder ──
         self._lbl("SONGS FOLDER", body).pack(anchor="w")
@@ -229,6 +299,14 @@ class App(tk.Tk):
         self._btn_rev.pack(side="left", padx=(10, 0))
         self._btn_rev.set_enabled(False)
 
+        # ── Convert tab ──
+        conv = tk.Frame(container, bg=BG, padx=22, pady=16)
+        self._tabs["convert"] = conv
+        self._build_convert_tab(conv)
+
+        # Show the default tab
+        self._show_tab("process")
+
         # ── Log ──
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
         lf = tk.Frame(self, bg=BG, padx=22, pady=12)
@@ -268,6 +346,8 @@ class App(tk.Tk):
             "venue":        bool(self._do_venue.get()),
             "hide_bg":      bool(self._do_hide_bg.get()),
             "lipsync":      bool(self._do_lipsync.get()),
+            "conv_folder":  self._conv_folder,
+            "conv_pedal":   self._conv_pedal.get(),
         }
         try:
             path = self._settings_path()
@@ -375,6 +455,94 @@ class App(tk.Tk):
             revert_folder(self._folder, self._log)
             self.after(0, lambda: self._btn_conv.set_enabled(True))
             self.after(0, lambda: self._btn_rev.set_enabled(True))
+            self._log("\n")
+
+        threading.Thread(target=task, daemon=True).start()
+
+    # ── Tabs ───────────────────────────────────────────────────────────────
+    def _show_tab(self, name: str):
+        for n, frame in self._tabs.items():
+            if n == name:
+                frame.pack(fill="both")
+            else:
+                frame.pack_forget()
+        for n, btn in self._tab_btns.items():
+            btn.set_active(n == name)
+
+    # ── Convert tab ────────────────────────────────────────────────────────
+    def _build_convert_tab(self, body):
+        self._lbl("SOURCE SONG FOLDER  (built RB3 song: notes.mid · .mogg · songs.dta)",
+                  body).pack(anchor="w")
+        fr = tk.Frame(body, bg=BG)
+        fr.pack(fill="x", pady=(5, 14))
+        self._conv_folder_lbl = tk.Label(fr, text="(none selected)",
+                                         font=(MONO, 9), fg=FG3, bg=SURF2,
+                                         anchor="w", padx=8, pady=6, width=46)
+        self._conv_folder_lbl.pack(side="left", fill="x", expand=True)
+        StyledButton(fr, "  OPEN…", self._pick_conv_folder, width=90, height=30).pack(
+            side="right", padx=(8, 0))
+
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
+        self._lbl("BASS PEDAL  (RB3 doesn't read YARG-style Expert+)", body).pack(
+            anchor="w", pady=(0, 6))
+        ped_row = tk.Frame(body, bg=BG)
+        ped_row.pack(fill="x", pady=(0, 4))
+        RadioTile(ped_row, "1× pedal", self._conv_pedal, "1x",
+                  width=110, height=28).pack(side="left", padx=(0, 8))
+        RadioTile(ped_row, "2× pedal", self._conv_pedal, "2x",
+                  width=110, height=28).pack(side="left", padx=(0, 8))
+        RadioTile(ped_row, "Both", self._conv_pedal, "both",
+                  width=90, height=28).pack(side="left")
+        tk.Label(body, text="1× removes Expert+ doubles  ·  2× forces doubles to always play",
+                 font=(MONO, 8), fg=FG3, bg=BG, anchor="w").pack(anchor="w", pady=(2, 10))
+
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 12))
+        tk.Label(body, text="Output: native RPCS3 PS3 folder  (our milo — no Onyx)",
+                 font=(MONO, 8), fg=FG3, bg=BG, anchor="w").pack(anchor="w", pady=(0, 8))
+        btn_row = tk.Frame(body, bg=BG)
+        btn_row.pack(fill="x", pady=(0, 14))
+        self._btn_native = StyledButton(btn_row, "⬢  BUILD PS3 FOLDER",
+                                        self._run_native_convert, accent=True,
+                                        width=210, height=40)
+        self._btn_native.pack(side="left")
+        self._btn_native.set_enabled(bool(self._conv_folder and
+                                          os.path.isdir(self._conv_folder)))
+        if self._conv_folder and os.path.isdir(self._conv_folder):
+            short = self._conv_folder if len(self._conv_folder) <= 52 \
+                else "…" + self._conv_folder[-50:]
+            self._conv_folder_lbl.config(text=short, fg=FG2)
+
+    def _pick_conv_folder(self):
+        folder = filedialog.askdirectory(title="Source song folder")
+        if not folder:
+            return
+        self._conv_folder = folder
+        self._save_settings()
+        short = folder if len(folder) <= 52 else "…" + folder[-50:]
+        self._conv_folder_lbl.config(text=short, fg=FG2)
+        self._btn_native.set_enabled(True)
+        self._log(f"Convert source: {folder}\n\n", "info")
+
+    def _run_native_convert(self):
+        if not self._conv_folder:
+            return
+        pedal = self._conv_pedal.get()
+        modes = ["1x", "2x"] if pedal == "both" else [pedal]
+        self._log("── CONVERT (native PS3) ─────────────────\n", "head")
+        self._log(f"  Source: {self._conv_folder}\n")
+        self._log(f"  Pedal: {', '.join(modes)}\n\n")
+        self._btn_native.set_enabled(False)
+
+        def task():
+            try:
+                from downcharter.ps3build import build_ps3_song
+                for mode in modes:
+                    build_ps3_song(self._conv_folder, mode, self._log)
+            except Exception as e:
+                import traceback
+                self._log(f"  ✗ {e}\n", "err")
+                self._log(traceback.format_exc(), "err")
+            self.after(0, lambda: self._btn_native.set_enabled(True))
             self._log("\n")
 
         threading.Thread(target=task, daemon=True).start()
