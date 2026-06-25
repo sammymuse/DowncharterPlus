@@ -91,6 +91,29 @@ def _tier_to_rank(tier) -> int:
         return 270
 
 
+def _lyric_spans(mid) -> list:
+    """Extract syllable spans [(start_s, end_s, text, gain)] from the MIDI lyrics,
+    timed in real seconds. A YARG/CH chart's lyrics are already aligned to the
+    vocal, so geometric spans (each syllable → up to the next) drive a faithful
+    enough milo without re-doing audio analysis. Bracketed markers like
+    [section ...] / [phrase] are skipped."""
+    lyrics: list[tuple[float, str]] = []
+    t = 0.0
+    for msg in mid:                       # MidiFile iteration yields real seconds
+        t += msg.time
+        if msg.type in ("lyrics", "text"):
+            txt = (msg.text or "").strip()
+            if not txt or txt.startswith("["):
+                continue
+            lyrics.append((t, txt))
+    spans = []
+    for i, (start, txt) in enumerate(lyrics):
+        end = lyrics[i + 1][0] if i + 1 < len(lyrics) else start + 0.3
+        end = max(start + 0.05, min(end, start + 1.2))   # clamp to a sane mouth span
+        spans.append((start, end, txt, 1.0))
+    return spans
+
+
 def _charted_instruments(mid) -> set:
     """Which RB instruments are actually charted in `mid` (by PART track + gems).
     Returns a subset of {drum, bass, guitar, keys, vocals}. An instrument audio
@@ -403,14 +426,26 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
     else:
         mogg_layout = _mogg.build_mogg_from_stems(src_folder, out_mogg, log)
 
-    # 3) MILO: our native lipsync milo
+    # 3) MILO: prefer a Process-tab sidecar (audio-guided lipsync); otherwise
+    #    build one here from the chart's lyrics so the singer still lipsyncs.
+    milo_out = os.path.join(gen_dir, f"{shortname}.milo_ps3")
     if milo_path:
-        shutil.copy2(milo_path, os.path.join(gen_dir, f"{shortname}.milo_ps3"))
+        shutil.copy2(milo_path, milo_out)
         tag = "sidecar (our lipsync)" if milo_path.endswith(".milo_ps3") \
             and os.path.dirname(milo_path) == os.path.dirname(mid_path) else "reused"
         log(f"    ◇ milo: {tag}\n", "info")
     else:
-        log(f"    ⚠ milo: none found — run the Process tab (talkies) first\n", "warn")
+        try:
+            spans = _lyric_spans(out_mid)
+            if spans:
+                song_len_s = out_mid.length
+                with open(milo_out, "wb") as f:
+                    f.write(_milo.build_milo_from_spans(spans, song_len_s))
+                log(f"    ◇ milo: generated from {len(spans)} lyric syllable(s)\n", "info")
+            else:
+                log(f"    ⚠ milo: no lyrics in chart — skipped (no lipsync)\n", "warn")
+        except Exception as e:
+            log(f"    ⚠ milo: lyric lipsync failed ({e}) — skipped\n", "warn")
 
     # 4) Album art (optional)
     if art_path:
