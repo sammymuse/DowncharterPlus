@@ -35,6 +35,7 @@ import mido
 from . import milo as _milo
 from . import convert as _convert
 from . import mogg as _mogg
+from . import edat as _edat
 
 
 def _noop_log(msg, tag=None):
@@ -325,10 +326,16 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
 
     log(f"  → {pkg}\n", "info")
 
-    # 1) MIDI: pedal-variant transform → plain unencrypted <id>.mid
+    # 1) MIDI: pedal-variant transform → <id>.mid.edat (unencrypted debug EDAT).
+    #    RB3 only loads the chart as <id>.mid.edat; RB3DX nightly accepts the
+    #    debug (unencrypted) variant, so no NPDRM klicensee is needed.
+    import io as _io
     src_mid = mido.MidiFile(mid_path)
     out_mid, ks = _convert.apply_pedal_variant(src_mid, mode)
-    out_mid.save(os.path.join(song_dir, f"{shortname}.mid"))
+    _mbuf = _io.BytesIO()
+    out_mid.save(file=_mbuf)
+    _edat.build_debug_edat(_mbuf.getvalue(),
+                           os.path.join(song_dir, f"{shortname}.mid.edat"), pkg)
     if mode == "2x":
         log(f"    ◇ mid: {ks['converted']} double-kick(s) forced to single lane\n", "info")
     else:
