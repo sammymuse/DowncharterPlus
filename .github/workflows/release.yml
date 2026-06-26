@@ -24,12 +24,12 @@ jobs:
 
       - name: Build (PyInstaller onedir + zip)
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File build.ps1
+        run: powershell -ExecutionPolicy Bypass -File build.ps1 -Version ${{ github.ref_name }}
 
       - name: Publish release with the zip asset
         uses: softprops/action-gh-release@v2
         with:
           name: Downcharter+ ${{ github.ref_name }}
-          files: dist/Downcharter+.zip
+          files: "dist/Downcharter+ *.zip"
           generate_release_notes: true
           fail_on_unmatched_files: true
