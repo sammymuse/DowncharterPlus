@@ -425,6 +425,11 @@ def reduce_hard(gems: list, ctx: Ctx) -> list:
     for t in thin_kicks(kick, ctx, fill_ticks, _cms):
         keep.add((t, KICK_NOTE))
 
+    # H7 — HAND VELOCITY: a hand can't cross to a different pad faster than the playable
+    # eighth. Drops sub-eighth cross-kit moves that survived because each lane's grid
+    # kept its single note independently. 2-pad chords (same tick) stay.
+    keep = _apply_hand_velocity(keep, ctx, EIGHTH_MIN_MS["hard"])
+
     return rebuild(bt, keep)
 
 
@@ -468,6 +473,12 @@ def reduce_medium(gems: list, ctx: Ctx) -> list:
         if ctx.is_offbeat(t) and any(n in PAD_NOTES for n in bt.get(t, {})):
             continue
         keep.add((t, KICK_NOTE))
+
+    # M6 — HAND VELOCITY: no cross-kit hand move faster than the playable eighth.
+    keep = _apply_hand_velocity(keep, ctx, EIGHTH_MIN_MS["medium"])
+    # M7 — NO THREE-LIMB HITS: at most 2 simultaneous gems (2 pads allowed; drop the
+    # 3rd member, keeping snare+kick backbone over an extra pad/cymbal).
+    keep = _enforce_no_three_limbs(keep, bt)
 
     return rebuild(bt, keep)
 
@@ -543,6 +554,81 @@ def _enforce_max_two(keep: set[tuple[int, int]], bt: dict) -> set[tuple[int, int
             chosen.add(KICK_NOTE)          # kick only without a crash (kick+snare OK)
         for n in chosen:
             out.add((t, n))
+    return out
+
+
+# ── Hand velocity + limb count (Hard & Medium) ────────────────────────────────
+
+def _apply_hand_velocity(keep: set[tuple[int, int]], ctx: Ctx,
+                         min_ms: float) -> set[tuple[int, int]]:
+    """HAND-VELOCITY limit: a single hand cannot travel to a DIFFERENT pad faster than
+    `min_ms`. This bites ONLY between two consecutive LONE CYMBAL/TOM pads (one stick
+    moving across the kit) — e.g. a Y on one lane then a B a 16th later, each kept
+    independently by its own lane grid, which together is an unplayable cross. It does
+    NOT touch:
+      • the kick (foot, independent of hand travel);
+      • a 2-pad CHORD (two hands striking together — a chord is an anchor, never split);
+      • a second hand JOINING/leaving an ongoing pad (e.g. {Y}→{R,Y}: the hi-hat hand
+        stays, the snare hand joins — not a cross).
+    On a too-fast single→single cross the later note is dropped, unless it sits on a
+    stronger beat, in which case it replaces the earlier one (`thin_kicks` preference).
+    `min_ms` = the level's playable eighth (EIGHTH_MIN_MS). Returns the filtered `keep`
+    (every kick preserved)."""
+    hand_by_tick: dict[int, set[int]] = defaultdict(set)
+    for (t, n) in keep:
+        if n != KICK_NOTE:
+            hand_by_tick[t].add(n)
+
+    drop_ticks: set[int] = set()
+    last: tuple[int, int] | None = None    # (tick, note) of last kept lone-PAD onset
+    for t in sorted(hand_by_tick):
+        notes = hand_by_tick[t]
+        pads = [n for n in notes if n in PAD_NOTES]
+        # Only a LONE cymbal/tom pad is a single-hand travel candidate. A chord, or any
+        # onset carrying the snare (its own dedicated hand), resets the anchor and is kept.
+        if len(notes) != 1 or len(pads) != 1:
+            last = None
+            continue
+        n = pads[0]
+        if last is None:
+            last = (t, n)
+            continue
+        lt, ln = last
+        if n == ln or ctx.span_ms(lt, t - lt) >= min_ms:
+            last = (t, n)                  # same pad (ostinato) OR hand had time to move
+        elif ctx.is_onbeat(t) and not ctx.is_onbeat(lt):
+            drop_ticks.discard(t)
+            drop_ticks.add(lt)             # too-fast cross → keep the strong beat
+            last = (t, n)
+        else:
+            drop_ticks.add(t)              # hand can't reach in time → drop later cross
+
+    return {(t, nn) for (t, nn) in keep if nn == KICK_NOTE or t not in drop_ticks}
+
+
+def _enforce_no_three_limbs(keep: set[tuple[int, int]], bt: dict) -> set[tuple[int, int]]:
+    """MEDIUM (book): NO THREE-LIMB HITS — at most 2 simultaneous gems (two limbs).
+    Two-pad chords ARE allowed (two hands). When 3+ members stack, keep the backbone:
+    snare first, then the kick (foot pulse), then a single pad — dropping the extra
+    pad/cymbal. (A bare 2-pad chord, with no snare/kick, stays intact.)"""
+    by_t: dict[int, set[int]] = defaultdict(set)
+    for (t, n) in keep:
+        by_t[t].add(n)
+    out: set[tuple[int, int]] = set()
+    for t, notes in by_t.items():
+        if len(notes) <= 2:
+            out |= {(t, n) for n in notes}
+            continue
+        chosen: list[int] = []
+        if SNARE_NOTE in notes:
+            chosen.append(SNARE_NOTE)
+        if KICK_NOTE in notes and len(chosen) < 2:
+            chosen.append(KICK_NOTE)
+        for n in sorted(x for x in notes if x in PAD_NOTES):
+            if len(chosen) >= 2:
+                break
+            chosen.append(n)
+        out |= {(t, n) for n in chosen}
     return out
 
 
