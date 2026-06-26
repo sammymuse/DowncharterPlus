@@ -32,9 +32,18 @@ def _is_drums_track(track: mido.MidiTrack) -> bool:
 # Open (no-fret) strum markers. YARG/Clone-Hero charts use the note one below the
 # green gem of each difficulty (the "ENHANCED_OPENS" extension). Rock Band 3 has
 # no open-strum lane and silently IGNORES these notes, so the chart plays with
-# gaps. We remap each open onto its difficulty's GREEN gem so it stays playable.
-#   Easy 59→60, Medium 71→72, Hard 83→84, Expert 95→96
-OPEN_TO_GREEN = {59: 60, 71: 72, 83: 84, 95: 96}
+# gaps. RB3 has no open lane, so an open MUST become a fretted gem.
+#
+# A naive open→green map breaks the chart: an open rendered as green is now
+# indistinguishable from a real green, so the player can't tell finger positions
+# apart and HOPO/strum shapes collapse. Onyx solves this in `noOpenNotes`
+# (Onyx/Guitar.hs) by shifting the NEIGHBOURHOOD of each open UP one fret too, so
+# "open (→green)" stays distinct from a real green. We port that algorithm below.
+#
+# Green gem per difficulty (open = base-1, red = base+1 … orange = base+4):
+#   Easy 60, Medium 72, Hard 84, Expert 96.  Force HOPO/strum markers (base+5/+6)
+#   are NOT gems and are left untouched — they travel with their position.
+_DIFF_BASES = (60, 72, 84, 96)
 
 # Tracks that use the 5-fret open convention (NOT drums — there note 95 is the
 # 2x-kick, handled separately by apply_pedal_variant).
@@ -46,27 +55,234 @@ def _is_fret_track(track: mido.MidiTrack) -> bool:
     return "DRUM" not in nm and any(k in nm for k in _FRET_TRACK_KEYS)
 
 
-def convert_open_notes(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
-    """Return a NEW MidiFile with open-strum notes on 5-fret tracks remapped to
-    the green gem of their difficulty (RB3 ignores open notes otherwise).
+# ── Onyx noOpenNotes port (lane space: open=-1, green=0, red=1 … orange=4) ──────
+#
+# Faithful port of `noOpenNotesNewAlgorithm` (mtolly/onyx Onyx/Guitar.hs). Each
+# difficulty is processed on its own. Notes are grouped by onset (chords = groups
+# of >1 gem) and tagged FretGroupLow (shift +1 fret) or FretGroupHigh (stay):
+#   open→green AND its low-side neighbours move up so the open-as-green is
+#   distinguishable from a genuine green, while runs that climb away (high passes)
+#   are left in place. Adjacent gems that were equal stay equal and different stay
+#   different, so the force HOPO/strum markers still line up unchanged.
+#
+# We deliberately skip Onyx's optional `mutedOpensToRBStyle` (detectMuted=False,
+# the common case): we don't reinterpret strummed opens between chords as muted
+# strums, we only de-open them.
 
-    Returns (new_mid, {"converted": n}). Never mutates the input.
+_LOW, _HIGH = "low", "high"
+
+
+def _single_lane(group: list) -> int | None:
+    """Lane of a single-gem group (chords return None — they never spread)."""
+    return group[0]["lane"] if len(group) == 1 else None
+
+
+def _fix_wrapping(groups: list) -> list:
+    """Onyx `fixWrapping`: a full ascending run of SINGLE gems
+    open→green→red→yellow→blue→orange would wrap off the top once everything is
+    shifted up. Pre-swap the red and yellow blocks (R↔Y) so the later +1 shift
+    yields a valid 'G R Y R B O' instead. Lanes are mutated in place; positions
+    are preserved. Returns the same list."""
+    def run(start: int, lane: int) -> int:
+        i = start
+        while i < len(groups) and _single_lane(groups[i]) == lane:
+            i += 1
+        return i
+
+    i = 0
+    n = len(groups)
+    while i < n:
+        a = run(i, -1)                       # opens
+        if a > i:
+            b = run(a, 0)                    # greens
+            if b > a:
+                c = run(b, 1)                # reds
+                if c > b:
+                    d = run(c, 2)            # yellows
+                    if d > c:
+                        e = run(d, 3)        # blues
+                        if e > d and e < n and _single_lane(groups[e]) == 4:
+                            for k in range(b, c):       # reds → yellow
+                                groups[k][0]["lane"] = 2
+                            for k in range(c, d):       # yellows → red
+                                groups[k][0]["lane"] = 1
+                            i = e            # continue from the orange (fix6)
+                            continue
+        i += 1
+    return groups
+
+
+def _init_mark(group: list) -> str | None:
+    """initState: single open → Low; single orange → High; chord → High; else
+    unmarked."""
+    if len(group) >= 2:
+        return _HIGH
+    lane = group[0]["lane"]
+    if lane == -1:
+        return _LOW
+    if lane == 4:
+        return _HIGH
+    return None
+
+
+def _pass_spread(groups: list, marks: list, mark: str, moves: tuple) -> list:
+    """pass1/pass2 (forward): a marked SINGLE note spreads its mark to the next
+    UNMARKED single note when the fret movement is within `moves`. Forward, in
+    place, so a freshly-marked note keeps propagating to its successor."""
+    marks = marks[:]
+    for i in range(len(groups) - 1):
+        if (len(groups[i]) == 1 and marks[i] == mark
+                and len(groups[i + 1]) == 1 and marks[i + 1] is None):
+            mv = groups[i + 1][0]["lane"] - groups[i][0]["lane"]
+            if mv in moves:
+                marks[i + 1] = mark
+    return marks
+
+
+def _pass_both(groups: list, marks: list, mark: str, moves: tuple) -> list:
+    """Apply a spread pass forward, then on the reversed sequence, then unreverse
+    (Onyx's `reverse $ pass $ reverse $ pass`)."""
+    marks = _pass_spread(groups, marks, mark, moves)
+    rmarks = _pass_spread(list(reversed(groups)), list(reversed(marks)), mark, moves)
+    return list(reversed(rmarks))
+
+
+def _pass4(marks: list) -> list:
+    """pass4: any run of UNMARKED notes bounded by Low (or song boundary) with no
+    High between → marked Low. Faithful iterative port of Onyx's pass4/pass4'."""
+    out: list = []
+    i, n = 0, len(marks)
+
+    # start handler: unmarked prefix bounded on the left by the song start.
+    j = i
+    while j < n and marks[j] is None:
+        j += 1
+    if j > i:
+        if j == n or marks[j] == _LOW:
+            out.extend([_LOW] * (j - i))
+        else:
+            out.extend(marks[i:j])
+        i = j
+
+    # "low, unmarked, low/end" → fill the unmarked run Low.
+    while i < n:
+        k = i
+        while k < n and marks[k] == _LOW:
+            k += 1
+        if k > i:
+            m = k
+            while m < n and marks[m] is None:
+                m += 1
+            if m > k and (m == n or marks[m] == _LOW):
+                out.extend(marks[i:k])
+                out.extend([_LOW] * (m - k))
+                i = m
+                continue
+        out.append(marks[i])
+        i += 1
+    return out
+
+
+def _no_open_shift(gems: list) -> None:
+    """Run the full Onyx pipeline on one difficulty's gems and set ['new_lane']
+    on each gem dict (lane space, open=-1 … orange=4)."""
+    by_tick: dict = {}
+    for g in gems:
+        by_tick.setdefault(g["start"], []).append(g)
+    groups = [by_tick[t] for t in sorted(by_tick)]
+
+    # fixWrapping both ways
+    _fix_wrapping(groups)
+    _fix_wrapping(list(reversed(groups)))   # mutates the same gem dicts in place
+
+    marks = [_init_mark(grp) for grp in groups]
+    marks = _pass_both(groups, marks, _HIGH, (0, -1))   # pass1
+    marks = _pass_both(groups, marks, _LOW, (0, 1))     # pass2
+
+    # pass3: drop the Low marking from the opens themselves.
+    for i, grp in enumerate(groups):
+        if len(grp) == 1 and grp[0]["lane"] == -1 and marks[i] == _LOW:
+            marks[i] = None
+
+    marks = _pass4(marks)
+    marks = [_HIGH if m is None else m for m in marks]   # pass5
+
+    for grp, mk in zip(groups, marks):
+        delta = 1 if mk == _LOW else 0
+        for g in grp:
+            g["new_lane"] = max(0, min(4, g["lane"] + delta))
+
+
+def convert_open_notes(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
+    """Return a NEW MidiFile with open-strum notes on 5-fret tracks de-opened the
+    way Onyx does it: opens become green and the surrounding low notes shift up a
+    fret so an open-turned-green stays distinct from a real green.
+
+    Each difficulty is handled independently; a difficulty with NO open notes is
+    left byte-for-byte unchanged. Returns (new_mid, {"converted": n}) where n is
+    the number of open gems de-opened. Never mutates the input.
     """
     out = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
     converted = 0
+
     for track in mid.tracks:
         new_tr = mido.MidiTrack()
         new_tr.name = track.name
-        fret = _is_fret_track(track)
-        for msg in track:
-            if (fret and msg.type in ("note_on", "note_off")
-                    and msg.note in OPEN_TO_GREEN):
-                new_tr.append(msg.copy(note=OPEN_TO_GREEN[msg.note]))
-                if msg.type == "note_on" and msg.velocity > 0:
+        if not _is_fret_track(track):
+            for m in track:
+                new_tr.append(m.copy())
+            out.tracks.append(new_tr)
+            continue
+
+        # Absolute-tick view (delta times preserved on the messages themselves).
+        abs_msgs = []
+        t = 0
+        for m in track:
+            t += m.time
+            abs_msgs.append((t, m))
+
+        remap: dict = {}          # message index → new note number
+
+        for base in _DIFF_BASES:
+            lo, hi = base - 1, base + 4    # open … orange
+            # Skip difficulties with no open notes — leave them exactly as-is.
+            if not any(m.type == "note_on" and m.velocity > 0 and m.note == base - 1
+                       for _, m in abs_msgs):
+                continue
+
+            stacks: dict = {}             # note number → FIFO of (start_tick, on_idx)
+            gems: list = []
+            for idx, (tick, m) in enumerate(abs_msgs):
+                if m.type not in ("note_on", "note_off"):
+                    continue
+                if not (lo <= m.note <= hi):
+                    continue
+                if m.type == "note_on" and m.velocity > 0:
+                    stacks.setdefault(m.note, []).append((tick, idx))
+                else:
+                    st = stacks.get(m.note)
+                    if st:
+                        start_tick, on_idx = st.pop(0)
+                        gems.append({"start": start_tick, "lane": m.note - base,
+                                     "on_idx": on_idx, "off_idx": idx})
+            if not gems:
+                continue
+
+            _no_open_shift(gems)
+            for g in gems:
+                new_note = base + g["new_lane"]
+                remap[g["on_idx"]] = new_note
+                remap[g["off_idx"]] = new_note
+                if g["lane"] == -1:
                     converted += 1
+
+        for idx, (tick, m) in enumerate(abs_msgs):
+            if idx in remap and m.type in ("note_on", "note_off"):
+                new_tr.append(m.copy(note=remap[idx]))
             else:
-                new_tr.append(msg.copy())
+                new_tr.append(m.copy())
         out.tracks.append(new_tr)
+
     return out, {"converted": converted}
 
 
