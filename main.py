@@ -171,14 +171,16 @@ class App(tk.Tk):
         self._do_easy        = tk.BooleanVar(value=cfg.get("easy", True))
         self._do_venue       = tk.BooleanVar(value=cfg.get("venue", True))
         self._do_hide_bg     = tk.BooleanVar(value=cfg.get("hide_bg", False))
-        self._do_lipsync     = tk.BooleanVar(value=cfg.get("lipsync", False))
+        self._do_lipsync     = tk.BooleanVar(value=cfg.get("lipsync", False))      # talkies
+        self._do_lipsync_trk = tk.BooleanVar(value=cfg.get("lipsync_track", False))  # LIPSYNC1 viseme track
         # ── Convert tab (native PS3 package generation) ──
         self._conv_folder = cfg.get("conv_folder", "") or ""
         self._conv_pedal  = tk.StringVar(value=cfg.get("conv_pedal", "2x"))  # 1x | 2x | both
         # Persist whenever a toggle/slider changes
         for var in (self._threshold_ms, self._do_expert_plus, self._do_hard,
                     self._do_medium, self._do_easy, self._do_venue,
-                    self._do_hide_bg, self._do_lipsync, self._conv_pedal):
+                    self._do_hide_bg, self._do_lipsync, self._do_lipsync_trk,
+                    self._conv_pedal):
             var.trace_add("write", lambda *_: self._save_settings())
         self._build()
         if self._folder and os.path.isdir(self._folder):
@@ -279,6 +281,10 @@ class App(tk.Tk):
         # background.bak.png/jpg (revert restores them).
         CheckTile(body, "Hide in-game background (image)",
                   self._do_hide_bg, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        # LIPSYNC1 viseme track from lyrics (audio-guided keyframes). Independent of
+        # the talkies toggle below — generates the mouth animation track only.
+        CheckTile(body, "Generate lipsync (LIPSYNC1 viseme track)",
+                  self._do_lipsync_trk, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
         # ── Talkies ──
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
@@ -346,6 +352,7 @@ class App(tk.Tk):
             "venue":        bool(self._do_venue.get()),
             "hide_bg":      bool(self._do_hide_bg.get()),
             "lipsync":      bool(self._do_lipsync.get()),
+            "lipsync_track": bool(self._do_lipsync_trk.get()),
             "conv_folder":  self._conv_folder,
             "conv_pedal":   self._conv_pedal.get(),
         }
@@ -422,10 +429,12 @@ class App(tk.Tk):
         venue = self._do_venue.get()
         hide_bg = self._do_hide_bg.get()
         lipsync = self._do_lipsync.get()
+        lipsync_trk = self._do_lipsync_trk.get()
         diffs = [d for d, v in [("hard", self._do_hard),
                                   ("medium", self._do_medium),
                                   ("easy", self._do_easy)] if v.get()]
-        if not xp and not diffs and not venue and not lipsync and not hide_bg:
+        if (not xp and not diffs and not venue and not lipsync
+                and not lipsync_trk and not hide_bg):
             self._log("⚠  Nothing selected.\n", "warn"); return
 
         self._log("── PROCESS ──────────────────────────────\n", "head")
@@ -433,13 +442,14 @@ class App(tk.Tk):
         if diffs: self._log(f"  Diffs: {', '.join(diffs)}\n")
         if venue: self._log("  Venue: yes (theme from genre)\n")
         if hide_bg: self._log("  Hide background: yes (background.png/jpg → .bak)\n")
+        if lipsync_trk: self._log("  Lipsync: yes (LIPSYNC1 viseme track from lyrics)\n")
         if lipsync: self._log("  Talkies: yes (talky vocals charted from lyrics)\n")
         self._log("\n")
         self._btn_conv.set_enabled(False); self._btn_rev.set_enabled(False)
 
         def task():
-            process_folder(self._folder, diffs, xp, ms, self._log, venue, lipsync,
-                           do_hide_bg=hide_bg)
+            process_folder(self._folder, diffs, xp, ms, self._log, venue, lipsync_trk,
+                           do_hide_bg=hide_bg, do_talkies=lipsync)
             self.after(0, lambda: self._btn_conv.set_enabled(True))
             self.after(0, lambda: self._btn_rev.set_enabled(True))
             self._log("\n")

@@ -403,6 +403,7 @@ def process_midi(
     do_venue: bool = False,
     audio_path: str | None = None,
     do_lipsync: bool = False,
+    do_talkies: bool = False,
 ) -> dict:
     """
     Process a MIDI file:
@@ -799,8 +800,9 @@ def process_midi(
     # Generate talkies: for songs with lyrics, chart PART VOCALS as talky/unpitched
     # vocals (extended to the next syllable + gap). Onyx generates the lipsync itself
     # from the length of these tubes in the .ini→RB3/PS3 build.
-    if do_lipsync and song_end > 0:
-        _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats)
+    if (do_talkies or do_lipsync) and song_end > 0:
+        _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
+                       do_talkies=do_talkies, do_lipsync=do_lipsync)
 
     new_mid.save(dst_path)
     if stats.get("sysex_kept"):
@@ -848,7 +850,8 @@ def _gen_phrase_notes(notes: list[tuple[int, int]], tpb: int) -> list[tuple[int,
 
 
 def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
-                              tempo_map=None, folder: str | None = None) -> None:
+                              tempo_map=None, folder: str | None = None,
+                              write_gems: bool = True) -> None:
     """Create unpitched gems (talky, lyric '#') in PART VOCALS from the lyrics.
 
     Each note extends to near the next syllable / phrase end, leaving a GAP (notes
@@ -929,7 +932,7 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
         gems.append((t, end))
         # mark the lyric as talky ('#' at the end, after '-'/'='), if it isn't already.
         cur = e.msg.text
-        if not cur.rstrip().endswith(("#", "^")):
+        if write_gems and not cur.rstrip().endswith(("#", "^")):
             e.msg = e.msg.copy(text=cur + "#")
         # Record the span (seconds) + loudness gain for the viseme track.
         if tempo_map is not None:
@@ -937,6 +940,11 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
             e_s = tick_to_ms(end, tempo_map, tpb) / 1000.0
             gain = _audio.syllable_gain(va, s_s, e_s) if va is not None else 1.0
             lip_spans.append((s_s, e_s, cur, gain))
+
+    # When only the LIPSYNC1 track is requested (talkies off), don't touch PART
+    # VOCALS — just hand back the spans that drive the viseme track.
+    if not write_gems:
+        return lip_spans
 
     # phrase markers (105) if the track doesn't have them — RB needs them for the vocals.
     have_phrases = any(e.msg.type == "note_on" and getattr(e.msg, "velocity", 0) > 0
@@ -963,21 +971,30 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
     return lip_spans
 
 
-def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats) -> None:
-    """Two complementary lipsync outputs from the lyrics:
+def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
+                   do_talkies: bool = True, do_lipsync: bool = True) -> None:
+    """Two independent lipsync outputs from the lyrics, each toggled separately:
 
-    1. Talky vocals in PART VOCALS — the path RB/Onyx's `.ini` import actually uses
-       (charted tubes → autoLipsync). Works in-game today.
-    2. A LIPSYNC1 viseme track — text-commands `[<viseme> <weight>[ hold|ease]]`, the
-       exact format Onyx parses (confirmed in `Onyx/MIDI/Track/Lipsync.hs`: track name
-       `LIPSYNC1`, graph token = curve out of the keyframe). Sparse keyframes (held vowels,
-       diphthong glides), not dense 30fps deltas. Consumed by Onyx's milo workflow and
-       future-proof for YARG (its `LoadLipsyncFromMilo` has a TODO to parse lipsync
-       from MIDI). Timing/weight are audio-guided from the same spans as (1), beating
-       both engines' built-in geometric generators."""
+    1. Talky vocals in PART VOCALS (``do_talkies``) — the path RB/Onyx's `.ini` import
+       actually uses (charted tubes → autoLipsync). Works in-game today.
+    2. A LIPSYNC1 viseme track (``do_lipsync``) — text-commands
+       `[<viseme> <weight>[ hold|ease]]`, the exact format Onyx parses (confirmed in
+       `Onyx/MIDI/Track/Lipsync.hs`: track name `LIPSYNC1`, graph token = curve out of
+       the keyframe). Sparse keyframes (held vowels, diphthong glides), not dense 30fps
+       deltas. Consumed by Onyx's milo workflow and future-proof for YARG (its
+       `LoadLipsyncFromMilo` has a TODO to parse lipsync from MIDI). Timing/weight are
+       audio-guided from the same spans as (1), beating both engines' built-in
+       geometric generators.
+
+    The spans are computed from the lyrics regardless; ``write_gems`` only controls
+    whether PART VOCALS is rewritten, so the LIPSYNC1 track can be generated without
+    charting talkies (and vice-versa)."""
+    if not do_talkies and not do_lipsync:
+        return
     folder = os.path.dirname(os.path.abspath(dst_path))
-    spans = _chart_vocals_from_lyrics(new_mid, tpb, stats, tempo_map, folder) or []
-    if spans and tempo_map is not None and song_end > 0:
+    spans = _chart_vocals_from_lyrics(new_mid, tpb, stats, tempo_map, folder,
+                                      write_gems=do_talkies) or []
+    if do_lipsync and spans and tempo_map is not None and song_end > 0:
         try:
             from . import lipsync as _lip
             keyframes = _lip.lipsync_keyframes_from_spans(spans)
@@ -1129,6 +1146,7 @@ def process_folder(
     do_venue: bool = False,
     do_lipsync: bool = False,
     do_hide_bg: bool = False,
+    do_talkies: bool = False,
 ) -> None:
     # Hide in-game background images (background.png/jpg → .bak) — Venue sub-option.
     if do_hide_bg:
@@ -1164,7 +1182,7 @@ def process_folder(
             if not from_chart and not os.path.exists(backup):
                 shutil.copy2(path, backup)
             s = process_midi(path, path, diffs_to_gen, do_expert_plus,
-                             threshold_ms, do_venue, None, do_lipsync)
+                             threshold_ms, do_venue, None, do_lipsync, do_talkies)
             modified += 1
             skipped_total += len(s.get("diffs_skipped", []))
             if s.get("venue_skipped"):
@@ -1195,6 +1213,8 @@ def process_folder(
                 tr_txt = f" · {tr} trimmed by audio" if tr else ""
                 log_fn(f"    ◇ talkies: {s['vocals_charted']} charted vocals"
                        f"{ph_txt}{tr_txt}\n", "info")
+            if s.get("lipsync_events"):
+                log_fn(f"    ◇ lipsync: {s['lipsync_events']} viseme keyframes\n", "info")
             for sk in s.get("diffs_skipped", []):
                 log_fn(f"    ↷ skipped {sk} (already charted)\n", "info")
             # Groove-check warnings are recorded only in the session log file,
