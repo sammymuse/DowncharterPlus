@@ -50,6 +50,16 @@ KICK_2X     = 95
 DRUM_PAD = {0: 96, 1: 97, 2: 98, 3: 99, 4: 100, 5: 100}   # kick,R,Y,B,G(+5lane G)
 DRUM_TOM_MARKER = {2: 110, 3: 111, 4: 112}                # yellow/blue/green tom
 DRUM_CYMBAL_FLAG = {66: 2, 67: 3, 68: 4}                  # cymbal → cancels tom
+# Drum dynamics flags (Clone Hero .chart): pad index + offset, mirroring the
+# cymbal pad+64 scheme. Accent pad+33 (33=kick..37=green), ghost pad+39
+# (39=kick..43=green). In the .mid these become note velocities (read by
+# YARG/CH only when the track is flagged [ENABLE_CHART_DYNAMICS]).
+DRUM_ACCENT_OFFSET = 33
+DRUM_GHOST_OFFSET  = 39
+DRUM_FILL_NOTES = (120, 121, 122, 123, 124)   # RB/YARG drum activation fill (all 5)
+VEL_NORMAL = 100
+VEL_ACCENT = 127
+VEL_GHOST  = 1
 
 _LINE_RE = re.compile(r"^\s*([0-9]+)\s*=\s*(\w+)\s+(.*?)\s*$")
 
@@ -176,17 +186,20 @@ def _gems_by_tick(lines: list[tuple[int, str, str]], is_drums: bool):
     """Group the N/S/E of an instrument section by tick.
     The lane semantics differ between 5-fret and drums (e.g. N 5 = forced on
     5-fret, but green-5lane on drums).
-    Returns (gems{tick: dict}, sp[(t,len)], solos[(t,'solo'/'soloend')])."""
+    Returns (gems{tick: dict}, sp[(t,len)], solos[(t,'solo'/'soloend')],
+    fills[(t,len)] — drum activation fills, S 64)."""
     gems: dict[int, dict] = {}
     sp: list[tuple[int, int]] = []
     solos: list[tuple[int, str]] = []
+    fills: list[tuple[int, int]] = []
     for tick, typ, args in lines:
         toks = args.split()
         if typ == "N" and len(toks) >= 2:
             lane, length = int(toks[0]), int(toks[1])
             g = gems.setdefault(tick, {"frets": set(), "open": False,
                                        "forced": False, "tap": False,
-                                       "len": 0, "cymbals": set(), "kick2x": False})
+                                       "len": 0, "cymbals": set(), "kick2x": False,
+                                       "accent": set(), "ghost": set()})
             if is_drums:
                 if lane in (0, 1, 2, 3, 4, 5):
                     g["frets"].add(lane)
@@ -194,6 +207,10 @@ def _gems_by_tick(lines: list[tuple[int, str, str]], is_drums: bool):
                     g["kick2x"] = True
                 elif lane in DRUM_CYMBAL_FLAG:
                     g["cymbals"].add(DRUM_CYMBAL_FLAG[lane])
+                elif DRUM_ACCENT_OFFSET <= lane <= DRUM_ACCENT_OFFSET + 4:
+                    g["accent"].add(lane - DRUM_ACCENT_OFFSET)   # pad index 0..4
+                elif DRUM_GHOST_OFFSET <= lane <= DRUM_GHOST_OFFSET + 4:
+                    g["ghost"].add(lane - DRUM_GHOST_OFFSET)     # pad index 0..4
             else:
                 if lane in (0, 1, 2, 3, 4):
                     g["frets"].add(lane); g["len"] = max(g["len"], length)
@@ -205,15 +222,17 @@ def _gems_by_tick(lines: list[tuple[int, str, str]], is_drums: bool):
                     g["tap"] = True
         elif typ == "S" and len(toks) >= 2 and toks[0] == "2":
             sp.append((tick, int(toks[1])))
+        elif typ == "S" and len(toks) >= 2 and toks[0] == "64":
+            fills.append((tick, int(toks[1])))   # drum activation fill
         elif typ == "E":
             name = args.strip().strip('"').lower()
             if name in ("solo", "soloend"):
                 solos.append((tick, name))
-    return gems, sp, solos
+    return gems, sp, solos, fills
 
 
 def _guitar_track(name: str, lines, tpb: int) -> mido.MidiTrack:
-    gems, sp, solos = _gems_by_tick(lines, is_drums=False)
+    gems, sp, solos, _fills = _gems_by_tick(lines, is_drums=False)
     hopo_thresh = max(1, tpb // 3)
     evs: list[tuple[int, mido.Message]] = []
     prev_tick = -10 ** 9
@@ -294,14 +313,15 @@ def _map_drum_lane(lane: int, frets: set[int], five_lane: bool) -> tuple[int | N
 
 
 def _drums_track(name: str, lines, tpb: int) -> mido.MidiTrack:
-    gems, sp, solos = _gems_by_tick(lines, is_drums=True)
+    gems, sp, solos, fills = _gems_by_tick(lines, is_drums=True)
     five_lane = any(5 in g["frets"] for g in gems.values())
+    has_dynamics = any(g["accent"] or g["ghost"] for g in gems.values())
     evs: list[tuple[int, mido.Message]] = []
     for tick in sorted(gems):
         g = gems[tick]
         end = tick + 1
         if g["kick2x"]:
-            evs.append((tick, mido.Message("note_on", note=KICK_2X, velocity=100, time=0)))
+            evs.append((tick, mido.Message("note_on", note=KICK_2X, velocity=VEL_NORMAL, time=0)))
             evs.append((end, mido.Message("note_off", note=KICK_2X, velocity=0, time=0)))
         emitted: set[int] = set()             # RB pads already placed at this tick
         for lane in sorted(g["frets"]):
@@ -309,13 +329,30 @@ def _drums_track(name: str, lines, tpb: int) -> mido.MidiTrack:
             if pad is None or pad in emitted:  # skip true duplicates (never silent loss)
                 continue
             emitted.add(pad)
-            evs.append((tick, mido.Message("note_on", note=pad, velocity=100, time=0)))
+            # Ghost/accent → note velocity (read by YARG/CH under [ENABLE_CHART_DYNAMICS]).
+            if lane in g["ghost"]:
+                vel = VEL_GHOST
+            elif lane in g["accent"]:
+                vel = VEL_ACCENT
+            else:
+                vel = VEL_NORMAL
+            evs.append((tick, mido.Message("note_on", note=pad, velocity=vel, time=0)))
             evs.append((end, mido.Message("note_off", note=pad, velocity=0, time=0)))
             # 4-lane: explicit chart cymbal flag (66/67/68) cancels the default tom.
             if tom is not None and not (not five_lane and lane in g["cymbals"]):
-                evs.append((tick, mido.Message("note_on", note=tom, velocity=100, time=0)))
+                evs.append((tick, mido.Message("note_on", note=tom, velocity=VEL_NORMAL, time=0)))
                 evs.append((end, mido.Message("note_off", note=tom, velocity=0, time=0)))
     _add_sp_solo(evs, sp, solos)
+    # Drum activation fills (.chart S 64) → RB/YARG fill lanes 120-124 across the span.
+    for t, length in fills:
+        fend = t + max(1, length)
+        for fn in DRUM_FILL_NOTES:
+            evs.append((t, mido.Message("note_on", note=fn, velocity=VEL_NORMAL, time=0)))
+            evs.append((fend, mido.Message("note_off", note=fn, velocity=0, time=0)))
+    # Per-note ghost/accent velocities are only honored by YARG/Clone Hero when the
+    # drum track is flagged [ENABLE_CHART_DYNAMICS]; otherwise dynamics are dropped.
+    if has_dynamics:
+        evs.append((0, mido.MetaMessage("text", text="[ENABLE_CHART_DYNAMICS]", time=0)))
     return _track_from_events(name, evs)
 
 
