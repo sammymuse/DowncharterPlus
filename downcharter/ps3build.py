@@ -165,18 +165,25 @@ _RANK_TIERS = {
 }
 
 
-def _intensity_to_rank(intensity, instrument: str) -> int:
+def _intensity_to_rank(intensity, instrument: str, charted: bool = False) -> int:
     """song.ini `diff_*` intensity (0..6) → RB3 rank number for `instrument`, via
-    that instrument's tier thresholds. When the ini carries NO intensity for the
-    part (missing, -1, or unparseable) the rank is 0 — exactly what Onyx does
-    (e.g. Elegy has no diff_vocals, so vocals rank 0)."""
+    that instrument's tier thresholds.
+
+    A rank of 0 in a DTA means "part absent / not playable". So:
+      * `charted=True` (the part IS in the chart, e.g. our generated unpitched
+        vocals): a missing/unparseable/-1 intensity falls back to intensity 0 →
+        the LOWEST playable tier (rank tiers[0] = 1). This is what Onyx does — an
+        undocumented-but-charted part stays playable (e.g. Elegy's vocals → 1),
+        never rank 0 (which would hide the part and can make YARG reject the song).
+      * `charted=False`: a missing intensity stays rank 0 (genuinely absent)."""
     tiers = _RANK_TIERS.get(instrument, _RANK_TIERS["band"])
     try:
         i = int(intensity)
     except (TypeError, ValueError):
-        return 0            # no intensity registered → rank 0
-    if i < 0:
-        return 0            # explicitly-absent part
+        i = None
+    if i is None or i < 0:
+        # No documented difficulty: lowest playable tier if charted, else absent.
+        return tiers[0] if charted else 0
     return tiers[min(i, 6)]
 
 
@@ -283,13 +290,18 @@ def _charted_instruments(mid) -> set:
 
 
 def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
-               charted: set | None = None, has_art: bool = False) -> str:
+               charted: set | None = None, has_art: bool = False) -> tuple[str, str]:
     """Generate a Rock Band 3 songs.dta from song.ini metadata + the mogg channel
     layout. `layout` = [(track_name, [ch...])] from mogg.build_mogg_from_stems.
     `charted` limits which instruments are exposed as playable (ranked) parts;
     audio stems for un-charted instruments stay as backing channels.
-    `is_2x` True only for a genuine double-kick variant (drives the label + flag)."""
-    label = "2x Bass Pedal" if is_2x else "1x Bass Pedal"
+    `is_2x` True only for a genuine double-kick variant (drives the label + flag).
+
+    Returns (dta_text, codec) — write the text with `codec` so the file's bytes
+    match its declared (encoding ...) node (Latin1 normally, UTF-8 if needed)."""
+    # Only a genuine 2x variant is tagged in the display name; the plain (1x /
+    # intact) song keeps its bare title — no "(1x Bass Pedal)" suffix.
+    name_suffix = " (2x Bass Pedal)" if is_2x else ""
     title = _dta_str(meta.get("name") or shortname)
     artist = _dta_str(meta.get("album_artist") or meta.get("artist") or "Unknown")
     album = _dta_str(meta.get("album") or "")
@@ -337,11 +349,11 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
     # Each diff_* in the ini is an independent 0-6 intensity — never borrow one
     # instrument's tier for another.
     has_vox = "vocals" in inst_tracks
-    rank_g = _intensity_to_rank(meta.get("diff_guitar"), "guitar") if "guitar" in inst_tracks else 0
-    rank_b = _intensity_to_rank(meta.get("diff_bass"), "bass") if "bass" in inst_tracks else 0
-    rank_d = _intensity_to_rank(meta.get("diff_drums"), "drum") if "drum" in inst_tracks else 0
-    rank_k = _intensity_to_rank(meta.get("diff_keys"), "keys") if "keys" in inst_tracks else 0
-    rank_v = _intensity_to_rank(meta.get("diff_vocals"), "vocals") if has_vox else 0
+    rank_g = _intensity_to_rank(meta.get("diff_guitar"), "guitar", charted=True) if "guitar" in inst_tracks else 0
+    rank_b = _intensity_to_rank(meta.get("diff_bass"), "bass", charted=True) if "bass" in inst_tracks else 0
+    rank_d = _intensity_to_rank(meta.get("diff_drums"), "drum", charted=True) if "drum" in inst_tracks else 0
+    rank_k = _intensity_to_rank(meta.get("diff_keys"), "keys", charted=True) if "keys" in inst_tracks else 0
+    rank_v = _intensity_to_rank(meta.get("diff_vocals"), "vocals", charted=True) if has_vox else 0
     # Band rank: honour an explicit diff_band intensity; otherwise derive it from
     # the AVERAGE INTENSITY of the charted instruments (not the average of their
     # ranks — those live on different per-instrument scales) and map through the
@@ -396,8 +408,19 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
     # optional author/charter credit (RB3DX surfaces it; harmless on stock RB3).
     author_line = f'\n   (author "{charter}")' if charter else ""
 
+    # Encoding: YARG/RB detect a .dta's encoding from its BOM, NOT this node — and
+    # a BOM-less UTF-8 file is read as Latin1, so an accented title written UTF-8
+    # would show as mojibake in YARG. Match Onyx: write Latin1 (and declare it)
+    # whenever every text field fits Latin1 (the common case); fall back to UTF-8
+    # only for genuinely non-Latin1 text (e.g. Cyrillic/CJK titles).
+    try:
+        "".join((title, artist, album, charter, genre)).encode("latin1")
+        enc_token, codec = "latin1", "latin1"
+    except UnicodeEncodeError:
+        enc_token, codec = "utf8", "utf-8"
+
     dta = f"""({shortname}
-   (name "{title} ({label})")
+   (name "{title}{name_suffix}")
    (artist "{artist}")
    (master TRUE)
    (song_id {sid})
@@ -434,11 +457,11 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
    (album_art {'TRUE' if has_art else 'FALSE'})
    (album_name "{album}")
    (album_track_number {album_track}){author_line}
-   (encoding utf8)
+   (encoding {enc_token})
    ;2xBass={'1' if is_2x else '0'}
 )
 """
-    return dta
+    return dta, codec
 
 
 # ── source-folder discovery ──────────────────────────────────────────────────
@@ -495,12 +518,14 @@ def _patch_dta(dta_text: str, shortname: str, is_2x: bool) -> str:
     pedal suffix and set the 2xBass comment flag. Internal paths are rewritten
     to point at `shortname` (in case the source used a different id).
     `is_2x` True only for a genuine double-kick variant."""
-    label = "2x Bass Pedal" if is_2x else "1x Bass Pedal"
-    # Song display name: strip any existing "(.. Bass Pedal)" then append ours.
+    # Song display name: strip any existing "(.. Bass Pedal)" then, for a genuine
+    # 2x variant only, append "(2x Bass Pedal)". The plain song keeps its bare title.
     def _rename(m):
         title = m.group(1)
         title = re.sub(r"\s*\((?:1x|2x)\s*Bass Pedal\)\s*$", "", title).strip()
-        return f'\'name\'\n      "{title} ({label})"'
+        if is_2x:
+            title = f"{title} (2x Bass Pedal)"
+        return f'\'name\'\n      "{title}"'
     dta_text = re.sub(r"'name'\s*\n\s*\"([^\"]*)\"", _rename, dta_text, count=1)
     # 2xBass comment flag (informational; YARG/manager scanners read it).
     if re.search(r";2xBass=", dta_text):
@@ -592,6 +617,16 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
 
     pkg = _pkg_folder_name(shortname, dta_text, suffix)
     out_root = os.path.join(os.path.dirname(os.path.abspath(src_folder)), pkg)
+    # Guard against the package folder colliding with the SOURCE folder. On a
+    # case-insensitive filesystem (Windows/macOS) "Elegy" and "ELEGY" are the same
+    # directory, so a bare-named source (no song.ini → shortname == folder name)
+    # would have the package written straight into the source, mixing/overwriting
+    # the user's chart + stems. Never write inside the source: suffix the package.
+    if os.path.normcase(os.path.abspath(out_root)) == \
+            os.path.normcase(os.path.abspath(src_folder)):
+        out_root += "_PS3"
+        log("  (package name matched the source folder — using "
+            f"{os.path.basename(out_root)} to avoid overwriting it)\n", "warn")
     song_dir = os.path.join(out_root, "songs", shortname)
     gen_dir = os.path.join(song_dir, "gen")
     os.makedirs(gen_dir, exist_ok=True)
@@ -690,11 +725,12 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
             f.write(out_dta)
         log(f"    ◇ dta: patched ({'2x' if name_2x else '1x'})\n", "info")
     elif mogg_layout is not None:
-        out_dta = _build_dta(meta, shortname, mogg_layout, name_2x, charted,
-                             has_art=has_art)
-        # The generated dta declares (encoding utf8); write it as UTF-8 so accented
-        # / non-latin1 titles (and the typographic quote _dta_str emits) survive.
-        with open(out_dta_path, "w", encoding="utf-8") as f:
+        out_dta, dta_codec = _build_dta(meta, shortname, mogg_layout, name_2x,
+                                        charted, has_art=has_art)
+        # Write with the codec _build_dta chose to match its (encoding ...) node:
+        # Latin1 for normal titles (so YARG, which reads BOM-less files as Latin1,
+        # gets them right), UTF-8 only for genuinely non-Latin1 text.
+        with open(out_dta_path, "w", encoding=dta_codec) as f:
             f.write(out_dta)
         log(f"    ◇ dta: generated from song.ini ({'2x' if name_2x else '1x'})\n", "info")
     else:
