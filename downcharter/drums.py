@@ -222,28 +222,45 @@ def thin_kicks(kick_ticks, ctx: Ctx, fill_ticks: set[int], collapse_ms: float) -
     return kept
 
 
-def thin_lane_strong(ticks, ctx: Ctx, min_gap: int) -> list[int]:
-    """Like `thin_lane` but in a collapsed pair (gap < min_gap) it prefers the STRONG
-    BEAT (same as `thin_kicks`): keeps the real position but switches to the on-beat
-    note if the previous one was off-beat. Fixes the snare phase in 16th grooves."""
+def _prefer_in_pair(prev: int, cur: int, vel, ctx: Ctx, strong: bool) -> int:
+    """Of two colliding lane onsets, which to KEEP. The ACCENT wins (louder beats
+    ghost — the main hit must survive a ghost grace note). On a velocity tie, the
+    STRONG BEAT wins when `strong` (keeps the downbeat over an off-grid neighbour);
+    otherwise the earlier (original phase) stays."""
+    if vel is not None:
+        vp, vc = vel.get(prev, 0), vel.get(cur, 0)
+        if vc != vp:
+            return cur if vc > vp else prev
+    if strong and ctx is not None and ctx.is_onbeat(cur) and not ctx.is_onbeat(prev):
+        return cur
+    return prev
+
+
+def thin_lane_strong(ticks, ctx: Ctx, min_gap: int, vel=None) -> list[int]:
+    """Like `thin_lane` but in a collapsed pair (gap < min_gap) it prefers the ACCENT
+    (louder note — drops ghosts, keeps the main hit) and, on a velocity tie, the STRONG
+    BEAT. Keeps the real position. Fixes the snare phase/dynamics in 16th grooves."""
     kept: list[int] = []
     for t in sorted(ticks):
         if not kept or t - kept[-1] >= min_gap:
             kept.append(t)
-        elif ctx.is_onbeat(t) and not ctx.is_onbeat(kept[-1]):
-            kept[-1] = t
+        else:
+            kept[-1] = _prefer_in_pair(kept[-1], t, vel, ctx, strong=True)
     return kept
 
 
-def thin_lane(ticks, min_gap: int) -> list[int]:
+def thin_lane(ticks, min_gap: int, vel=None, ctx: Ctx | None = None) -> list[int]:
     """Greedy thinning that PRESERVES THE ORIGINAL PHASE: walks in order and keeps a
     tick if it is ≥ `min_gap` from the last kept one. Never snaps to the grid — unlike
     `grid_thin`, it does not force the note onto the beat line, so a backbone on the
-    off-beat (half-time feel) survives intact. (Option 1 for snare.)"""
+    off-beat (half-time feel) survives intact. (Option 1 for snare.) When `vel` is
+    given, a collision keeps the ACCENT (louder) over a ghost grace note."""
     kept: list[int] = []
     for t in sorted(ticks):
         if not kept or t - kept[-1] >= min_gap:
             kept.append(t)
+        elif vel is not None:
+            kept[-1] = _prefer_in_pair(kept[-1], t, vel, ctx, strong=False)
     return kept
 
 
@@ -406,8 +423,9 @@ def reduce_hard(gems: list, ctx: Ctx) -> list:
     # Hard precision +5.7pp at −0.4pp recall).
     snare = sorted(t for t, n, *_ in gems if n == SNARE_NOTE and t not in fill_ticks
                    and (ctx.is_onbeat(t) or ctx.is_offbeat(t)))
+    svel = {t: bt[t][SNARE_NOTE][1] for t in snare}
     min_gap = ctx.tpb // 2 - ctx.tpb // 16   # 1/8 with 1/16 slack
-    for t in thin_lane_strong(snare, ctx, min_gap):
+    for t in thin_lane_strong(snare, ctx, min_gap, vel=svel):
         keep.add((t, SNARE_NOTE))
 
     # H3 — KICK: ~75% of Expert. Remove ALL kicks from fills (H3); reinforce the
@@ -458,7 +476,8 @@ def reduce_medium(gems: list, ctx: Ctx) -> list:
     # positions, thinning only by density (≤1/quarter), without snapping to the grid —
     # so as not to destroy off-beat (half-time) grooves like TTFAF/Battery.
     snare = {t for t, n, *_ in gems if n == SNARE_NOTE}
-    for t in thin_lane(snare, ctx.tpb):
+    svel = {t: bt[t][SNARE_NOTE][1] for t in snare}
+    for t in thin_lane(snare, ctx.tpb, vel=svel, ctx=ctx):
         keep.add((t, SNARE_NOTE))
 
     # M3 — kick: preserves the original groove, collapsing sub-quarter double-bash
@@ -504,7 +523,8 @@ def reduce_easy(gems: list, ctx: Ctx) -> list:
     # SNARE backbone PRESERVING THE PHASE (option 1): real positions, ≤1/quarter,
     # without snap — keeps off-beat grooves at high tempo.
     snare = {t for t, n, *_ in gems if n == SNARE_NOTE}
-    for t in thin_lane(snare, ctx.tpb):
+    svel = {t: bt[t][SNARE_NOTE][1] for t in snare}
+    for t in thin_lane(snare, ctx.tpb, vel=svel, ctx=ctx):
         keep.add((t, SNARE_NOTE))
 
     # E4 — kick: preserves the original groove, collapsing sub-quarter double-bash
