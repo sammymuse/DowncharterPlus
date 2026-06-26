@@ -560,7 +560,7 @@ def source_has_double_kicks(src_folder: str) -> bool:
 
 
 # ── full PS3 song folder ───────────────────────────────────────────────────────
-def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 256) -> str:
+def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512) -> str:
     """Assemble a native unencrypted RPCS3 PS3 song folder from `src_folder`.
 
     `src_folder` is expected to hold a Downcharter-processed song: a plain

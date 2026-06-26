@@ -61,9 +61,10 @@ def _mip_sizes(size: int) -> tuple:
     return tuple(sizes)
 
 
-# RB album art is square; default 256×256 (platform standard, byte-identical to
-# Onyx). 512 is selectable (experimental) once verified in-game.
-_SIZE = 256
+# RB album art is square. 512×512 is the default: verified in-game on RB3/RPCS3
+# (renders sharp, no crash) and YARG reads the dimensions from the header. 256
+# stays selectable and is byte-identical to Onyx if ever needed.
+_SIZE = 512
 
 # Cover filenames CH / YARG songs ship.
 _COVER_NAMES = ("album.png", "album.jpg", "album.jpeg", "cover.png", "cover.jpg",
