@@ -1015,17 +1015,26 @@ def _prepare_chart(path: str, log_fn) -> str | None:
 _BG_EXTS = (".png", ".jpg", ".jpeg")
 
 
+_BG_HIDDEN_STEM = "dc_hidden_bg"   # hidden-background filename stem (see below)
+
+
 def _hide_backgrounds(folder: str, log_fn) -> int:
     """Rename in-game background images (background.png/jpg/jpeg) to
-    background.bak.<ext> so they don't render as the stage background. Reversible
-    by revert_folder. Skips files already hidden. Returns the count hidden."""
+    dc_hidden_bg.<ext> so they don't render as the stage background. Reversible
+    by revert_folder. Skips files already hidden. Returns the count hidden.
+
+    The previous scheme renamed to ``background.bak.<ext>``, but RB3/CH/YARG load
+    backgrounds with a ``background*`` glob — so a name still STARTING with
+    "background" kept rendering. The hidden name must therefore not contain the
+    word "background" at all; revert maps ``dc_hidden_bg.<ext>`` (and the legacy
+    ``background.bak.<ext>``) back to ``background.<ext>``."""
     hidden = 0
     for root, _, files in os.walk(folder):
         for f in files:
             name, ext = os.path.splitext(f)
             if name.lower() == "background" and ext.lower() in _BG_EXTS:
                 src = os.path.join(root, f)
-                dst = os.path.join(root, name + ".bak" + ext)
+                dst = os.path.join(root, _BG_HIDDEN_STEM + ext)
                 try:
                     if os.path.exists(dst):
                         continue                       # already hidden
@@ -1180,8 +1189,10 @@ def revert_folder(folder: str, log_fn) -> None:
     for root, _, files in os.walk(folder):
         for f in files:
             name, ext = os.path.splitext(f)
-            if name.lower() == "background.bak" and ext.lower() in _BG_EXTS:
-                # Restore a hidden in-game background image.
+            if (name.lower() in (_BG_HIDDEN_STEM, "background.bak")
+                    and ext.lower() in _BG_EXTS):
+                # Restore a hidden in-game background image (new dc_hidden_bg.*
+                # scheme + legacy background.bak.* still recognised).
                 backup = os.path.join(root, f)
                 original = os.path.join(root, "background" + ext)
                 try:
