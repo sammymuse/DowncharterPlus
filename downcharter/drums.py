@@ -608,9 +608,9 @@ def _apply_hand_velocity(keep: set[tuple[int, int]], ctx: Ctx,
 
 def _enforce_no_three_limbs(keep: set[tuple[int, int]], bt: dict) -> set[tuple[int, int]]:
     """MEDIUM (book): NO THREE-LIMB HITS — at most 2 simultaneous gems (two limbs).
-    Two-pad chords ARE allowed (two hands). When 3+ members stack, keep the backbone:
-    snare first, then the kick (foot pulse), then a single pad — dropping the extra
-    pad/cymbal. (A bare 2-pad chord, with no snare/kick, stays intact.)"""
+    Two-pad chords ARE allowed (two hands). When 3+ members stack, drop the KICK
+    (foot) first — the book's "no kick, snare AND crash at the same time" — keeping
+    the hands: snare, then pads. (A bare 2-pad chord, with no kick, stays intact.)"""
     by_t: dict[int, set[int]] = defaultdict(set)
     for (t, n) in keep:
         by_t[t].add(n)
@@ -622,12 +622,12 @@ def _enforce_no_three_limbs(keep: set[tuple[int, int]], bt: dict) -> set[tuple[i
         chosen: list[int] = []
         if SNARE_NOTE in notes:
             chosen.append(SNARE_NOTE)
-        if KICK_NOTE in notes and len(chosen) < 2:
-            chosen.append(KICK_NOTE)
         for n in sorted(x for x in notes if x in PAD_NOTES):
             if len(chosen) >= 2:
                 break
             chosen.append(n)
+        if KICK_NOTE in notes and len(chosen) < 2:
+            chosen.append(KICK_NOTE)
         out |= {(t, n) for n in chosen}
     return out
 
