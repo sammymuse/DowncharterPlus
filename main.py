@@ -537,15 +537,24 @@ class App(tk.Tk):
         if not self._conv_folder:
             return
         pedal = self._conv_pedal.get()
-        modes = ["1x", "2x"] if pedal == "both" else [pedal]
         self._log("── CONVERT (native PS3) ─────────────────\n", "head")
         self._log(f"  Source: {self._conv_folder}\n")
-        self._log(f"  Pedal: {', '.join(modes)}\n\n")
         self._btn_native.set_enabled(False)
 
         def task():
             try:
-                from downcharter.ps3build import build_ps3_song
+                from downcharter.ps3build import build_ps3_song, source_has_double_kicks
+                if pedal == "both":
+                    # Only emit a 2x folder for songs that actually have doubles to
+                    # convert; otherwise the 2x build is identical to the plain 1x.
+                    if source_has_double_kicks(self._conv_folder):
+                        modes = ["1x", "2x"]
+                    else:
+                        modes = ["1x"]
+                        self._log("  (no double-kicks → 1x only)\n", "info")
+                else:
+                    modes = [pedal]
+                self._log(f"  Pedal: {', '.join(modes)}\n\n")
                 for mode in modes:
                     build_ps3_song(self._conv_folder, mode, self._log)
             except Exception as e:

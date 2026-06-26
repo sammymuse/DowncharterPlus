@@ -369,3 +369,20 @@ def apply_pedal_variant(mid: mido.MidiFile, mode: str) -> tuple[mido.MidiFile, d
         out.tracks.append(new_tr)
 
     return out, {"converted": converted, "removed": removed}
+
+
+def count_double_kicks(mid: mido.MidiFile) -> int:
+    """Number of Expert+ 2x-kick markers (note-95 note_ons) on the drums track(s).
+
+    Zero means there is nothing for the "2x" variant to convert: the chart is
+    already single-pedal, so a 2x build would be byte-for-byte the 1x build.
+    Callers use this to decide whether the "2x" name/label is warranted."""
+    n = 0
+    for track in mid.tracks:
+        if not _is_drums_track(track):
+            continue
+        for msg in track:
+            if (msg.type == "note_on" and msg.velocity > 0
+                    and msg.note == DRUM_KICK_2X):
+                n += 1
+    return n

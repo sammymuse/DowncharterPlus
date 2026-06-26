@@ -128,10 +128,12 @@ def _ini_int(meta: dict, *keys) -> int | None:
     return None
 
 
-def _sanitize_shortname(meta: dict, fallback: str, mode: str) -> str:
+def _sanitize_shortname(meta: dict, fallback: str, suffix: str) -> str:
     raw = (meta.get("artist", "") + meta.get("name", "")) or fallback
     short = re.sub(r"[^a-z0-9]", "", raw.lower()) or "song"
-    return f"{short[:28]}{mode}"   # mode suffix → 1x and 2x stay distinct installs
+    # `suffix` is "" for a plain song or "2x" for a genuine double-kick variant,
+    # so a real 2x build stays a distinct install while the normal one is unsuffixed.
+    return f"{short[:28]}{suffix}"
 
 
 def _song_id(shortname: str) -> int:
@@ -280,13 +282,14 @@ def _charted_instruments(mid) -> set:
     return charted
 
 
-def _build_dta(meta: dict, shortname: str, layout, mode: str,
+def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
                charted: set | None = None, has_art: bool = False) -> str:
     """Generate a Rock Band 3 songs.dta from song.ini metadata + the mogg channel
     layout. `layout` = [(track_name, [ch...])] from mogg.build_mogg_from_stems.
     `charted` limits which instruments are exposed as playable (ranked) parts;
-    audio stems for un-charted instruments stay as backing channels."""
-    label = "2x Bass Pedal" if mode == "2x" else "1x Bass Pedal"
+    audio stems for un-charted instruments stay as backing channels.
+    `is_2x` True only for a genuine double-kick variant (drives the label + flag)."""
+    label = "2x Bass Pedal" if is_2x else "1x Bass Pedal"
     title = _dta_str(meta.get("name") or shortname)
     artist = _dta_str(meta.get("album_artist") or meta.get("artist") or "Unknown")
     album = _dta_str(meta.get("album") or "")
@@ -432,7 +435,7 @@ def _build_dta(meta: dict, shortname: str, layout, mode: str,
    (album_name "{album}")
    (album_track_number {album_track}){author_line}
    (encoding utf8)
-   ;2xBass={'1' if mode == '2x' else '0'}
+   ;2xBass={'1' if is_2x else '0'}
 )
 """
     return dta
@@ -487,11 +490,12 @@ def _dta_shortname(dta_text: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _patch_dta(dta_text: str, shortname: str, mode: str) -> str:
+def _patch_dta(dta_text: str, shortname: str, is_2x: bool) -> str:
     """Adjust a songs.dta for the chosen pedal mode: rename the song with the
     pedal suffix and set the 2xBass comment flag. Internal paths are rewritten
-    to point at `shortname` (in case the source used a different id)."""
-    label = "2x Bass Pedal" if mode == "2x" else "1x Bass Pedal"
+    to point at `shortname` (in case the source used a different id).
+    `is_2x` True only for a genuine double-kick variant."""
+    label = "2x Bass Pedal" if is_2x else "1x Bass Pedal"
     # Song display name: strip any existing "(.. Bass Pedal)" then append ours.
     def _rename(m):
         title = m.group(1)
@@ -500,17 +504,35 @@ def _patch_dta(dta_text: str, shortname: str, mode: str) -> str:
     dta_text = re.sub(r"'name'\s*\n\s*\"([^\"]*)\"", _rename, dta_text, count=1)
     # 2xBass comment flag (informational; YARG/manager scanners read it).
     if re.search(r";2xBass=", dta_text):
-        dta_text = re.sub(r";2xBass=\d", f";2xBass={'1' if mode=='2x' else '0'}", dta_text)
+        dta_text = re.sub(r";2xBass=\d", f";2xBass={'1' if is_2x else '0'}", dta_text)
     return dta_text
 
 
-def _pkg_folder_name(shortname: str, dta_text: str, mode: str) -> str:
-    """A unique PS3 package folder name, e.g. ELEGY_2X. If the shortname already
-    carries the pedal mode (generated names do), don't append it twice."""
+def _pkg_folder_name(shortname: str, dta_text: str, suffix: str) -> str:
+    """A unique PS3 package folder name, e.g. ELEGY_2X. `suffix` is "" for a plain
+    song (no pedal tag) or "2x" for a genuine double-kick variant. If the shortname
+    already carries the tag (generated names do), don't append it twice."""
     base = shortname.upper()
-    if base.endswith(mode.upper()):
+    if not suffix:
         return base
-    return f"{base}_{mode.upper()}"
+    tag = suffix.upper()
+    if base.endswith(tag):
+        return base
+    return f"{base}_{tag}"
+
+
+def source_has_double_kicks(src_folder: str) -> bool:
+    """True if the source chart carries Expert+ double-kicks (note-95 markers).
+
+    Used by the 'both' orchestration: a song with no doubles has nothing for the
+    2x variant to convert, so only the plain (1x) folder should be produced."""
+    mid_path = _find_source_mid(src_folder)
+    if not mid_path:
+        return False
+    try:
+        return _convert.count_double_kicks(mido.MidiFile(mid_path)) > 0
+    except Exception:
+        return False
 
 
 # ── full PS3 song folder ───────────────────────────────────────────────────────
@@ -547,8 +569,17 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
     ini_path = _find_one(src_folder, lambda p: os.path.basename(p).lower() == "song.ini")
     meta = _parse_song_ini(ini_path) if ini_path else {}
 
+    # Load the source chart up front so naming can know whether this song actually
+    # has double-kicks. A "2x" build only earns the 2x name/label when there are
+    # note-95 markers to convert; otherwise it is byte-for-byte the plain 1x chart,
+    # so it stays unsuffixed. The 1x mode is always the plain, unsuffixed song.
+    src_mid = mido.MidiFile(mid_path)
+    has_2x = _convert.count_double_kicks(src_mid) > 0
+    name_2x = (mode == "2x" and has_2x)
+    suffix = "2x" if name_2x else ""
+
     # Existing dta (Onyx-style source) gives us the shortname; otherwise we mint
-    # one from song.ini (artist+title+mode) so 1x and 2x install side by side.
+    # one from song.ini (artist+title+suffix) so a real 2x installs beside the 1x.
     dta_text = ""
     if dta_path:
         with open(dta_path, "r", encoding="latin1") as f:
@@ -557,9 +588,9 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
         shortname = _dta_shortname(dta_text)
     else:
         fallback = os.path.splitext(os.path.basename(mid_path))[0]
-        shortname = _sanitize_shortname(meta, fallback, mode)
+        shortname = _sanitize_shortname(meta, fallback, suffix)
 
-    pkg = _pkg_folder_name(shortname, dta_text, mode)
+    pkg = _pkg_folder_name(shortname, dta_text, suffix)
     out_root = os.path.join(os.path.dirname(os.path.abspath(src_folder)), pkg)
     song_dir = os.path.join(out_root, "songs", shortname)
     gen_dir = os.path.join(song_dir, "gen")
@@ -571,7 +602,6 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
     #    RB3 only loads the chart as <id>.mid.edat; RB3DX nightly accepts the
     #    debug (unencrypted) variant, so no NPDRM klicensee is needed.
     import io as _io
-    src_mid = mido.MidiFile(mid_path)
     # a) open strums → green gem (RB3 ignores open notes)
     src_mid, os_stats = _convert.convert_open_notes(src_mid)
     if os_stats["converted"]:
@@ -655,18 +685,18 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None) -> str:
     # 5) songs.dta: patch an existing one, else generate from song.ini + layout.
     out_dta_path = os.path.join(out_root, "songs", "songs.dta")
     if dta_text:
-        out_dta = _patch_dta(dta_text, shortname, mode)
+        out_dta = _patch_dta(dta_text, shortname, name_2x)
         with open(out_dta_path, "w", encoding="latin1") as f:
             f.write(out_dta)
-        log(f"    ◇ dta: patched ({mode})\n", "info")
+        log(f"    ◇ dta: patched ({'2x' if name_2x else '1x'})\n", "info")
     elif mogg_layout is not None:
-        out_dta = _build_dta(meta, shortname, mogg_layout, mode, charted,
+        out_dta = _build_dta(meta, shortname, mogg_layout, name_2x, charted,
                              has_art=has_art)
         # The generated dta declares (encoding utf8); write it as UTF-8 so accented
         # / non-latin1 titles (and the typographic quote _dta_str emits) survive.
         with open(out_dta_path, "w", encoding="utf-8") as f:
             f.write(out_dta)
-        log(f"    ◇ dta: generated from song.ini ({mode})\n", "info")
+        log(f"    ◇ dta: generated from song.ini ({'2x' if name_2x else '1x'})\n", "info")
     else:
         log(f"    ⚠ dta: no songs.dta and no built mogg layout — skipped\n", "warn")
 
