@@ -94,40 +94,109 @@ def _unpack565(c):
     )
 
 
-def _encode_dxt1(rgb) -> bytes:
-    """Range-fit DXT1 encode an (H,W,3) uint8 image (H,W multiples of 4).
+# Decoder interpolation weight of c0 for each of the 4 DXT1 indices:
+#   idx0 = c0 (w=1) · idx1 = c1 (w=0) · idx2 = (2c0+c1)/3 · idx3 = (c0+2c1)/3
+_C0_WEIGHT = (1.0, 0.0, 2.0 / 3.0, 1.0 / 3.0)
 
-    Per 4×4 block: endpoints are the per-channel bounding-box corners of the
-    block's colours (max corner = c0, min corner = c1) so c0>c1 selects DXT1's
-    4-colour opaque mode; each pixel takes the nearest of the 4 palette colours.
+
+def _principal_axis(centered):
+    """Dominant colour-variation axis of a block via power iteration on the
+    3×3 covariance. `centered` is (N,3) float (block colours minus their mean).
+    Returns a unit (3,) vector, or None if the block is (near) flat."""
+    import numpy as np
+    cov = centered.T @ centered                      # (3,3)
+    v = cov.sum(axis=0)                              # seed along total variance
+    n = np.linalg.norm(v)
+    if n < 1e-6:
+        v = np.array([1.0, 1.0, 1.0])                # degenerate seed
+    else:
+        v = v / n
+    for _ in range(8):
+        v = cov @ v
+        n = np.linalg.norm(v)
+        if n < 1e-9:
+            return None                              # flat block
+        v = v / n
+    return v
+
+
+def _fit_endpoints(blk, axis):
+    """Initial float endpoints: extreme projections of the block onto `axis`."""
+    import numpy as np
+    mean = blk.mean(axis=0)
+    proj = (blk - mean) @ axis
+    return mean + axis * proj.max(), mean + axis * proj.min()
+
+
+def _encode_dxt1(rgb) -> bytes:
+    """High-quality DXT1 encode of an (H,W,3) uint8 image (H,W multiples of 4).
+
+    Per 4×4 block we fit the colour line along the PRINCIPAL AXIS (PCA via power
+    iteration) instead of the per-channel bounding box — the bbox over-expands
+    the range and desaturates, the principal axis tracks the real colour spread.
+    Endpoints are then refined by LEAST SQUARES against the chosen indices (a
+    couple of stb_dxt-style iterations), recovering detail the old range-fit lost.
+    Output is byte-identical in layout (c0 u16le, c1 u16le, 32 2-bit indices).
     """
     import numpy as np
     h, w, _ = rgb.shape
+    weights = np.array(_C0_WEIGHT)                   # (4,)
     out = bytearray()
     for by in range(0, h, 4):
         for bx in range(0, w, 4):
-            blk = rgb[by:by + 4, bx:bx + 4, :].reshape(-1, 3).astype(np.int32)
-            cmax = blk.max(axis=0)
-            cmin = blk.min(axis=0)
-            c0 = int(_rgb565(cmax[None, :])[0])
-            c1 = int(_rgb565(cmin[None, :])[0])
-            if c0 < c1:
-                c0, c1 = c1, c0
-            if c0 == c1:
-                # flat block → all indices point at colour 0
+            blk = rgb[by:by + 4, bx:bx + 4, :].reshape(-1, 3).astype(np.float64)
+            axis = _principal_axis(blk - blk.mean(axis=0))
+            if axis is None:                         # flat block
+                c0 = int(_rgb565(blk[:1].astype(np.int32))[0])
+                out += bytes([c0 & 0xFF, (c0 >> 8) & 0xFF,
+                              c0 & 0xFF, (c0 >> 8) & 0xFF, 0, 0, 0, 0])
+                continue
+
+            e0, e1 = _fit_endpoints(blk, axis)
+            idx = None
+            for _ in range(3):                       # refine endpoints ↔ indices
+                c0q = int(_rgb565(np.clip(np.round(e0), 0, 255)
+                                  .astype(np.int32)[None, :])[0])
+                c1q = int(_rgb565(np.clip(np.round(e1), 0, 255)
+                                  .astype(np.int32)[None, :])[0])
+                p0 = np.array(_unpack565(c0q))
+                p1 = np.array(_unpack565(c1q))
+                palette = np.stack([p0, p1,
+                                    (2 * p0 + p1) / 3.0,
+                                    (p0 + 2 * p1) / 3.0])      # (4,3)
+                d = ((blk[:, None, :] - palette[None, :, :]) ** 2).sum(axis=2)
+                idx = d.argmin(axis=1)                          # (16,)
+                # least-squares: minimise Σ‖p − (w·E0 + (1−w)·E1)‖² over E0,E1
+                wpix = weights[idx]                             # (16,)
+                a = float((wpix * wpix).sum())
+                b = float((wpix * (1.0 - wpix)).sum())
+                c = float(((1.0 - wpix) * (1.0 - wpix)).sum())
+                det = a * c - b * b
+                if abs(det) < 1e-9:
+                    break
+                pw0 = (wpix[:, None] * blk).sum(axis=0)         # Σ w·p
+                pw1 = ((1.0 - wpix)[:, None] * blk).sum(axis=0) # Σ (1−w)·p
+                e0 = (c * pw0 - b * pw1) / det
+                e1 = (a * pw1 - b * pw0) / det
+
+            c0 = int(_rgb565(np.clip(np.round(e0), 0, 255)
+                             .astype(np.int32)[None, :])[0])
+            c1 = int(_rgb565(np.clip(np.round(e1), 0, 255)
+                             .astype(np.int32)[None, :])[0])
+            if c0 == c1:                             # collapsed → flat block
                 out += bytes([c0 & 0xFF, (c0 >> 8) & 0xFF,
                               c1 & 0xFF, (c1 >> 8) & 0xFF, 0, 0, 0, 0])
                 continue
+            if c0 < c1:                              # keep c0>c1 → 4-colour mode
+                c0, c1 = c1, c0
+            # final index assignment against the quantised palette
             p0 = np.array(_unpack565(c0))
             p1 = np.array(_unpack565(c1))
-            palette = np.stack([
-                p0, p1,
-                (2 * p0 + p1) / 3.0,
-                (p0 + 2 * p1) / 3.0,
-            ])                                   # (4,3) in the decoder's space
-            # nearest palette colour per pixel
+            palette = np.stack([p0, p1,
+                                (2 * p0 + p1) / 3.0,
+                                (p0 + 2 * p1) / 3.0])
             d = ((blk[:, None, :] - palette[None, :, :]) ** 2).sum(axis=2)
-            idx = d.argmin(axis=1).astype(np.uint32)   # (16,)
+            idx = d.argmin(axis=1).astype(np.uint32)
             bits = 0
             for i in range(16):
                 bits |= int(idx[i]) << (2 * i)
