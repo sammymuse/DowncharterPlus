@@ -43,6 +43,7 @@ EXPERT_BASE = 96            # Green Expert
 OPEN_NOTE   = 95
 FORCE_ON    = 101           # force HOPO
 FORCE_OFF   = 102           # force strum
+TAP_NOTE    = 104           # Clone Hero/YARG tap marker (spans the tapped gems)
 STARPOWER   = 116
 SOLO        = 103
 KICK        = 96
@@ -253,18 +254,23 @@ def _guitar_track(name: str, lines, tpb: int) -> mido.MidiTrack:
                 evs.append((tick, mido.Message("note_on", note=EXPERT_BASE + f, velocity=100, time=0)))
                 evs.append((end, mido.Message("note_off", note=EXPERT_BASE + f, velocity=0, time=0)))
             cur = frets
-        # Natural HOPO (single, different fret, short gap) — forced inverts; tap forces HOPO.
-        single = len(cur) == 1 and not g["open"]
-        natural = single and cur != prev_frets and (tick - prev_tick) <= hopo_thresh
-        desired = (not natural) if g["forced"] else natural
+        # Tap is its OWN gameplay type (no strum, played by tapping) — NOT a HOPO.
+        # YARG/Clone Hero encode it with the tap marker (note 104) over the gem, and
+        # it overrides HOPO/strum forcing, so don't emit force markers for taps.
         if g["tap"]:
-            desired = True
-        if desired and not natural:
-            evs.append((tick, mido.Message("note_on", note=FORCE_ON, velocity=100, time=0)))
-            evs.append((tick + 1, mido.Message("note_off", note=FORCE_ON, velocity=0, time=0)))
-        elif natural and not desired:
-            evs.append((tick, mido.Message("note_on", note=FORCE_OFF, velocity=100, time=0)))
-            evs.append((tick + 1, mido.Message("note_off", note=FORCE_OFF, velocity=0, time=0)))
+            evs.append((tick, mido.Message("note_on", note=TAP_NOTE, velocity=100, time=0)))
+            evs.append((end, mido.Message("note_off", note=TAP_NOTE, velocity=0, time=0)))
+        else:
+            # Natural HOPO (single, different fret, short gap) — a forced flag inverts it.
+            single = len(cur) == 1 and not g["open"]
+            natural = single and cur != prev_frets and (tick - prev_tick) <= hopo_thresh
+            desired = (not natural) if g["forced"] else natural
+            if desired and not natural:
+                evs.append((tick, mido.Message("note_on", note=FORCE_ON, velocity=100, time=0)))
+                evs.append((tick + 1, mido.Message("note_off", note=FORCE_ON, velocity=0, time=0)))
+            elif natural and not desired:
+                evs.append((tick, mido.Message("note_on", note=FORCE_OFF, velocity=100, time=0)))
+                evs.append((tick + 1, mido.Message("note_off", note=FORCE_OFF, velocity=0, time=0)))
         prev_tick, prev_frets = tick, cur
     _add_sp_solo(evs, sp, solos)
     # Opens are charted as the note one below green (95/83/71/59 = "ENHANCED_OPENS").
