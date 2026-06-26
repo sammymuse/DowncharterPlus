@@ -280,9 +280,14 @@ def _diff_already_charted(events: list[AbsEvent], diff: str) -> bool:
     band (gems + open + force/markers of that difficulty). Used to SKIP regenerating
     a difficulty that the author already charted (option A), avoiding duplicate notes.
     Each difficulty occupies a separate 8-note band (Expert 95-102, Hard 83-90,
-    Medium 71-78, Easy 59-66) so the bands never overlap."""
+    Medium 71-78, Easy 59-66) so the bands never overlap.
+
+    Only a real GEM counts (open at base-1 … Orange at base+4). The force HOPO/strum
+    modifiers (base+5/base+6) are NOT gems: a .chart→.mid conversion can leave stray
+    force markers in the lower-difficulty bands with no notes under them, which used
+    to make us think the difficulty was authored and SKIP generating it."""
     base = EXPERT_BASE + DIFF_OFFSET[diff]
-    lo, hi = base - 1, base + 6      # open (base-1) … force-strum (base+6)
+    lo, hi = base - 1, base + 4      # open (base-1) … Orange fret (base+4)
     for ev in events:
         if (ev.msg.type == "note_on" and ev.msg.velocity > 0
                 and lo <= getattr(ev.msg, "note", -1) <= hi):
