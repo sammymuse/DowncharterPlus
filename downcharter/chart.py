@@ -249,8 +249,45 @@ def _guitar_track(name: str, lines, tpb: int) -> mido.MidiTrack:
     return _track_from_events(name, evs)
 
 
+def _map_drum_lane(lane: int, frets: set[int], five_lane: bool) -> tuple[int | None, int | None]:
+    """Map a .chart drum lane → (RB pad note, tom-marker note or None).
+
+    4-lane (Pro) charts pass through unchanged: 0..4 → kick/R/Y/B/G, with
+    yellow/blue/green getting a tom marker (110/111/112) so they default to toms.
+
+    5-lane (GH) charts must FOLD orange(4)+green(5) into RB's single green lane.
+    Both naively mapped to green (100) → simultaneous orange+green LOSES a note.
+    Onyx-style collision-free fold:
+      • orange(4) → green (100), a cymbal (no tom marker)
+      • green(5)  → green (100) normally, but → blue (99) when orange is also hit
+                    at the same tick (a tom). yellow(2)/orange(4) are cymbals,
+                    blue(3)/green(5) are toms (GH kit convention).
+    Returns (None, None) for lanes that aren't pads (handled elsewhere)."""
+    if not five_lane:
+        pad = DRUM_PAD.get(lane)
+        tom = DRUM_TOM_MARKER.get(lane)
+        return pad, tom
+    # 5-lane GH fold
+    if lane == 0:
+        return 96, None                       # kick
+    if lane == 1:
+        return 97, None                       # red / snare
+    if lane == 2:
+        return 98, None                       # yellow → cymbal (no tom marker)
+    if lane == 3:
+        return 99, 111                        # blue → tom
+    if lane == 4:
+        return 100, None                      # orange → green cymbal (no tom marker)
+    if lane == 5:                             # green
+        if 4 in frets:                        # orange also hit → move green to blue tom
+            return 99, 111
+        return 100, 112                       # green tom
+    return None, None
+
+
 def _drums_track(name: str, lines, tpb: int) -> mido.MidiTrack:
     gems, sp, solos = _gems_by_tick(lines, is_drums=True)
+    five_lane = any(5 in g["frets"] for g in gems.values())
     evs: list[tuple[int, mido.Message]] = []
     for tick in sorted(gems):
         g = gems[tick]
@@ -258,17 +295,18 @@ def _drums_track(name: str, lines, tpb: int) -> mido.MidiTrack:
         if g["kick2x"]:
             evs.append((tick, mido.Message("note_on", note=KICK_2X, velocity=100, time=0)))
             evs.append((end, mido.Message("note_off", note=KICK_2X, velocity=0, time=0)))
+        emitted: set[int] = set()             # RB pads already placed at this tick
         for lane in sorted(g["frets"]):
-            pad = DRUM_PAD.get(lane)
-            if pad is None:
+            pad, tom = _map_drum_lane(lane, g["frets"], five_lane)
+            if pad is None or pad in emitted:  # skip true duplicates (never silent loss)
                 continue
+            emitted.add(pad)
             evs.append((tick, mido.Message("note_on", note=pad, velocity=100, time=0)))
             evs.append((end, mido.Message("note_off", note=pad, velocity=0, time=0)))
-            # tom marker: yellow/blue/green are TOM by default; cymbal (66/67/68) cancels it.
-            if lane in DRUM_TOM_MARKER and lane not in g["cymbals"]:
-                tm = DRUM_TOM_MARKER[lane]
-                evs.append((tick, mido.Message("note_on", note=tm, velocity=100, time=0)))
-                evs.append((end, mido.Message("note_off", note=tm, velocity=0, time=0)))
+            # 4-lane: explicit chart cymbal flag (66/67/68) cancels the default tom.
+            if tom is not None and not (not five_lane and lane in g["cymbals"]):
+                evs.append((tick, mido.Message("note_on", note=tom, velocity=100, time=0)))
+                evs.append((end, mido.Message("note_off", note=tom, velocity=0, time=0)))
     _add_sp_solo(evs, sp, solos)
     return _track_from_events(name, evs)
 
