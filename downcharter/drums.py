@@ -414,15 +414,14 @@ def reduce_hard(gems: list, ctx: Ctx) -> list:
     for t, note in collapse_fill(gems, fill_ticks, ctx, EIGHTH_MIN_MS["hard"]):
         keep.add((t, note))
 
-    # H5 — SNARE: groove backbone, but no consecutive snares closer than 1/8 (removes
-    # ~half the accents consistently). The official Hard charts DROP the ghost snares
-    # that fall on a sub-16th position (between the eighths) — measured: those onsets
-    # were almost all ghosts (vel<100) and were ~1700 false snares. Keeping the snare
-    # only on the EIGHTH grid (on-beat OR off-eighth, both survive — math-derived from
-    # tpb, no snap) raised snare precision 74.9→89.9% for −3.9pp snare recall (overall
-    # Hard precision +5.7pp at −0.4pp recall).
-    snare = sorted(t for t, n, *_ in gems if n == SNARE_NOTE and t not in fill_ticks
-                   and (ctx.is_onbeat(t) or ctx.is_offbeat(t)))
+    # H5 — SNARE: groove backbone, no consecutive snares closer than 1/8. We DON'T
+    # pre-filter to the eighth grid: that dropped a sub-16th ghost while keeping an
+    # on-grid ghost crammed against the next strong hit (e.g. Ritual t=90360 vs 90480,
+    # both vel=1 → the earlier, better-spaced one is the musical choice). Instead the
+    # velocity+phase thinner decides over ALL snares: in a collision the ACCENT wins
+    # (louder over ghost) and, on a tie, the earlier/strong-beat note — which keeps the
+    # better-spaced ghost. Learn-set: pos/padok flat vs the old grid filter.
+    snare = sorted(t for t, n, *_ in gems if n == SNARE_NOTE and t not in fill_ticks)
     svel = {t: bt[t][SNARE_NOTE][1] for t in snare}
     min_gap = ctx.tpb // 2 - ctx.tpb // 16   # 1/8 with 1/16 slack
     for t in thin_lane_strong(snare, ctx, min_gap, vel=svel):
