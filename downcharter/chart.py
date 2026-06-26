@@ -218,12 +218,14 @@ def _guitar_track(name: str, lines, tpb: int) -> mido.MidiTrack:
     evs: list[tuple[int, mido.Message]] = []
     prev_tick = -10 ** 9
     prev_frets: frozenset[int] = frozenset()
+    has_open = False
     for tick in sorted(gems):
         g = gems[tick]
         frets = frozenset(f for f in g["frets"] if f <= 4)
         length = g["len"]
         end = tick + (length if length > 0 else 1)
         if g["open"]:
+            has_open = True
             evs.append((tick, mido.Message("note_on", note=OPEN_NOTE, velocity=100, time=0)))
             evs.append((end, mido.Message("note_off", note=OPEN_NOTE, velocity=0, time=0)))
             cur = frozenset({-1})
@@ -246,6 +248,12 @@ def _guitar_track(name: str, lines, tpb: int) -> mido.MidiTrack:
             evs.append((tick + 1, mido.Message("note_off", note=FORCE_OFF, velocity=0, time=0)))
         prev_tick, prev_frets = tick, cur
     _add_sp_solo(evs, sp, solos)
+    # Opens are charted as the note one below green (95/83/71/59 = "ENHANCED_OPENS").
+    # YARG/Clone Hero/Moonscraper only read that below-green note as an open strum if
+    # the track is flagged with a `[ENHANCED_OPENS]` text event — without it they
+    # silently drop the note (the open notes "disappear" in-game). Emit it at tick 0.
+    if has_open:
+        evs.append((0, mido.MetaMessage("text", text="[ENHANCED_OPENS]", time=0)))
     return _track_from_events(name, evs)
 
 
