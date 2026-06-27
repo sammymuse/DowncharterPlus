@@ -1,7 +1,10 @@
 """mogg.py — build a native Rock Band .mogg from separate YARG/CH stems.
 
 A YARG/Clone-Hero song folder ships its audio as separate stems
-(drums.ogg, bass.ogg, guitar.ogg, vocals.ogg, song.ogg, …). Rock Band wants a
+(drums.ogg, bass.ogg, guitar.ogg, vocals.ogg, song.ogg, …) OR as a single
+full-mix file (song.mp3, song.wav, …). Any of .ogg/.opus/.wav/.flac/.mp3 work
+(libsndfile decodes them all without ffmpeg); a pre-built .mogg is reused
+verbatim upstream so it never reaches this builder. Rock Band wants a
 single multichannel Ogg Vorbis with an 8-byte header — the ".mogg". This module
 decodes the stems, interleaves them into one N-channel OGG (libsndfile/soundfile
 handle multichannel Vorbis), and prepends the unencrypted mogg header:
@@ -30,6 +33,9 @@ _STEM_ORDER = [
     ("song",   ("song", "backing", "rhythm_track", "crowd")),
 ]
 
+# Audio stem extensions we can decode (libsndfile reads all of these without
+# ffmpeg). A single full-mix file (e.g. song.mp3) is enough — stems are optional.
+_AUDIO_EXT = (".ogg", ".opus", ".wav", ".flac", ".mp3")
 _NON_AUDIO = (".mogg",)
 
 
@@ -49,7 +55,7 @@ def collect_stems(folder: str) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for f in sorted(os.listdir(folder)):
         low = f.lower()
-        if low.endswith((".ogg", ".opus", ".wav", ".flac")) and not low.endswith(_NON_AUDIO):
+        if low.endswith(_AUDIO_EXT) and not low.endswith(_NON_AUDIO):
             found.append((_classify(f), os.path.join(folder, f)))
     order = {name: i for i, (name, _) in enumerate(_STEM_ORDER)}
     found.sort(key=lambda tp: (order.get(tp[0], 99), os.path.basename(tp[1]).lower()))
@@ -89,7 +95,8 @@ def build_mogg_from_stems(folder: str, out_path: str, log_fn=None):
     log = log_fn or (lambda *a, **k: None)
     stems = collect_stems(folder)
     if not stems:
-        raise FileNotFoundError("no audio stems (.ogg/.wav) found to build a .mogg")
+        raise FileNotFoundError(
+            "no audio (.ogg/.opus/.wav/.flac/.mp3 or a .mogg) found to build a .mogg")
 
     decoded = []
     base_sr = None
