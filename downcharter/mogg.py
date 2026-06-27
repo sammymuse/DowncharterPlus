@@ -48,15 +48,20 @@ def _classify(filename: str) -> str | None:
 
 
 def collect_stems(folder: str) -> list[tuple[str, str]]:
-    """Return [(track_name, path)] for every audio stem in `folder`, ordered by
-    the RB track order in _STEM_ORDER. Excludes any existing .mogg."""
+    """Return [(track_name, path)] for every audio stem under `folder`, ordered by
+    the RB track order in _STEM_ORDER. Excludes any existing .mogg.
+
+    Walks recursively so audio living in a subfolder is found — matching the
+    recursive source discovery in ps3build (_find_one). The .mogg-output dir is
+    skipped so a freshly written package never feeds back in as a stem source."""
     if not os.path.isdir(folder):
         return []
     found: list[tuple[str, str]] = []
-    for f in sorted(os.listdir(folder)):
-        low = f.lower()
-        if low.endswith(_AUDIO_EXT) and not low.endswith(_NON_AUDIO):
-            found.append((_classify(f), os.path.join(folder, f)))
+    for root, _, files in os.walk(folder):
+        for f in sorted(files):
+            low = f.lower()
+            if low.endswith(_AUDIO_EXT) and not low.endswith(_NON_AUDIO):
+                found.append((_classify(f), os.path.join(root, f)))
     order = {name: i for i, (name, _) in enumerate(_STEM_ORDER)}
     found.sort(key=lambda tp: (order.get(tp[0], 99), os.path.basename(tp[1]).lower()))
     return found
