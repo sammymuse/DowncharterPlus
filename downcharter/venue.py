@@ -856,7 +856,7 @@ def build_pyro(sections: list[Section], drum_onsets: list[int],
 # sections and many bars in calm ones, then SWITCH FAST only inside intense walls
 # (handled by the burst path below). Sparse/ballad songs sit at ~6 pp/min, frantic
 # metalcore at ~180 — so the calm hold is deliberately long.
-_PP_CADENCE = {"calm": 12.0, "mid": 5.0, "high": 3.0}
+_PP_CADENCE = {"calm": 16.0, "mid": 8.0, "high": 5.0}
 
 # Inside a strobe/blast wall the official venues alternate TWO filters on a fast
 # subdivision (e.g. BMTH/Dethklok flicker photocopy↔video_security every ⅓–½ beat).
@@ -955,12 +955,16 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
                 if ws <= t < we:
                     wall_start = ws
                     break
-            if wall_start is not None and wall_start not in bursted:
+            # Only flicker inside HIGH-energy walls. Atmospheric / mid songs hold a
+            # filter through their blast/tremolo walls (note density does NOT predict
+            # pp density — pp_study corr≈0.04 — so the burst is gated on the local
+            # energy tier, not on the wall alone). This keeps sparse songs sparse.
+            if wall_start is not None and tier == "high" and wall_start not in bursted:
                 bursted.add(wall_start)
                 a = palette[i % len(palette)]
                 b = palette[(i + 1) % len(palette)] if len(palette) > 1 else a
                 bar = measure_ticks_at(t, time_sig_map, tpb)
-                burst_end = min(t + 2 * bar, s.end)
+                burst_end = min(t + bar, s.end)
                 sub = max(1, int(beat * _PP_BURST_SUBDIV))
                 k = 0
                 tt = t
