@@ -672,6 +672,28 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     if san["overlaps_fixed"] or san["sysex_removed"]:
         log(f"    ◇ mid: RB-safety — fixed {san['overlaps_fixed']} overlapping "
             f"note(s), removed {san['sysex_removed']} Phase Shift sysex\n", "info")
+    # b3) Onyx no-Magma fixups: remove note-less overdrive phrases (fixNotelessOD)
+    #     and add missing drum [mix] events (drumsComplete).
+    out_mid, fx = _convert.apply_rb_fixups(out_mid)
+    if fx["noteless_od_removed"] or fx["drum_mix_added"]:
+        log(f"    ◇ mid: removed {fx['noteless_od_removed']} empty overdrive "
+            f"phrase(s), added {fx['drum_mix_added']} drum mix event(s)\n", "info")
+    # b4) Lead-in pad (Onyx magmaPad): RB3 needs >=2 beats before the first gem or
+    #     it can reject/hang. We can only pad when we BUILD the mogg from stems
+    #     (so matching silence is prepended); a verbatim source mogg is left as-is.
+    pad_seconds = 0.0
+    if mogg_path is None:
+        pad_ticks = _convert.lead_in_pad_ticks(out_mid, min_beats=2.0)
+        if pad_ticks > 0:
+            tmap = build_tempo_map(out_mid)
+            init_us = tmap[0][1] if tmap else 500000
+            pad_seconds = pad_ticks / out_mid.ticks_per_beat * (init_us / 1_000_000.0)
+            out_mid = _convert.pad_start(out_mid, pad_ticks)
+            log(f"    ◇ mid: padded {pad_ticks} tick(s) ({pad_seconds:.3f}s) of "
+                f"lead-in before the first gem\n", "info")
+    elif _convert.lead_in_pad_ticks(out_mid, min_beats=2.0) > 0:
+        log("    ⚠ mid: short lead-in but source mogg is reused verbatim — "
+            "cannot pad audio, left unpadded\n", "warn")
     # NOTE: drummer limb animations (PART DRUMS 24-51) are authored during MIDI
     # processing (processor → convert.generate_drum_animations), so the notes.mid
     # already carries them. We do NOT synthesise them here at conversion time.
@@ -706,7 +728,8 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
         shutil.copy2(mogg_path, out_mogg)
         log(f"    ◇ mogg: copied ({os.path.basename(mogg_path)})\n", "info")
     else:
-        mogg_layout = _mogg.build_mogg_from_stems(src_folder, out_mogg, log)
+        mogg_layout = _mogg.build_mogg_from_stems(src_folder, out_mogg, log,
+                                                  pad_seconds=pad_seconds)
 
     # 3) MILO: build OUR lipsync milo here — this is the ONLY place a milo is made.
     #    Processing already authored the audio-guided LIPSYNC1 track; we reconstruct

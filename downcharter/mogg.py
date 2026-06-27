@@ -93,13 +93,17 @@ def _resample(data, sr_from: int, sr_to: int):
     return out
 
 
-def build_mogg_from_stems(folder: str, out_path: str, log_fn=None):
+def build_mogg_from_stems(folder: str, out_path: str, log_fn=None,
+                          pad_seconds: float = 0.0):
     """Build `out_path` (.mogg) from the stems in `folder`.
 
     Returns a list describing the channel layout:
         [(track_name, [channel_index, ...]), ...]
     in the order the channels appear in the mogg. Raises if there are no stems.
-    """
+
+    `pad_seconds` prepends that much silence to every channel so the audio stays
+    in sync with a MIDI that was lead-in-padded for RB3 (convert.pad_start /
+    Onyx magmaPad). 0.0 = no padding (the normal case)."""
     import numpy as np
     import soundfile as sf
 
@@ -131,6 +135,13 @@ def build_mogg_from_stems(folder: str, out_path: str, log_fn=None):
 
     # Resample everything to the first stem's rate, pad to the longest length.
     resampled = [(t, _resample(d, sr, base_sr)) for (t, d, sr) in decoded]
+    # Lead-in silence (kept in lockstep with a lead-in-padded MIDI).
+    pad_frames = int(round(max(0.0, pad_seconds) * base_sr))
+    if pad_frames:
+        resampled = [(t, np.concatenate(
+            [np.zeros((pad_frames, d.shape[1] if d.ndim == 2 else 1), "float32"),
+             d if d.ndim == 2 else d.reshape(-1, 1)], axis=0)) for (t, d) in resampled]
+        log(f"    ◇ mogg: prepended {pad_seconds:.3f}s lead-in silence\n", "info")
     max_len = max((len(d) for _, d in resampled), default=0)
 
     layout: list[tuple[str, list[int]]] = []

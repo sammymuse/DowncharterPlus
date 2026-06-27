@@ -710,3 +710,210 @@ def sanitize_for_rb(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
                                     for t, m in merged]))
 
     return out, {"overlaps_fixed": overlaps_fixed, "sysex_removed": sysex_removed}
+
+
+# ── Onyx no-Magma fixups (PACK step only) ──────────────────────────────────────
+# Ported from the corrections Onyx applies when building an RB3 song WITHOUT the
+# Magma compiler (mtolly/onyx Onyx/Build/RB3CH.hs `processMIDI`). These are the
+# minimum guarantees Magma would otherwise enforce; the ones below genuinely
+# affect whether RB3 loads/plays a song. Each is a no-op when nothing needs fixing
+# and never mutates the input. Audio-coupled fixups (lead-in pad) are separate so
+# the caller can prepend matching silence to the mogg.
+
+_OVERDRIVE_NOTE = 116          # the single overdrive/star-power marker (all parts)
+_GEM_LO, _GEM_HI = 60, 100     # gem lane span across Easy..Expert (5-fret + drums)
+
+# Drum difficulty → the lowest gem pitch of that difficulty (used to know which
+# difficulties are actually charted so we only mix events that exist).
+_DRUM_DIFF_BASE = {0: 60, 1: 72, 2: 84, 3: 96}   # Easy/Medium/Hard/Expert
+
+
+def _is_drums_name(name) -> bool:
+    return "DRUM" in (name or "").strip().upper()
+
+
+def _remove_noteless_overdrive(track) -> int:
+    """Onyx `fixNotelessOD`: drop note-116 overdrive phrases that contain no gem
+    in any difficulty. An empty overdrive phrase is rejected by Magma and can
+    make RB3 choke when it tries to award star-power over nothing. Mutates the
+    given (absolute-event) list in place via rebuild; returns count removed."""
+    abs_evts = to_abs(track)
+    # Overdrive on/off spans.
+    od_spans: list[list[int]] = []           # [on_tick, off_tick, on_idx, off_idx]
+    open_on = None
+    gem_ticks: list[int] = []
+    for i, e in enumerate(abs_evts):
+        m = e.msg
+        n = getattr(m, "note", None)
+        if n is None:
+            continue
+        if n == _OVERDRIVE_NOTE:
+            if _msg_is_on(m):
+                open_on = (e.abs_tick, i)
+            elif _msg_is_off(m) and open_on is not None:
+                od_spans.append([open_on[0], e.abs_tick, open_on[1], i])
+                open_on = None
+        elif _msg_is_on(m) and _GEM_LO <= n <= _GEM_HI:
+            gem_ticks.append(e.abs_tick)
+    if not od_spans:
+        return 0
+    gem_ticks.sort()
+    import bisect
+    drop_idx: set[int] = set()
+    removed = 0
+    for on_t, off_t, on_i, off_i in od_spans:
+        lo = bisect.bisect_left(gem_ticks, on_t)
+        hi = bisect.bisect_left(gem_ticks, off_t)
+        if hi <= lo:                          # no gem onset inside [on, off)
+            drop_idx.add(on_i)
+            drop_idx.add(off_i)
+            removed += 1
+    if not removed:
+        return 0
+    kept = [e for i, e in enumerate(abs_evts) if i not in drop_idx]
+    new_tr = to_track(kept)
+    new_tr.name = track.name
+    track[:] = new_tr
+    return removed
+
+
+def _add_drum_mix_events(track) -> int:
+    """Onyx `drumsComplete` (mix portion): RB3 needs a ``[mix <diff> drums0]`` text
+    event for each charted drum difficulty, or the drum audio mapping is undefined
+    (silent kit / possible hang). We add the missing ones at tick 0 — but only if
+    the track carries NO ``[mix ...]`` events at all (an authored mix is left
+    untouched). ``drums0`` = single (stereo) drum stem, the YARG/CH norm; sources
+    with separate kick/snare stems ship their own mix events, so we never override.
+    Returns the number of mix events added."""
+    has_mix = any(getattr(m, "text", "").strip().lower().startswith("[mix")
+                  for m in track if m.type in ("text", "lyrics"))
+    if has_mix:
+        return 0
+    charted = {d for d, base in _DRUM_DIFF_BASE.items()
+               if any(_msg_is_on(m) and base <= getattr(m, "note", -1) <= base + 4
+                      for m in track)}
+    if not charted:
+        return 0
+    # Insert "[mix d drums0]" text events at the very front (tick 0).
+    abs_evts = to_abs(track)
+    new_front = []
+    from .midi_utils import AbsEvent
+    for d in sorted(charted):
+        new_front.append(AbsEvent(abs_tick=0,
+                                  msg=mido.MetaMessage("text",
+                                                       text=f"[mix {d} drums0]",
+                                                       time=0)))
+    new_tr = to_track(new_front + abs_evts)
+    new_tr.name = track.name
+    track[:] = new_tr
+    return len(charted)
+
+
+def apply_rb_fixups(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
+    """Apply Onyx's no-Magma MIDI fixups that affect RB3 load/playback, returning
+    a NEW MidiFile and a stats dict. Currently: remove note-less overdrive phrases
+    (`fixNotelessOD`) on every instrument track, and add missing drum `[mix]`
+    events (`drumsComplete`) on PART DRUMS. No-op where nothing needs fixing;
+    never mutates the input. The lead-in pad is handled separately (it needs the
+    mogg padded in lockstep)."""
+    out = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
+    for track in mid.tracks:
+        new_tr = mido.MidiTrack()
+        new_tr.name = track.name
+        for m in track:
+            new_tr.append(m.copy())
+        out.tracks.append(new_tr)
+
+    od_removed = mix_added = 0
+    for tr in out.tracks:
+        nm = (tr.name or "").strip().upper()
+        if not nm or nm in ("BEAT", "VENUE", "EVENTS"):
+            continue
+        od_removed += _remove_noteless_overdrive(tr)
+        # Drum [mix] only on the standard PART DRUMS (not PART REAL_DRUMS_PS etc,
+        # which RB3 doesn't read and which would get a spurious mix event).
+        if nm == "PART DRUMS":
+            mix_added += _add_drum_mix_events(tr)
+    return out, {"noteless_od_removed": od_removed, "drum_mix_added": mix_added}
+
+
+def lead_in_pad_ticks(mid: mido.MidiFile, min_beats: float = 2.0) -> int:
+    """Ticks of silence to prepend so the first gem sits at least `min_beats` beats
+    from the song start (Onyx `magmaPad`). RB3 needs lead-in before the first note;
+    a chart starting at tick 0 (no BEAT lead-in) is rejected/can hang. Returns 0
+    when the chart already has enough lead-in."""
+    tpb = mid.ticks_per_beat
+    first = None
+    for tr in mid.tracks:
+        nm = (tr.name or "").strip().upper()
+        # Only instrument/vocal PART tracks carry gems; skip BEAT/VENUE/EVENTS.
+        if not nm.startswith("PART"):
+            continue
+        t = 0
+        for m in tr:
+            t += m.time
+            if _msg_is_on(m) and _GEM_LO <= getattr(m, "note", -1) <= _GEM_HI:
+                first = t if first is None else min(first, t)
+                break
+    if first is None:
+        return 0
+    need = int(round(min_beats * tpb))
+    return max(0, need - first)
+
+
+def pad_start(mid: mido.MidiFile, pad_ticks: int) -> mido.MidiFile:
+    """Return a NEW MidiFile with every event delayed by `pad_ticks`, with the
+    initial tempo and time-signature duplicated at tick 0 so the silent lead-in is
+    well-defined, and BEAT downbeats/upbeats filled across the lead-in. Mirrors
+    Onyx `magmaPad` (which also prepends matching silence to the audio — the caller
+    does that to the mogg). No-op when pad_ticks <= 0; never mutates the input."""
+    if pad_ticks <= 0:
+        return mid
+    out = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
+    tpb = mid.ticks_per_beat
+
+    # Initial tempo / time-sig to anchor the silent gap at tick 0.
+    init_tempo = next((m.tempo for tr in mid.tracks for m in tr
+                       if m.type == "set_tempo"), None)
+    init_ts = next(((m.numerator, m.denominator) for tr in mid.tracks for m in tr
+                    if m.type == "time_signature"), (4, 4))
+
+    for track in mid.tracks:
+        nm = (track.name or "").strip().upper()
+        abs_evts = to_abs(track)
+        shifted = [AbsEvent_shift(e, pad_ticks) for e in abs_evts]
+
+        front = []
+        # Anchor tempo/time-sig at tick 0 on whichever track originally held them.
+        if any(m.type == "set_tempo" for m in track) and init_tempo is not None:
+            front.append(_ev(0, mido.MetaMessage("set_tempo", tempo=init_tempo, time=0)))
+        if any(m.type == "time_signature" for m in track):
+            front.append(_ev(0, mido.MetaMessage("time_signature",
+                                                 numerator=init_ts[0],
+                                                 denominator=init_ts[1], time=0)))
+        # BEAT lead-in: fill beats across the pad so the validator sees >=2 beats.
+        if nm == "BEAT":
+            num = init_ts[0]
+            beat = 0
+            t = 0
+            while t < pad_ticks:
+                note = 12 if (beat % max(1, num) == 0) else 13
+                front.append(_ev(t, mido.Message("note_on", note=note, velocity=100, time=0)))
+                front.append(_ev(t + max(1, tpb // 8),
+                                 mido.Message("note_off", note=note, velocity=0, time=0)))
+                t += tpb
+                beat += 1
+        out.tracks.append(to_track(front + shifted))
+    if getattr(out, "_merged_track", None) is not None:
+        out._merged_track = None
+    return out
+
+
+def _ev(tick, msg):
+    from .midi_utils import AbsEvent
+    return AbsEvent(abs_tick=tick, msg=msg)
+
+
+def AbsEvent_shift(e, pad_ticks):
+    from .midi_utils import AbsEvent
+    return AbsEvent(abs_tick=e.abs_tick + pad_ticks, msg=e.msg.copy())

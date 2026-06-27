@@ -402,6 +402,25 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     if san["overlaps_fixed"] or san["sysex_removed"]:
         log(f"    > mid: RB-safety - fixed {san['overlaps_fixed']} overlapping "
             f"note(s), removed {san['sysex_removed']} Phase Shift sysex\n", "info")
+    # Onyx no-Magma fixups: empty overdrive (fixNotelessOD) + drum [mix] events.
+    out_mid, fx = _convert.apply_rb_fixups(out_mid)
+    if fx["noteless_od_removed"] or fx["drum_mix_added"]:
+        log(f"    > mid: removed {fx['noteless_od_removed']} empty overdrive "
+            f"phrase(s), added {fx['drum_mix_added']} drum mix event(s)\n", "info")
+    # Lead-in pad (magmaPad): only when building the mogg from stems.
+    pad_seconds = 0.0
+    if mogg_path is None:
+        pad_ticks = _convert.lead_in_pad_ticks(out_mid, min_beats=2.0)
+        if pad_ticks > 0:
+            tmap = _ps3.build_tempo_map(out_mid)
+            init_us = tmap[0][1] if tmap else 500000
+            pad_seconds = pad_ticks / out_mid.ticks_per_beat * (init_us / 1_000_000.0)
+            out_mid = _convert.pad_start(out_mid, pad_ticks)
+            log(f"    > mid: padded {pad_ticks} tick(s) ({pad_seconds:.3f}s) "
+                f"lead-in before the first gem\n", "info")
+    elif _convert.lead_in_pad_ticks(out_mid, min_beats=2.0) > 0:
+        log("    ! mid: short lead-in but source mogg reused verbatim - "
+            "cannot pad audio, left unpadded\n", "warn")
     charted = _charted_instruments(out_mid)
     # crash-relevant sanity gate (pack time only) — advisory, never fatal.
     try:
@@ -439,7 +458,8 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     else:
         import tempfile
         tmp = os.path.join(tempfile.gettempdir(), f"{shortname}.mogg")
-        mogg_layout = _mogg.build_mogg_from_stems(src_folder, tmp, log)
+        mogg_layout = _mogg.build_mogg_from_stems(src_folder, tmp, log,
+                                                  pad_seconds=pad_seconds)
         with open(tmp, "rb") as f:
             files[f"{base}/{shortname}.mogg"] = f.read()
         try:
