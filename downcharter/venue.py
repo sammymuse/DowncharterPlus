@@ -381,14 +381,14 @@ SECTION_PP_POOL = {
     # film_contrast_blue, video_security, ProFilm_a, film_b+w). contrast_a/desat_blue/
     # film_blue_filter (official 3/12/7 — nearly nil) drop out of the pools.
     "intro":      ["photocopy", "film_16mm", "video_bw", "ProFilm_a"],
-    "verse":      ["desat_posterize_trails", "film_contrast_blue", "video_a", "photocopy"],
-    "prechorus":  ["film_contrast_red", "desat_posterize_trails", "video_a", "clean_trails"],
-    "chorus":     ["film_contrast_red", "clean_trails", "bloom", "bright"],
+    "verse":      ["desat_posterize_trails", "film_contrast_blue", "film_contrast_red", "photocopy"],
+    "prechorus":  ["film_contrast_red", "desat_posterize_trails", "shitty_tv", "clean_trails"],
+    "chorus":     ["film_contrast_red", "clean_trails", "bloom", "video_trails"],
     "postchorus": ["film_contrast_red", "clean_trails", "bloom", "film_contrast"],
-    "bridge":     ["video_trails", "shitty_tv", "posterize", "video_security", "ProFilm_mirror_a"],
-    "solo":       ["video_trails", "flicker_trails", "ProFilm_mirror_a", "posterize"],
+    "bridge":     ["video_trails", "shitty_tv", "posterize", "video_security", "video_bw"],
+    "solo":       ["video_trails", "flicker_trails", "shitty_tv", "posterize"],
     "breakdown":  ["film_contrast_red", "horror_movie_special", "shitty_tv", "photo_negative", "video_security"],
-    "build":      ["clean_trails", "space_woosh", "film_contrast", "bright"],
+    "build":      ["clean_trails", "space_woosh", "film_contrast", "film_contrast_red"],
     "drop":       ["film_contrast_red", "flicker_trails", "space_woosh", "photo_negative"],
     "riff":       ["film_contrast_red", "desat_posterize_trails", "film_contrast", "ProFilm_b"],
     "outro":      ["film_b+w", "video_bw", "ProFilm_b", "film_silvertone", "film_sepia_ink"],
@@ -889,7 +889,7 @@ _PP_BURST_SUBDIV = 0.5
 # section = pool untouched (no-op). Song-relative — no absolute brightness.
 _PP_DARK = ("b+w", "bw", "sepia", "silvertone", "photocopy", "desat", "16mm",
             "security", "negative")
-_PP_BRIGHT = ("bright", "bloom", "clean", "contrast", "profilm", "video_a")
+_PP_BRIGHT = ("clean", "contrast", "bloom", "profilm")
 
 
 def _pp_tone_pool(pool: list[str], warmth: str | None) -> list[str]:
