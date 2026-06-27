@@ -615,7 +615,11 @@ class App(tk.Tk):
                 else "…" + self._conv_out[-50:]
             self._conv_out_lbl.config(text=short, fg=FG2)
 
+        # ── ROCK BAND section (PS3 folder + Xbox CON — bass pedal applies) ──
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
+        tk.Label(body, text="ROCK BAND  (PS3 / Xbox 360 · our milo — no Onyx)",
+                 font=(MONO, 10, "bold"), fg=RED, bg=BG, anchor="w").pack(
+                     anchor="w", pady=(0, 8))
         self._lbl("BASS PEDAL  (RB3 doesn't read YARG-style Expert+)", body).pack(
             anchor="w", pady=(0, 6))
         ped_row = tk.Frame(body, bg=BG)
@@ -629,25 +633,29 @@ class App(tk.Tk):
         tk.Label(body, text="1× removes Expert+ doubles  ·  2× forces doubles to always play",
                  font=(MONO, 8), fg=FG3, bg=BG, anchor="w").pack(anchor="w", pady=(2, 10))
 
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 12))
-        tk.Label(body, text="Same milo/dta/mogg — only the container differs  "
-                            "(our milo — no Onyx)",
+        self._btn_ps3 = StyledButton(body, "⬢  BUILD PS3 FOLDER",
+                                     lambda: self._run_native_convert("ps3"),
+                                     accent=True, width=220, height=40)
+        self._btn_ps3.pack(anchor="w", pady=(0, 8))
+        self._btn_con = StyledButton(body, "⬢  BUILD CON",
+                                     lambda: self._run_native_convert("xbox"),
+                                     accent=True, width=220, height=40)
+        self._btn_con.pack(anchor="w", pady=(0, 14))
+
+        # ── SNG section (YARG / Clone Hero — verbatim repackage of the folder) ──
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
+        tk.Label(body, text="YARG / CLONE HERO",
+                 font=(MONO, 10, "bold"), fg=RED, bg=BG, anchor="w").pack(
+                     anchor="w", pady=(0, 6))
+        tk.Label(body, text="Packs the song folder as-is into a .sng container  "
+                            "(no pedal variants, no validation, no milo).",
                  font=(MONO, 8), fg=FG3, bg=BG, anchor="w",
                  justify="left", wraplength=520).pack(anchor="w", pady=(0, 8))
-        btn_row = tk.Frame(body, bg=BG)
-        btn_row.pack(fill="x", pady=(0, 14))
-        self._btn_ps3 = StyledButton(btn_row, "⬢  BUILD PS3 FOLDER",
-                                     lambda: self._run_native_convert("ps3"),
-                                     accent=True, width=200, height=40)
-        self._btn_ps3.pack(side="left")
-        self._btn_con = StyledButton(btn_row, "⬢  BUILD CON",
-                                     lambda: self._run_native_convert("xbox"),
-                                     width=150, height=40)
-        self._btn_con.pack(side="left", padx=(8, 0))
-        self._btn_sng = StyledButton(btn_row, "⬢  BUILD SNG",
+        self._btn_sng = StyledButton(body, "⬢  BUILD SNG",
                                      lambda: self._run_native_convert("sng"),
-                                     width=150, height=40)
-        self._btn_sng.pack(side="left", padx=(8, 0))
+                                     accent=True, width=220, height=40)
+        self._btn_sng.pack(anchor="w", pady=(0, 14))
+
         self._conv_btns = (self._btn_ps3, self._btn_con, self._btn_sng)
         for b in self._conv_btns:
             b.set_enabled(bool(self._conv_folder and
@@ -699,6 +707,12 @@ class App(tk.Tk):
 
         def task():
             try:
+                if fmt == "sng":
+                    # Verbatim repackage — no pedal variants / validation / milo.
+                    from downcharter.sng import build_sng_song
+                    self._log("\n")
+                    build_sng_song(self._conv_folder, self._log, out_base=out_base)
+                    return
                 from downcharter.ps3build import source_has_double_kicks
                 if pedal == "both":
                     # Only emit a 2x build for songs that actually have doubles to
@@ -714,12 +728,9 @@ class App(tk.Tk):
                 if fmt == "ps3":
                     from downcharter.ps3build import build_ps3_song
                     builder = build_ps3_song
-                elif fmt == "xbox":
+                else:  # xbox
                     from downcharter.stfs import build_con_song
                     builder = build_con_song
-                else:  # sng
-                    from downcharter.sng import build_sng_song
-                    builder = build_sng_song
                 for mode in modes:
                     self._log(f"  ▸ {fmt_label} ({mode})\n", "info")
                     builder(self._conv_folder, mode, self._log, out_base=out_base)
