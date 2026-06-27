@@ -599,7 +599,12 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     # has double-kicks. A "2x" build only earns the 2x name/label when there are
     # note-95 markers to convert; otherwise it is byte-for-byte the plain 1x chart,
     # so it stays unsuffixed. The 1x mode is always the plain, unsuffixed song.
-    src_mid = mido.MidiFile(mid_path)
+    try:
+        src_mid = mido.MidiFile(mid_path)
+    except (ValueError, IOError):
+        # Phase Shift sysex carry an illegal 0xFF byte; strict parsing chokes.
+        # clip=True clamps it (we strip the sysex entirely below anyway).
+        src_mid = mido.MidiFile(mid_path, clip=True)
     # RB3 crashes on any time division other than 480 TPB. Our processed charts
     # are already 480, but a song packed without going through processing (or an
     # odd source .mid) may not be — force it here so every package is 480.
@@ -660,6 +665,13 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
         log(f"    ◇ mid: {os_stats['converted']} open note(s) remapped to green\n", "info")
     # b) bass-pedal variant on the drums kick lane
     out_mid, ks = _convert.apply_pedal_variant(src_mid, mode)
+    # b2) RB3 crash-safety: fix overlapping/stuck same-pitch notes and strip the
+    #     Phase Shift sysex (open/tap markers) the YARG/CH path keeps. Without this
+    #     a broken-chord/hung-sustain chart hangs RB3 in-game.
+    out_mid, san = _convert.sanitize_for_rb(out_mid)
+    if san["overlaps_fixed"] or san["sysex_removed"]:
+        log(f"    ◇ mid: RB-safety — fixed {san['overlaps_fixed']} overlapping "
+            f"note(s), removed {san['sysex_removed']} Phase Shift sysex\n", "info")
     # NOTE: drummer limb animations (PART DRUMS 24-51) are authored during MIDI
     # processing (processor → convert.generate_drum_animations), so the notes.mid
     # already carries them. We do NOT synthesise them here at conversion time.

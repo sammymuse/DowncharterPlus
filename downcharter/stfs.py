@@ -364,7 +364,10 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     ini_path = _find_one(src_folder, lambda p: os.path.basename(p).lower() == "song.ini")
     meta = _parse_song_ini(ini_path) if ini_path else {}
 
-    src_mid = mido.MidiFile(mid_path)
+    try:
+        src_mid = mido.MidiFile(mid_path)
+    except (ValueError, IOError):
+        src_mid = mido.MidiFile(mid_path, clip=True)   # Phase Shift 0xFF sysex
     # RB3 requires 480 TPB; normalise any non-480 source (see ps3build).
     _ps3.rescale_midi_tpb(src_mid, 480)
     has_2x = _convert.count_double_kicks(src_mid) > 0
@@ -393,6 +396,12 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     if os_stats["converted"]:
         log(f"    ◇ mid: {os_stats['converted']} open note(s) remapped to green\n", "info")
     out_mid, ks = _convert.apply_pedal_variant(src_mid, mode)
+    # RB3 crash-safety: fix overlapping/stuck same-pitch notes + strip Phase Shift
+    # sysex (open/tap markers) the YARG/CH path keeps.
+    out_mid, san = _convert.sanitize_for_rb(out_mid)
+    if san["overlaps_fixed"] or san["sysex_removed"]:
+        log(f"    > mid: RB-safety - fixed {san['overlaps_fixed']} overlapping "
+            f"note(s), removed {san['sysex_removed']} Phase Shift sysex\n", "info")
     charted = _charted_instruments(out_mid)
     # crash-relevant sanity gate (pack time only) — advisory, never fatal.
     try:

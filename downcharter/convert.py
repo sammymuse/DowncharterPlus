@@ -22,7 +22,7 @@ from __future__ import annotations
 import mido
 
 from .constants import DRUM_KICK_EXPERT, DRUM_KICK_2X
-from .midi_utils import build_tempo_map, tick_to_ms
+from .midi_utils import build_tempo_map, tick_to_ms, to_abs, to_track
 
 
 def _is_drums_track(track: mido.MidiTrack) -> bool:
@@ -602,3 +602,111 @@ def count_double_kicks(mid: mido.MidiFile) -> int:
                     and msg.note == DRUM_KICK_2X):
                 n += 1
     return n
+
+
+# ── RB3 crash-safety sanitiser (PACK step only) ────────────────────────────────
+def _msg_is_on(m) -> bool:
+    return m.type == "note_on" and getattr(m, "velocity", 0) > 0
+
+
+def _msg_is_off(m) -> bool:
+    return m.type == "note_off" or (m.type == "note_on"
+                                    and getattr(m, "velocity", 0) == 0)
+
+
+def _is_ps_sysex(m) -> bool:
+    """A Phase Shift sysex (open/tap markers): F0 50 53 00 00 … F7. mido stores
+    data without the F0/F7, so it begins (0x50, 0x53)."""
+    return m.type == "sysex" and tuple(getattr(m, "data", ()))[:2] == (0x50, 0x53)
+
+
+def sanitize_for_rb(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
+    """Return a NEW MidiFile made safe for Rock Band 3, fixing the things that
+    crash the game in-game (Magma would reject them):
+
+      * **Overlapping/stuck same-pitch notes** — a second note_on for a pitch that
+        is still held (broken chord / hung sustain). RB3 can hang rendering the
+        never-closed gem. We force-close the held note at the new onset, drop the
+        now-dangling note_off, and close any note left open at the track's end.
+      * **Phase Shift sysex** (open-note / tap markers, F0 50 53 …) — the YARG/CH
+        workaround keeps these (with their illegal 0xFF byte), but RB3 doesn't read
+        them; remove them so they can't confuse the loader.
+
+    Never mutates the input. Returns (new_mid, {"overlaps_fixed", "sysex_removed"}).
+    """
+    from collections import defaultdict, deque
+    from .midi_utils import AbsEvent
+
+    out = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
+    overlaps_fixed = sysex_removed = 0
+
+    for track in mid.tracks:
+        abs_evts = to_abs(track)
+        last_tick = abs_evts[-1].abs_tick if abs_evts else 0
+
+        # Pair note_on/off into intervals per pitch, then make the intervals of
+        # each pitch non-overlapping. This matches RB3's model (and the validator):
+        # at any tick the offs apply before the ons, so a pitch must never be open
+        # twice — neither across ticks (a hung sustain) nor at the same tick (a
+        # duplicate gem). Non-note events (text/markers/meta) are kept verbatim.
+        stacks: dict[int, deque] = defaultdict(deque)        # pitch → FIFO of (tick, on_msg)
+        intervals: dict[int, list] = defaultdict(list)       # pitch → [[on, off, on_msg], …]
+        others: list = []                                    # (tick, msg) non-note / kept
+
+        # Process offs before ons within a tick so a back-to-back gem pairs right.
+        ordered = sorted(enumerate(abs_evts),
+                         key=lambda ie: (ie[1].abs_tick,
+                                         0 if _msg_is_off(ie[1].msg)
+                                         else (1 if _msg_is_on(ie[1].msg) else -1),
+                                         ie[0]))
+        for _, e in ordered:
+            m = e.msg
+            if _is_ps_sysex(m):
+                sysex_removed += 1
+                continue
+            n = getattr(m, "note", None)
+            if n is not None and _msg_is_on(m):
+                stacks[n].append((e.abs_tick, m))
+            elif n is not None and _msg_is_off(m):
+                if stacks[n]:
+                    on_tick, on_msg = stacks[n].popleft()
+                    intervals[n].append([on_tick, e.abs_tick, on_msg])
+                # else: dangling off → drop
+            else:
+                others.append((e.abs_tick, m))
+        # Notes left open at the track end → close them at the last tick.
+        for n, dq in stacks.items():
+            for on_tick, on_msg in dq:
+                intervals[n].append([on_tick, max(on_tick + 1, last_tick), on_msg])
+                overlaps_fixed += 1
+
+        note_evts: list = []
+        for n, ivs in intervals.items():
+            ivs.sort(key=lambda x: (x[0], x[1]))
+            # Clamp each interval's end to the next one's start (allow back-to-back).
+            for i in range(len(ivs) - 1):
+                if ivs[i][1] > ivs[i + 1][0]:
+                    ivs[i][1] = ivs[i + 1][0]
+                    overlaps_fixed += 1
+            for on_tick, off_tick, on_msg in ivs:
+                if off_tick <= on_tick:          # zero-length (same-tick duplicate)
+                    overlaps_fixed += 1
+                    continue
+                note_evts.append((on_tick, on_msg.copy()))
+                note_evts.append((off_tick,
+                                  mido.Message("note_off", note=n, velocity=0,
+                                               channel=getattr(on_msg, "channel", 0))))
+
+        # Merge kept + note events; within a tick keep meta first, then offs, then
+        # ons (the same order RB3 reads), then rebuild monotonic delta times.
+        merged = others + note_evts
+
+        def _k(tm):
+            t, m = tm
+            pr = 1 if _msg_is_off(m) else (2 if _msg_is_on(m) else 0)
+            return (t, pr)
+        merged.sort(key=_k)
+        out.tracks.append(to_track([AbsEvent(abs_tick=t, msg=m)
+                                    for t, m in merged]))
+
+    return out, {"overlaps_fixed": overlaps_fixed, "sysex_removed": sysex_removed}
