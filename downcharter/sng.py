@@ -100,14 +100,26 @@ def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
         count += 1
     meta_section = struct.pack("<Q", len(meta_body) + 8) + struct.pack("<Q", count) + meta_body
 
-    # ── FileIndex + masked FileData (offsets are from FileData contents start) ──
+    # ── FileIndex + masked FileData ───────────────────────────────────────────
+    # contentsIndex is the ABSOLUTE offset of the file's data from the start of
+    # the whole .sng (verified against the reference encoder), not relative to
+    # the FileData body. The index body has a fixed size once filenames are
+    # known, so we can pre-compute where FileData begins and offset from there.
+    names = [n.encode("utf-8") for n in files]
+    for nb in names:
+        if len(nb) > 255:
+            raise ValueError("filename too long (>255 bytes)")
+    index_body_len = sum(1 + len(nb) + 16 for nb in names)  # u8 len + name + u64 size + u64 idx
+    index_section_len = 8 + index_body_len                   # + u64 count
+    data_start = (len(MAGIC) + 4 + 16              # header
+                  + len(meta_section)               # metadata section (with its len field)
+                  + (8 + index_section_len)         # file-index section (with its len field)
+                  + 8)                              # FileData section length field
+
     index_body = bytearray()
     data_body = bytearray()
-    offset = 0
-    for name, blob in files.items():
-        nb = name.encode("utf-8")
-        if len(nb) > 255:
-            raise ValueError(f"filename too long (>255 bytes): {name!r}")
+    offset = data_start
+    for nb, blob in zip(names, files.values()):
         index_body += struct.pack("<B", len(nb)) + nb
         index_body += struct.pack("<Q", len(blob))
         index_body += struct.pack("<Q", offset)
@@ -117,7 +129,7 @@ def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
         data_body += masked
         offset += len(blob)
 
-    index_section = (struct.pack("<Q", len(index_body) + 8)
+    index_section = (struct.pack("<Q", index_section_len)
                      + struct.pack("<Q", len(files)) + index_body)
     data_section = struct.pack("<Q", len(data_body)) + data_body
 
