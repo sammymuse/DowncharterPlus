@@ -8,7 +8,7 @@ import os, shutil
 from .constants import TRACK_TYPES, DIFF_OFFSET, DRUM_KICK_EXPERT, DRUM_KICK_2X, EXPERT_BASE
 from .midi_utils import (
     build_tempo_map, build_time_sig_map, to_abs, to_track, pair_notes, notes_to_events, AbsEvent,
-    tick_to_ms, ms_to_abs_tick,
+    tick_to_ms, ms_to_abs_tick, rescale_midi_tpb,
 )
 from .guitar import reduce_guitar
 from .chart import is_chart, chart_to_midi
@@ -424,6 +424,10 @@ def process_midi(
         # Some MIDIs (e.g. miracle) have sysex/data bytes outside 0..127.
         # clip=True clamps them to the valid MIDI range instead of blowing up.
         mid = mido.MidiFile(src_path, clip=True)
+    # RB3 requires 480 TPB; .chart imports keep the chart's native resolution
+    # (often 192). Normalise up-front so all downstream tick math AND the output
+    # are 480.
+    rescale_midi_tpb(mid, 480)
     tpb = mid.ticks_per_beat
     tempo_map = build_tempo_map(mid)
     time_sig_map = build_time_sig_map(mid)

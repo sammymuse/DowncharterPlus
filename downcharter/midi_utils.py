@@ -174,6 +174,35 @@ def to_track(events: list[AbsEvent]) -> mido.MidiTrack:
     return track
 
 
+def rescale_midi_tpb(mid: mido.MidiFile, target: int = 480) -> mido.MidiFile:
+    """Rescale a MidiFile's time division to `target` ticks-per-beat, in place.
+
+    RB3 crashes on anything other than 480 TPB; .chart imports often carry the
+    chart's native resolution (commonly 192). Every delta time is scaled by
+    target/old (via the per-track absolute timeline, so rounding never drifts and
+    event order is preserved exactly). Tempo (microseconds-per-beat) and time
+    signatures are TPB-independent and left untouched, so musical timing is
+    unchanged. No-op when already at `target`."""
+    old = mid.ticks_per_beat
+    if old == target or old <= 0:
+        return mid
+    factor = target / old
+    for track in mid.tracks:
+        abs_o = prev_n = 0
+        for msg in track:
+            abs_o += msg.time
+            abs_n = round(abs_o * factor)
+            msg.time = abs_n - prev_n      # always >= 0 (abs timeline is monotonic)
+            prev_n = abs_n
+    mid.ticks_per_beat = target
+    # mido caches the merged track (used by .length / iteration) the first time it
+    # is accessed; our in-place delta edits would otherwise leave it stale. Drop
+    # the cache so it is rebuilt from the rescaled tracks.
+    if getattr(mid, "_merged_track", None) is not None:
+        mid._merged_track = None
+    return mid
+
+
 # ── Note pairing: group note_on + note_off ───────────────────────────────────
 
 @dataclass

@@ -365,6 +365,8 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     meta = _parse_song_ini(ini_path) if ini_path else {}
 
     src_mid = mido.MidiFile(mid_path)
+    # RB3 requires 480 TPB; normalise any non-480 source (see ps3build).
+    _ps3.rescale_midi_tpb(src_mid, 480)
     has_2x = _convert.count_double_kicks(src_mid) > 0
     name_2x = (mode == "2x" and has_2x)
     suffix = "2x" if name_2x else ""

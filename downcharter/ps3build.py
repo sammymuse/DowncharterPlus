@@ -31,7 +31,7 @@ from . import convert as _convert
 from . import validate as _validate
 from . import mogg as _mogg
 from . import art as _art
-from .midi_utils import build_tempo_map, tick_to_ms, to_abs
+from .midi_utils import build_tempo_map, tick_to_ms, to_abs, rescale_midi_tpb
 
 # PART VOCALS talky pitch authored by processor._chart_vocals_from_lyrics.
 _VOCAL_TALKY_PITCH = 50
@@ -600,6 +600,10 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     # note-95 markers to convert; otherwise it is byte-for-byte the plain 1x chart,
     # so it stays unsuffixed. The 1x mode is always the plain, unsuffixed song.
     src_mid = mido.MidiFile(mid_path)
+    # RB3 crashes on any time division other than 480 TPB. Our processed charts
+    # are already 480, but a song packed without going through processing (or an
+    # odd source .mid) may not be — force it here so every package is 480.
+    rescale_midi_tpb(src_mid, 480)
     has_2x = _convert.count_double_kicks(src_mid) > 0
     name_2x = (mode == "2x" and has_2x)
     suffix = "2x" if name_2x else ""
