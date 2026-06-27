@@ -972,20 +972,32 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
         if not palette:
             continue
         sect_energy = section_energy(s)
+        # Timbre gate: the pp_study shows loudness does NOT predict pp density
+        # (corr≈0.04). The one cue that separates the two faces of a loud wall is
+        # TIMBRE: a BRIGHT/aggressive wall (metalcore, e.g. BMTH — 836 pp) gets dense
+        # flicker, while a DARK/atmospheric wall (post-rock, e.g. Deafheaven — 56 pp)
+        # the artist leaves almost untouched. So a 'cool' (dark) section is demoted one
+        # energy notch for pp purposes (high->mid->calm: smaller clusters, longer holds)
+        # and gets NO strobe-wall flicker; a 'warm' (bright) section keeps its tier.
+        demote = (s.warmth == "cool")
         i = 0
         t, bar = _first_downbeat_at_or_after(s.start, time_sig_map, tpb)
         while t < s.end:
             beat = _beat_len_at(t, time_sig_map, tpb)
             # Local tier: audio envelope if present, else the section's mean tier.
             tier = _env_tier(env, t) if env else sect_energy
+            if demote:
+                tier = {"high": "mid", "mid": "calm", "calm": "calm"}[tier]
 
             # Cluster gap pattern for this tier; inside an audio strobe wall add one
-            # extra half-beat flip (the fast flicker the originals use during blasts).
+            # extra half-beat flip — but ONLY on bright/aggressive walls (a dark
+            # atmospheric wall is held, not flickered).
             pattern = list(_PP_CLUSTER_PAT[tier])
-            for ws, we in walls:
-                if ws <= t < we:
-                    pattern = [_PP_BURST_SUBDIV] + pattern
-                    break
+            if not demote:
+                for ws, we in walls:
+                    if ws <= t < we:
+                        pattern = [_PP_BURST_SUBDIV] + pattern
+                        break
 
             # ── Cluster: first change on the downbeat, the rest stepped by `pattern` ──
             tt = t
