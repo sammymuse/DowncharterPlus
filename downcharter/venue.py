@@ -869,7 +869,7 @@ def build_pyro(sections: list[Section], drum_onsets: list[int],
 _PP_CLUSTER_PAT = {
     "calm": [0.5],                  # 2 changes, one burst
     "mid":  [0.5, 0.5, 2.0],        # 4 changes: two bursts + one short
-    "high": [0.5, 0.5, 0.5, 2.0],   # 5 changes: three bursts + one short
+    "high": [0.5, 0.5, 2.0, 2.0],   # 5 changes: two bursts + two short
 }
 # Hold to the next anchor, in BARS — anchors stay on the downbeat so the on-downbeat
 # first change of each cluster yields ~the official 40% downbeat-alignment, and density
