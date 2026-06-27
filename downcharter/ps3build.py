@@ -28,6 +28,7 @@ import mido
 
 from . import milo as _milo
 from . import convert as _convert
+from . import validate as _validate
 from . import mogg as _mogg
 from . import art as _art
 from .midi_utils import build_tempo_map, tick_to_ms, to_abs
@@ -560,7 +561,8 @@ def source_has_double_kicks(src_folder: str) -> bool:
 
 
 # ── full PS3 song folder ───────────────────────────────────────────────────────
-def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512) -> str:
+def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
+                   out_base: str | None = None) -> str:
     """Assemble a native unencrypted RPCS3 PS3 song folder from `src_folder`.
 
     `src_folder` is expected to hold a Downcharter-processed song: a plain
@@ -615,7 +617,11 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512)
         shortname = _sanitize_shortname(meta, fallback, suffix)
 
     pkg = _pkg_folder_name(shortname, dta_text, suffix)
-    out_root = os.path.join(os.path.dirname(os.path.abspath(src_folder)), pkg)
+    # Where the package folder is written: the user-chosen output folder if one
+    # was supplied (Convert tab), otherwise next to the source folder (default).
+    base_dir = os.path.abspath(out_base) if out_base \
+        else os.path.dirname(os.path.abspath(src_folder))
+    out_root = os.path.join(base_dir, pkg)
     # Guard against the package folder colliding with the SOURCE folder. On a
     # case-insensitive filesystem (Windows/macOS) "Elegy" and "ELEGY" are the same
     # directory, so a bare-named source (no song.ini → shortname == folder name)
@@ -654,6 +660,15 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512)
     # processing (processor → convert.generate_drum_animations), so the notes.mid
     # already carries them. We do NOT synthesise them here at conversion time.
     charted = _charted_instruments(out_mid)
+    # c) crash-relevant MIDI sanity gate — only at pack time (PS3/Xbox), never in
+    #    processing. Non-fatal: we log issues (errors + warnings) but still build,
+    #    so the user can decide. Mirrors quality.groove_check's advisory stance.
+    try:
+        for level, msg in _validate.validate_rb_midi(out_mid):
+            mark = "✗" if level == "error" else "⚠"
+            log(f"    {mark} check: {msg}\n", level)
+    except Exception as e:
+        log(f"    ⚠ check: MIDI validation skipped ({e})\n", "warn")
     # song.ini rarely carries song_length; derive it from the chart itself.
     if not meta.get("song_length"):
         try:
