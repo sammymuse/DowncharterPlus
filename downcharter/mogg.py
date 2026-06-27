@@ -68,10 +68,16 @@ def collect_stems(folder: str) -> list[tuple[str, str]]:
 
 
 def _decode(path: str):
-    """Decode a stem to (data2d float32 [frames, ch], samplerate)."""
-    import soundfile as sf
-    data, sr = sf.read(path, dtype="float32", always_2d=True)
-    return data, sr
+    """Decode a stem to (data2d float32 [frames, ch], samplerate).
+
+    Uses audio._read_all_or_blocks, the SEEK-based reader: some encoders emit
+    .opus/.ogg that libsndfile opens fine but trips on ('Supported file format
+    but file is malformed') during a sequential read at a few bad pages. The
+    fallback reads 1 s at a time, substituting silence for any bad page, so the
+    whole song is recovered with its timeline intact (a plain sf.read would stop
+    dead at the first bad page)."""
+    from . import audio as _audio
+    return _audio._read_all_or_blocks(path)
 
 
 def _resample(data, sr_from: int, sr_to: int):
