@@ -850,18 +850,35 @@ def build_pyro(sections: list[Section], drum_onsets: list[int],
     return out
 
 
-# Post-proc HOLD cadence (beats) per tier — how long a single filter is held before
-# the next change, anchored to the beat grid. Derived from the pp_study over the 20
-# official venues: real (de-duplicated) filter changes hold for ~1 bar in busy mid
-# sections and many bars in calm ones, then SWITCH FAST only inside intense walls
-# (handled by the burst path below). Sparse/ballad songs sit at ~6 pp/min, frantic
-# metalcore at ~180 — so the calm hold is deliberately long.
-_PP_CADENCE = {"calm": 16.0, "mid": 8.0, "high": 5.0}
+# Post-proc placement model — CLUSTER-then-HOLD, matching the 20 official venues.
+# The pp_study found the official gap distribution is strongly BIMODAL: median gap
+# 0.7 beats but mean 5.0, i.e. 56% of changes are bursts (<1 beat apart) and 20% are
+# long holds (≥4 beats), with only ~0.17 pp/beat overall. The originals do NOT space
+# single changes evenly — they flip a small CLUSTER of filters rapidly at an anchor
+# (section/energy change), then HOLD one filter for many beats until the next anchor.
+#
+#  _PP_CLUSTER  : how many rapid changes fire at each anchor (more when intense).
+#  _PP_CLUSTER_SUBDIV : beats between the changes inside a cluster (sub-beat = burst,
+#                       one beat = short gap — tuned per tier to match the 56/24/20 mix).
+#  _PP_HOLD     : beats from one cluster anchor to the next (the long hold).
+# Each anchor fires a CLUSTER whose internal gaps follow this beat PATTERN (the first
+# change is on the downbeat anchor; each value is the gap in beats to the next change
+# in the same cluster). Mixing 0.5-beat steps (bursts <1) with ~2-beat steps (short
+# gaps 1-4) reproduces the official 56% burst / 24% short split; the long inter-anchor
+# hold supplies the 20% holds. More/tighter changes when the local energy is high.
+_PP_CLUSTER_PAT = {
+    "calm": [0.5],                  # 2 changes, one burst
+    "mid":  [0.5, 0.5, 2.0],        # 4 changes: two bursts + one short
+    "high": [0.5, 0.5, 0.5, 2.0],   # 5 changes: three bursts + one short
+}
+# Hold to the next anchor, in BARS — anchors stay on the downbeat so the on-downbeat
+# first change of each cluster yields ~the official 40% downbeat-alignment, and density
+# (cluster size / hold-beats) lands near the official 0.17 pp/beat median.
+_PP_HOLD_BARS = {"calm": 6, "mid": 5, "high": 3}
 
-# Inside a strobe/blast wall the official venues alternate TWO filters on a fast
-# subdivision (e.g. BMTH/Dethklok flicker photocopy↔video_security every ⅓–½ beat).
-# We reproduce that as a 2-filter ping-pong on the half-beat across the wall.
-_PP_BURST_SUBDIV = 0.5   # beats between flips inside a strobe wall
+# Inside an audio strobe/blast WALL the originals flip even faster and longer — we
+# extend the cluster to span the wall (capped at one bar) on the half-beat.
+_PP_BURST_SUBDIV = 0.5
 
 # Post-proc TONE bias by audio timbre (Section.warmth). The pp_study over the 20
 # official venues showed B&W/desaturated filters sit in DARK, quieter audio
@@ -911,25 +928,41 @@ def _first_beat_at_or_after(start: int, time_sig_map: list, tpb: int) -> int:
     return sig_start + k * beat
 
 
+def _first_downbeat_at_or_after(start: int, time_sig_map: list, tpb: int) -> tuple[int, int]:
+    """Snap `start` UP to the nearest bar boundary (downbeat) of the active time-sig,
+    measured from that sig's start tick. Returns (downbeat_tick, bar_ticks)."""
+    sig_start, num, den = 0, 4, 4
+    for t, n, d in time_sig_map:
+        if t <= start:
+            sig_start, num, den = t, n, d
+        else:
+            break
+    bar = max(1, (tpb * 4 // den) * num)
+    rel = start - sig_start
+    k = (rel + bar - 1) // bar          # ceil to the next bar
+    return sig_start + k * bar, bar
+
+
 def build_postproc(sections: list[Section], theme: dict, tpb: int,
                    time_sig_map: list,
                    drum_onsets: list[int] | None = None,
                    energy_env: list | None = None,
                    strobe_spans: list | None = None) -> list[AbsEvent]:
     """Professional-style post-proc, placed the way the 20 official venues do it
-    (pp_study, dev/_venue_pp_study.py):
+    (pp_study, dev/_venue_pp_study.py): CLUSTER-then-HOLD.
 
-      * Changes are ANCHORED TO THE BEAT GRID (not to arbitrary drum hits), so they
-        land on a beat/downbeat like the originals.
-      * A filter is HELD for a whole cadence block, long in calm sections and short
-        in intense ones (local audio energy refines the tier within a section).
-      * Inside a strobe/blast WALL, two filters PING-PONG on the half-beat — the fast
-        flicker the originals use during blast beats / tremolo walls.
+      * At each anchor (snapped to the beat grid) a small CLUSTER of filters flips
+        rapidly on a sub-beat subdivision — the bursts the originals do (56% of their
+        gaps are <1 beat). The cluster is bigger / tighter when the local energy is
+        high, smaller / on-beat (short gaps) when calm.
+      * After the cluster the last filter is HELD for many beats (the 20% of official
+        gaps that are ≥4 beats) until the next anchor — keeping ~0.17 pp/beat overall.
+      * Inside an audio strobe/blast WALL the cluster is extended to span the wall
+        (capped at one bar) for the fast flicker the originals use during blasts.
     """
     out: list[AbsEvent] = []
     env = sorted(energy_env) if energy_env else None
     walls = sorted(strobe_spans) if strobe_spans else []
-    bursted: set[int] = set()   # wall starts already given a ping-pong (once each)
     last: str | None = None
     for s in sections:
         # Pool BY SECTION TYPE (primary); fallback to the genre palette.
@@ -940,53 +973,37 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
             continue
         sect_energy = section_energy(s)
         i = 0
-        t = _first_beat_at_or_after(s.start, time_sig_map, tpb)
+        t, bar = _first_downbeat_at_or_after(s.start, time_sig_map, tpb)
         while t < s.end:
             beat = _beat_len_at(t, time_sig_map, tpb)
             # Local tier: audio envelope if present, else the section's mean tier.
             tier = _env_tier(env, t) if env else sect_energy
 
-            # ── Burst path: ONCE per strobe/blast wall, ping-pong two filters for a
-            # single bar (the fast flicker the originals use at the start of a blast),
-            # then fall through to normal holds for the rest of the wall. Bounding it
-            # to one bar keeps the density realistic — long walls otherwise explode. ──
-            wall_start = None
+            # Cluster gap pattern for this tier; inside an audio strobe wall add one
+            # extra half-beat flip (the fast flicker the originals use during blasts).
+            pattern = list(_PP_CLUSTER_PAT[tier])
             for ws, we in walls:
                 if ws <= t < we:
-                    wall_start = ws
+                    pattern = [_PP_BURST_SUBDIV] + pattern
                     break
-            # Only flicker inside HIGH-energy walls. Atmospheric / mid songs hold a
-            # filter through their blast/tremolo walls (note density does NOT predict
-            # pp density — pp_study corr≈0.04 — so the burst is gated on the local
-            # energy tier, not on the wall alone). This keeps sparse songs sparse.
-            if wall_start is not None and tier == "high" and wall_start not in bursted:
-                bursted.add(wall_start)
-                a = palette[i % len(palette)]
-                b = palette[(i + 1) % len(palette)] if len(palette) > 1 else a
-                bar = measure_ticks_at(t, time_sig_map, tpb)
-                burst_end = min(t + bar, s.end)
-                sub = max(1, int(beat * _PP_BURST_SUBDIV))
-                k = 0
-                tt = t
-                while tt < burst_end:
-                    pp = a if (k % 2 == 0) else b
-                    out.append(_txt(tt, f"[{pp}.pp]"))
-                    last = pp
-                    tt += sub
-                    k += 1
-                i += 2
-                t = burst_end
-                continue
 
-            # ── Hold path: one change on this beat, held for the cadence block ──
-            pp = palette[i % len(palette)]
-            if pp == last and len(palette) > 1:
-                i += 1
+            # ── Cluster: first change on the downbeat, the rest stepped by `pattern` ──
+            tt = t
+            for gi in range(len(pattern) + 1):
+                if tt >= s.end:
+                    break
                 pp = palette[i % len(palette)]
-            out.append(_txt(t, f"[{pp}.pp]"))
-            last = pp
-            i += 1
-            t += max(beat, int(beat * _PP_CADENCE[tier]))
+                if pp == last and len(palette) > 1:
+                    i += 1
+                    pp = palette[i % len(palette)]
+                out.append(_txt(tt, f"[{pp}.pp]"))
+                last = pp
+                i += 1
+                if gi < len(pattern):
+                    tt += max(1, int(beat * pattern[gi]))
+
+            # ── Hold to the next downbeat anchor (whole bars), filter held across it ──
+            t += max(_PP_HOLD_BARS[tier] * bar, ((tt - t) // bar + 1) * bar)
     out.sort(key=lambda e: e.abs_tick)
     return out
 
