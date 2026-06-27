@@ -41,32 +41,41 @@ def _noop_log(msg, tag=None):
 
 
 def _read_ini_pairs(path: str) -> list:
-    """Ordered (key, value) pairs from a song.ini, preserving original key case
-    and dropping the section header(s). Keys/values are sanitised for SNG
-    (no NUL / newline; keys carry no '=')."""
-    pairs = []
-    seen = set()
+    """(key, value) pairs from a song.ini's [song] section, byte-faithful to the
+    reference SNG encoder's IniParser so YARG/Clone Hero round-trip the metadata
+    intact: read only the `song` section (case-insensitive), skip `#`/`;` comment
+    lines, split on the FIRST `=`, trim key and value, keep original case, and let
+    the LAST duplicate key win — no lowercasing, no character stripping."""
+    # Mirror the reference's OrdinalIgnoreCase dictionary: keys collide
+    # case-insensitively (first-seen casing kept), and the last value wins.
+    canon: dict[str, str] = {}         # lower(key) → original key casing
+    values: dict[str, str] = {}        # original key → value
+    order: list[str] = []              # first-seen order
+    in_song = False
     try:
         with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("[") or "=" not in line:
+            for raw in f:
+                line = raw.strip()
+                if not line or line[0] in "#;":
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    in_song = line[1:-1].strip().lower() == "song"
+                    continue
+                if not in_song or "=" not in line:
                     continue
                 k, _, v = line.partition("=")
-                k = k.strip().replace("=", "")
+                k = k.strip()
                 v = v.strip()
                 if not k:
                     continue
-                k = "".join(c for c in k if c not in "\x00\r\n")
-                v = "".join(c for c in v if c not in "\x00\r\n")
                 lk = k.lower()
-                if lk in seen:
-                    continue
-                seen.add(lk)
-                pairs.append((k, v))
+                if lk not in canon:
+                    canon[lk] = k
+                    order.append(k)
+                values[canon[lk]] = v
     except Exception:
         pass
-    return pairs
+    return [(k, values[k]) for k in order]
 
 
 def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
@@ -165,7 +174,8 @@ def build_sng_song(src_folder: str, log_fn=None, out_base: str | None = None) ->
         is_chart = low in _CHART_NAMES
         if is_chart or low.endswith(_MEDIA_EXT):
             with open(full, "rb") as f:
-                files[fn] = f.read()
+                # known song files are registered lowercase (per the SNG spec)
+                files[low] = f.read()
             if is_chart:
                 chart_count += 1
             else:
