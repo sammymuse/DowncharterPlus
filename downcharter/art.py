@@ -19,8 +19,10 @@ Format (reverse-engineered byte-exactly from the Onyx-converted packs in
 
 Platform note (verified empirically by decoding a real .png_ps3 both ways): the
 PS3 variant stores DXT1 blocks in **plain little-endian** — NOT byte-swapped.
-The Xbox-360 .png_xbox variant is the same payload with every 16-bit word
-byte-swapped; .png_ps3 needs no swap. We only emit PS3 here.
+The Xbox-360 .png_xbox variant has the IDENTICAL 32-byte header but every 16-bit
+word of the DXT *payload* byte-swapped (the header stays little-endian — confirmed
+against a real Onyx .png_xbox whose width/height fields are un-swapped). So
+``build_png_xbox`` = ``build_png_ps3`` with the post-header data 2-byte-swapped.
 
 No external DXT library: a compact range-fit DXT1 encoder lives below (good enough
 for album art, and keeps the dependency surface at numpy + Pillow, both already
@@ -255,4 +257,18 @@ def build_png_ps3(cover_path: str, size: int = _SIZE) -> bytes:
     for sz in mip_sizes:
         mip = base if sz == size else base.resize((sz, sz), Image.LANCZOS)
         data += _encode_dxt1(np.asarray(mip, dtype=np.uint8))
+    return bytes(data)
+
+
+def build_png_xbox(cover_path: str, size: int = _SIZE) -> bytes:
+    """Build a `size`×`size` DXT1 ``.png_xbox`` texture for Xbox-360 / YARG.
+
+    Identical to :func:`build_png_ps3` except the DXT payload (everything after
+    the 32-byte HMX header) has every 16-bit word byte-swapped — the documented
+    PS3↔Xbox texture-endianness difference, confirmed against a real Onyx
+    ``.png_xbox`` (whose HMX header stays little-endian).
+    """
+    data = bytearray(build_png_ps3(cover_path, size))
+    for i in range(32, len(data) - 1, 2):              # swap each u16 word, header intact
+        data[i], data[i + 1] = data[i + 1], data[i]
     return bytes(data)

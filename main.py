@@ -630,16 +630,28 @@ class App(tk.Tk):
                  font=(MONO, 8), fg=FG3, bg=BG, anchor="w").pack(anchor="w", pady=(2, 10))
 
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 12))
-        tk.Label(body, text="Output: native RPCS3 PS3 folder  (our milo — no Onyx)",
-                 font=(MONO, 8), fg=FG3, bg=BG, anchor="w").pack(anchor="w", pady=(0, 8))
+        tk.Label(body, text="Same milo/dta/mogg — only the container differs  "
+                            "(our milo — no Onyx)",
+                 font=(MONO, 8), fg=FG3, bg=BG, anchor="w",
+                 justify="left", wraplength=520).pack(anchor="w", pady=(0, 8))
         btn_row = tk.Frame(body, bg=BG)
         btn_row.pack(fill="x", pady=(0, 14))
-        self._btn_native = StyledButton(btn_row, "⬢  BUILD PS3 FOLDER",
-                                        self._run_native_convert, accent=True,
-                                        width=210, height=40)
-        self._btn_native.pack(side="left")
-        self._btn_native.set_enabled(bool(self._conv_folder and
-                                          os.path.isdir(self._conv_folder)))
+        self._btn_ps3 = StyledButton(btn_row, "⬢  BUILD PS3 FOLDER",
+                                     lambda: self._run_native_convert("ps3"),
+                                     accent=True, width=200, height=40)
+        self._btn_ps3.pack(side="left")
+        self._btn_con = StyledButton(btn_row, "⬢  BUILD CON",
+                                     lambda: self._run_native_convert("xbox"),
+                                     width=150, height=40)
+        self._btn_con.pack(side="left", padx=(8, 0))
+        self._btn_sng = StyledButton(btn_row, "⬢  BUILD SNG",
+                                     lambda: self._run_native_convert("sng"),
+                                     width=150, height=40)
+        self._btn_sng.pack(side="left", padx=(8, 0))
+        self._conv_btns = (self._btn_ps3, self._btn_con, self._btn_sng)
+        for b in self._conv_btns:
+            b.set_enabled(bool(self._conv_folder and
+                               os.path.isdir(self._conv_folder)))
         if self._conv_folder and os.path.isdir(self._conv_folder):
             short = self._conv_folder if len(self._conv_folder) <= 52 \
                 else "…" + self._conv_folder[-50:]
@@ -653,7 +665,8 @@ class App(tk.Tk):
         self._save_settings()
         short = folder if len(folder) <= 52 else "…" + folder[-50:]
         self._conv_folder_lbl.config(text=short, fg=FG2)
-        self._btn_native.set_enabled(True)
+        for b in self._conv_btns:
+            b.set_enabled(True)
         self._log(f"Convert source: {folder}\n\n", "info")
 
     def _pick_conv_out(self):
@@ -671,21 +684,24 @@ class App(tk.Tk):
         self._save_settings()
         self._conv_out_lbl.config(text="(default: beside source)", fg=FG3)
 
-    def _run_native_convert(self):
+    def _run_native_convert(self, fmt):
         if not self._conv_folder:
             return
         pedal = self._conv_pedal.get()
         out_base = self._conv_out or None
-        self._log("── CONVERT (native PS3) ─────────────────\n", "head")
+        fmt_label = {"ps3": "PS3 folder", "xbox": "Xbox CON",
+                     "sng": "SNG"}.get(fmt, fmt)
+        self._log(f"── CONVERT ({fmt_label}) ─────────────────────\n", "head")
         self._log(f"  Source: {self._conv_folder}\n")
         self._log(f"  Output: {out_base or '(beside source)'}\n")
-        self._btn_native.set_enabled(False)
+        for b in self._conv_btns:
+            b.set_enabled(False)
 
         def task():
             try:
-                from downcharter.ps3build import build_ps3_song, source_has_double_kicks
+                from downcharter.ps3build import source_has_double_kicks
                 if pedal == "both":
-                    # Only emit a 2x folder for songs that actually have doubles to
+                    # Only emit a 2x build for songs that actually have doubles to
                     # convert; otherwise the 2x build is identical to the plain 1x.
                     if source_has_double_kicks(self._conv_folder):
                         modes = ["1x", "2x"]
@@ -695,14 +711,23 @@ class App(tk.Tk):
                 else:
                     modes = [pedal]
                 self._log(f"  Pedal: {', '.join(modes)}\n\n")
+                if fmt == "ps3":
+                    from downcharter.ps3build import build_ps3_song
+                    builder = build_ps3_song
+                elif fmt == "xbox":
+                    from downcharter.stfs import build_con_song
+                    builder = build_con_song
+                else:  # sng
+                    from downcharter.sng import build_sng_song
+                    builder = build_sng_song
                 for mode in modes:
-                    build_ps3_song(self._conv_folder, mode, self._log,
-                                   out_base=out_base)
+                    self._log(f"  ▸ {fmt_label} ({mode})\n", "info")
+                    builder(self._conv_folder, mode, self._log, out_base=out_base)
             except Exception as e:
                 import traceback
                 self._log(f"  ✗ {e}\n", "err")
                 self._log(traceback.format_exc(), "err")
-            self.after(0, lambda: self._btn_native.set_enabled(True))
+            self.after(0, lambda: [b.set_enabled(True) for b in self._conv_btns])
             self._log("\n")
 
         threading.Thread(target=task, daemon=True).start()
