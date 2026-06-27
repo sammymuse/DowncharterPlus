@@ -157,14 +157,13 @@ def build_sng_song(src_folder: str, log_fn=None, out_base: str | None = None) ->
     log = log_fn or _noop_log
 
     ini_path = _find_one(src_folder, lambda p: os.path.basename(p).lower() == "song.ini")
-    meta = _parse_song_ini(ini_path) if ini_path else {}
 
-    fallback = os.path.basename(os.path.abspath(src_folder)) or "song"
-    shortname = _sanitize_shortname(meta, fallback, "")
+    # Name the .sng exactly like the source folder (matches the original).
+    folder_name = os.path.basename(os.path.abspath(src_folder)) or "song"
 
     base_dir = os.path.abspath(out_base) if out_base \
         else os.path.dirname(os.path.abspath(src_folder))
-    out_sng = os.path.join(base_dir, f"{shortname}.sng")
+    out_sng = os.path.join(base_dir, f"{folder_name}.sng")
     os.makedirs(base_dir, exist_ok=True)
     log(f"  → {os.path.basename(out_sng)}\n", "info")
 
@@ -174,27 +173,26 @@ def build_sng_song(src_folder: str, log_fn=None, out_base: str | None = None) ->
         entries = sorted(os.listdir(src_folder))
     except OSError:
         entries = []
-    chart_count = media_count = 0
+    chart_count = other_count = 0
     for fn in entries:
         full = os.path.join(src_folder, fn)
         if not os.path.isfile(full):
             continue
         low = fn.lower()
-        if low == "song.ini" or low.endswith(".bak") or low.endswith(".bak.mid") \
-                or low.endswith(".bak.chart"):
+        # song.ini becomes the Metadata section; everything else is embedded
+        # verbatim — including .bak backups, so the user can rebuild the folder.
+        if low == "song.ini":
             continue
-        is_chart = low in _CHART_NAMES
-        if is_chart or low.endswith(_MEDIA_EXT):
-            with open(full, "rb") as f:
-                # known song files are registered lowercase (per the SNG spec)
-                files[low] = f.read()
-            if is_chart:
-                chart_count += 1
-            else:
-                media_count += 1
+        with open(full, "rb") as f:
+            # known song files are registered lowercase (per the SNG spec)
+            files[low] = f.read()
+        if low in _CHART_NAMES:
+            chart_count += 1
+        else:
+            other_count += 1
     if not chart_count:
         raise FileNotFoundError("no notes.mid / notes.chart found in source folder")
-    log(f"    ◇ chart: {chart_count} file(s)  ·  media: {media_count} file(s)\n", "info")
+    log(f"    ◇ chart: {chart_count} file(s)  ·  other: {other_count} file(s)\n", "info")
 
     # 2) metadata from song.ini (ordered, original-case keys).
     if ini_path:

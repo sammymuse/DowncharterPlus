@@ -121,19 +121,28 @@ def build_songini_text(values: dict) -> str:
 
 class StyledButton(tk.Canvas):
     def __init__(self, parent, text, command,
-                 accent=False, danger=False, width=180, height=38):
+                 accent=False, danger=False, color=None, width=180, height=38):
         super().__init__(parent, height=height, width=width,
                          bg=SURFACE, highlightthickness=0, bd=0, cursor="hand2")
         self._text = text; self._cmd = command
-        self._accent = accent; self._danger = danger
+        self._accent = accent; self._danger = danger; self._color = color
         self._on = True; self._hover = False
         self._draw()
         self.bind("<Enter>",    lambda _: self._sh(True))
         self.bind("<Leave>",    lambda _: self._sh(False))
         self.bind("<Button-1>", self._click)
 
+    @staticmethod
+    def _shade(hexcol, factor):
+        hexcol = hexcol.lstrip("#")
+        r, g, b = (int(hexcol[i:i+2], 16) for i in (0, 2, 4))
+        r, g, b = (min(255, int(c * factor)) for c in (r, g, b))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
     def _colors(self):
         if not self._on:     return BORDER,   FG3
+        if self._color:
+            return (self._shade(self._color, 1.18) if self._hover else self._color), FG
         if self._hover:
             if self._accent: return "#c03535", FG
             if self._danger: return "#8b2020", FG
@@ -313,7 +322,7 @@ class App(tk.Tk):
         self._tab_btns["convert"] = tabbar.winfo_children()[-1]
 
         # song.ini creator — opens a pre-filled template the user fills + saves.
-        StyledButton(tabbar, "✎  NEW song.ini", self._open_songini_creator,
+        StyledButton(tabbar, "NEW song.ini", self._open_songini_creator,
                      width=150, height=28).pack(side="right")
 
         # ── Tab container (only one child shown at a time) ──
@@ -346,7 +355,7 @@ class App(tk.Tk):
 
         # ── Expert+ ──
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
-        CheckTile(body, "Expert+  (2× kick in PART DRUMS)",
+        CheckTile(body, "Expert+",
                   self._do_expert_plus, color=RED, width=300, height=28).pack(anchor="w")
 
         thr_row = tk.Frame(body, bg=BG)
@@ -374,16 +383,16 @@ class App(tk.Tk):
                   self._do_venue, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
         # Drummer limb animations (PART DRUMS 24-51) authored from the Expert gems;
         # without them the drummer stays idle in-game. On by default.
-        CheckTile(body, "Drum animations (drummer limbs)",
+        CheckTile(body, "Drum animations",
                   self._do_drum_anim, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-        # Hides background images in-game by renaming background.png/jpg →
-        # background.bak.png/jpg (revert restores them).
-        CheckTile(body, "Hide in-game background (image)",
-                  self._do_hide_bg, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
         # LIPSYNC1 viseme track from lyrics (audio-guided keyframes). Independent of
         # the talkies toggle below — generates the mouth animation track only.
-        CheckTile(body, "Generate lipsync (LIPSYNC1 viseme track)",
+        CheckTile(body, "Lipsync",
                   self._do_lipsync_trk, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        # Hides background images in-game by renaming background.png/jpg →
+        # background.bak.png/jpg (revert restores them).
+        CheckTile(body, "Hide in-game background",
+                  self._do_hide_bg, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
         # ── Talkies ──
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
@@ -586,8 +595,7 @@ class App(tk.Tk):
 
     # ── Convert tab ────────────────────────────────────────────────────────
     def _build_convert_tab(self, body):
-        self._lbl("SOURCE SONG FOLDER  (built RB3 song: notes.mid · .mogg · songs.dta)",
-                  body).pack(anchor="w")
+        self._lbl("SOURCE SONG FOLDER", body).pack(anchor="w")
         fr = tk.Frame(body, bg=BG)
         fr.pack(fill="x", pady=(5, 14))
         self._conv_folder_lbl = tk.Label(fr, text="(none selected)",
@@ -617,10 +625,10 @@ class App(tk.Tk):
 
         # ── ROCK BAND section (PS3 folder + Xbox CON — bass pedal applies) ──
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
-        tk.Label(body, text="ROCK BAND  (PS3 / Xbox 360 · our milo — no Onyx)",
+        tk.Label(body, text="ROCK BAND  (PS3 / Xbox 360)",
                  font=(MONO, 10, "bold"), fg=RED, bg=BG, anchor="w").pack(
                      anchor="w", pady=(0, 8))
-        self._lbl("BASS PEDAL  (RB3 doesn't read YARG-style Expert+)", body).pack(
+        self._lbl("BASS PEDAL", body).pack(
             anchor="w", pady=(0, 6))
         ped_row = tk.Frame(body, bg=BG)
         ped_row.pack(fill="x", pady=(0, 4))
@@ -635,11 +643,11 @@ class App(tk.Tk):
 
         self._btn_ps3 = StyledButton(body, "⬢  BUILD PS3 FOLDER",
                                      lambda: self._run_native_convert("ps3"),
-                                     accent=True, width=220, height=40)
+                                     color=BLUE, width=220, height=40)
         self._btn_ps3.pack(anchor="w", pady=(0, 8))
         self._btn_con = StyledButton(body, "⬢  BUILD CON",
                                      lambda: self._run_native_convert("xbox"),
-                                     accent=True, width=220, height=40)
+                                     color=GREEN, width=220, height=40)
         self._btn_con.pack(anchor="w", pady=(0, 14))
 
         # ── SNG section (YARG / Clone Hero — verbatim repackage of the folder) ──
@@ -648,12 +656,12 @@ class App(tk.Tk):
                  font=(MONO, 10, "bold"), fg=RED, bg=BG, anchor="w").pack(
                      anchor="w", pady=(0, 6))
         tk.Label(body, text="Packs the song folder as-is into a .sng container  "
-                            "(no pedal variants, no validation, no milo).",
+                            "— no pedal variants, no validation, no milo.",
                  font=(MONO, 8), fg=FG3, bg=BG, anchor="w",
                  justify="left", wraplength=520).pack(anchor="w", pady=(0, 8))
         self._btn_sng = StyledButton(body, "⬢  BUILD SNG",
                                      lambda: self._run_native_convert("sng"),
-                                     accent=True, width=220, height=40)
+                                     color=RED, width=220, height=40)
         self._btn_sng.pack(anchor="w", pady=(0, 14))
 
         self._conv_btns = (self._btn_ps3, self._btn_con, self._btn_sng)
@@ -738,8 +746,11 @@ class App(tk.Tk):
                 import traceback
                 self._log(f"  ✗ {e}\n", "err")
                 self._log(traceback.format_exc(), "err")
-            self.after(0, lambda: [b.set_enabled(True) for b in self._conv_btns])
-            self._log("\n")
+            finally:
+                # Always re-enable so the user can convert again (even the SNG
+                # path, which returns early on success).
+                self.after(0, lambda: [b.set_enabled(True) for b in self._conv_btns])
+                self._log("\n")
 
         threading.Thread(target=task, daemon=True).start()
 
