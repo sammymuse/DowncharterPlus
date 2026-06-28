@@ -449,7 +449,22 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
             log(f"    {mark} check: {msg}\n", level)
     except Exception as e:
         log(f"    ! check: MIDI validation skipped ({e})\n", "warn")
-    if not meta.get("song_length"):
+    # Ensure song_length covers the full MIDI content (see ps3build.py for
+    # the detailed rationale — song.ini timestamps the audio duration, but
+    # our RB3 output extends the MIDI with markers/pads).
+    try:
+        midi_len_ms = int(out_mid.length * 1000)
+    except Exception:
+        midi_len_ms = 0
+    if midi_len_ms > 0:
+        tmap = _ps3.build_tempo_map(out_mid)
+        init_us = tmap[0][1] if tmap else 500000
+        pad_ms = int(2 * out_mid.ticks_per_beat * init_us / 1_000_000)
+        needed = midi_len_ms + pad_ms
+        cur = _ps3._ini_int(meta, "song_length") or 0
+        if needed > cur:
+            meta["song_length"] = str(needed)
+    elif not meta.get("song_length"):
         try:
             meta["song_length"] = str(int(out_mid.length * 1000))
         except Exception:

@@ -735,8 +735,29 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
             log(f"    {mark} check: {msg}\n", level)
     except Exception as e:
         log(f"    ⚠ check: MIDI validation skipped ({e})\n", "warn")
-    # song.ini rarely carries song_length; derive it from the chart itself.
-    if not meta.get("song_length"):
+    # Ensure song_length covers the full MIDI content.  YARG/CH song.ini
+    # timestamps the *audio* duration, but our RB3 output adds [end],
+    # [music_start]/[music_end], BEAT, and (optionally) a lead-in pad — all
+    # of which extend the MIDI past the ini's song_length.  If we ship a
+    # DTA whose song_length < last MIDI event, RB3 allocates a buffer that
+    # is too small and hits a null-pointer when it tries to read events
+    # beyond the declared end.  Fix: always use the MIDI's actual length
+    # (mido .length is the timestamp of the very last event) plus a small
+    # safety margin (2 beats) so the engine has time to process [end].
+    try:
+        midi_len_ms = int(out_mid.length * 1000)
+    except Exception:
+        midi_len_ms = 0
+    if midi_len_ms > 0:
+        # 2 beats of padding at the initial tempo (conservative).
+        tmap = build_tempo_map(out_mid)
+        init_us = tmap[0][1] if tmap else 500000
+        pad_ms = int(2 * out_mid.ticks_per_beat * init_us / 1_000_000)
+        needed = midi_len_ms + pad_ms
+        cur = _ini_int(meta, "song_length") or 0
+        if needed > cur:
+            meta["song_length"] = str(needed)
+    elif not meta.get("song_length"):
         try:
             meta["song_length"] = str(int(out_mid.length * 1000))
         except Exception:
