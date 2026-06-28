@@ -143,8 +143,68 @@ def _decode_mogg(path: str):
     return data, sr
 
 
+def calculate_audio_pad_offset(src_mid_raw: str, pad_mogg_path: str, log_fn=None) -> float:
+    """Calculate the offset between MIDI and mogg first notes.
+    Returns the difference: mogg_first_note - midi_first_note (in seconds).
+    This offset is used to adjust the pad_seconds to eliminate desync."""
+    import mido
+    import numpy as np
+    log = log_fn or (lambda *a, **k: None)
+
+    # Find first note in MIDI (including init markers — same as lead_in_pad_ticks)
+    midi_first = 999999
+    try:
+        mid = mido.MidiFile(src_mid_raw, clip=True)
+        tpb = mid.ticks_per_beat
+        # Get actual BPM from tempo map
+        bpm = 120.0
+        for msg in mid.tracks[0]:
+            if msg.type == "set_tempo":
+                bpm = 60000000.0 / msg.tempo
+                break
+        for tr in mid.tracks:
+            nm = (tr.name or "").strip().upper()
+            if not nm.startswith("PART"):
+                continue
+            t = 0
+            for m in tr:
+                t += m.time
+                if m.type == "note_on" and m.velocity > 0:
+                    midi_first = min(midi_first, t)
+                    break
+    except Exception as e:
+        log(f"    ⚠ mogg: could not inspect MIDI ({e})\n", "warn")
+        midi_first = 0
+        bpm = 120.0
+
+    midi_first_s = midi_first / tpb * (60.0 / bpm) if midi_first < 999999 else 0.0
+
+    # Find first real note in mogg (first frame with amplitude > threshold)
+    mogg_first_real = 0.0
+    try:
+        decoded = _decode_mogg(pad_mogg_path)
+        if decoded is not None:
+            data, sr = decoded
+            if data.ndim == 3:
+                data = np.mean(data, axis=0)
+            elif data.ndim == 2:
+                data = np.mean(data, axis=0)
+            threshold = 0.01
+            for i in range(len(data)):
+                if np.max(np.abs(data[i:i+100])) > threshold:
+                    mogg_first_real = i / sr
+                    break
+    except Exception as e:
+        log(f"    ⚠ mogg: could not inspect mogg ({e})\n", "warn")
+
+    offset = mogg_first_real - midi_first_s
+    log(f"    ◇ mogg: MIDI first note = {midi_first_s:.3f}s ({midi_first} ticks @ {bpm:.0f} BPM), "
+        f"mogg first note = {mogg_first_real:.3f}s, offset = {offset:.3f}s\n", "info")
+    return offset
+
+
 def ensure_mogg_44100(src_mogg: str, out_path: str, log_fn=None,
-                      pad_seconds: float = 0.0) -> bool:
+                      pad_seconds: float = 0.0, src_mid_raw: str = None) -> bool:
     """Copy `src_mogg` to `out_path`, re-encoding to 44.1 kHz if it isn't already.
 
     Rock Band 3's audio engine assumes 44.1 kHz and crashes at song LOAD on any
@@ -158,10 +218,69 @@ def ensure_mogg_44100(src_mogg: str, out_path: str, log_fn=None,
     must be decodable (0x0A) for padding to work; encrypted moggs are copied
     verbatim with a warning.
 
+    If src_mid_raw is provided, calculates the offset between MIDI and mogg first
+    notes and adjusts pad_seconds accordingly to eliminate desync.
+
     Returns True if a copy/re-encode succeeded."""
     import shutil
     import numpy as np
     log = log_fn or (lambda *a, **k: None)
+
+    # Calculate offset and adjust pad_seconds
+    if src_mid_raw and pad_seconds > 0:
+        # Decode source mogg to measure first audio
+        try:
+            decoded_src = _decode_mogg(src_mogg)
+            if decoded_src is not None:
+                src_data, src_sr = decoded_src
+                threshold = 0.01
+                src_first_real = 0.0
+                for i in range(len(src_data)):
+                    if np.max(np.abs(src_data[i])) > threshold:
+                        src_first_real = i / src_sr
+                        break
+            else:
+                src_first_real = 0.0
+        except Exception as e:
+            log(f"    ⚠ mogg: could not inspect source ({e})\n", "warn")
+            src_first_real = 0.0
+
+        # Find first MIDI note (including init markers at tick 0)
+        midi_first = 999999
+        try:
+            import mido
+            mid = mido.MidiFile(src_mid_raw, clip=True)
+            tpb = mid.ticks_per_beat
+            bpm = 120.0
+            for msg in mid.tracks[0]:
+                if msg.type == "set_tempo":
+                    bpm = 60000000.0 / msg.tempo
+                    break
+            for tr in mid.tracks:
+                nm = (tr.name or "").strip().upper()
+                if not nm.startswith("PART"):
+                    continue
+                t = 0
+                for m in tr:
+                    t += m.time
+                    if m.type == "note_on" and m.velocity > 0:
+                        midi_first = min(midi_first, t)
+                        break
+        except Exception as e:
+            log(f"    ⚠ mogg: could not inspect MIDI ({e})\n", "warn")
+            midi_first = 0
+            bpm = 120.0
+
+        midi_first_s = midi_first / tpb * (60.0 / bpm) if midi_first < 999999 else 0.0
+        offset = src_first_real - midi_first_s
+        adjusted_pad = pad_seconds - offset
+        if adjusted_pad > 0:
+            log(f"    ◇ mogg: source first audio={src_first_real:.3f}s, MIDI first={midi_first_s:.3f}s, offset={offset:.3f}s, adjusted pad={adjusted_pad:.3f}s\n", "info")
+            pad_seconds = adjusted_pad
+        else:
+            log(f"    ◇ mogg: MIDI-mogg offset ({offset:.3f}s) exceeds pad_seconds ({pad_seconds:.3f}s), using {adjusted_pad:.3f}s (no padding)\n", "info")
+            pad_seconds = 0
+
     need_pad = pad_seconds > 0.0
     try:
         decoded = _decode_mogg(src_mogg)
@@ -197,7 +316,7 @@ def ensure_mogg_44100(src_mogg: str, out_path: str, log_fn=None,
 
 
 def build_mogg_from_stems(folder: str, out_path: str, log_fn=None,
-                          pad_seconds: float = 0.0):
+                          pad_seconds: float = 0.0, src_mid_raw: str = None):
     """Build `out_path` (.mogg) from the stems in `folder`.
 
     Returns a list describing the channel layout:
@@ -206,7 +325,11 @@ def build_mogg_from_stems(folder: str, out_path: str, log_fn=None,
 
     `pad_seconds` prepends that much silence to every channel so the audio stays
     in sync with a MIDI that was lead-in-padded for RB3 (convert.pad_start /
-    Onyx magmaPad). 0.0 = no padding (the normal case)."""
+    Onyx magmaPad). 0.0 = no padding (the normal case).
+
+    If src_mid_raw is provided, calculates the offset between MIDI and mogg first
+    notes and adjusts pad_seconds accordingly to eliminate desync.
+    """
     import numpy as np
     import soundfile as sf
 
@@ -235,6 +358,58 @@ def build_mogg_from_stems(folder: str, out_path: str, log_fn=None,
     if not decoded:
         listed = ", ".join(failed) if failed else "none"
         raise ValueError(f"no audio could be decoded (malformed/unreadable: {listed})")
+
+    # Calculate offset and adjust pad_seconds (same logic as ensure_mogg_44100)
+    # For stems, we measure first audio from the DECODER STEMS (source audio)
+    if src_mid_raw and pad_seconds > 0:
+        # Find first audio in the decoded stems (source audio)
+        src_first_real = None
+        for track, data, sr in decoded:
+            threshold = 0.01
+            for i in range(len(data)):
+                if np.max(np.abs(data[i])) > threshold:
+                    t = i / sr
+                    if src_first_real is None or t < src_first_real:
+                        src_first_real = t
+                    break
+        if src_first_real is None:
+            src_first_real = 0.0
+
+        # Find first MIDI note (including init markers at tick 0)
+        midi_first = 999999
+        try:
+            import mido
+            mid = mido.MidiFile(src_mid_raw, clip=True)
+            tpb = mid.ticks_per_beat
+            bpm = 120.0
+            for msg in mid.tracks[0]:
+                if msg.type == "set_tempo":
+                    bpm = 60000000.0 / msg.tempo
+                    break
+            for tr in mid.tracks:
+                nm = (tr.name or "").strip().upper()
+                if not nm.startswith("PART"):
+                    continue
+                t = 0
+                for m in tr:
+                    t += m.time
+                    if m.type == "note_on" and m.velocity > 0:
+                        midi_first = min(midi_first, t)
+                        break
+        except Exception as e:
+            log(f"    ⚠ mogg: could not inspect MIDI ({e})\n", "warn")
+            midi_first = 0
+            bpm = 120.0
+
+        midi_first_s = midi_first / tpb * (60.0 / bpm) if midi_first < 999999 else 0.0
+        offset = src_first_real - midi_first_s
+        adjusted_pad = pad_seconds - offset
+        if adjusted_pad > 0:
+            log(f"    ◇ mogg: source first audio={src_first_real:.3f}s, MIDI first={midi_first_s:.3f}s, offset={offset:.3f}s, adjusted pad={adjusted_pad:.3f}s\n", "info")
+            pad_seconds = adjusted_pad
+        else:
+            log(f"    ◇ mogg: MIDI-mogg offset ({offset:.3f}s) exceeds pad_seconds ({pad_seconds:.3f}s), using {adjusted_pad:.3f}s (no padding)\n", "info")
+            pad_seconds = 0
 
     # Rock Band 3 requires 44.1 kHz moggs — its audio engine assumes 44100 and
     # crashes at song LOAD on any other rate (e.g. a 48 kHz source stem). Always

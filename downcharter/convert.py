@@ -1380,9 +1380,16 @@ def lead_in_pad_ticks(mid: mido.MidiFile, min_beats: float = 6.0) -> int:
     from the song start (Onyx `magmaPad`). RB3 needs lead-in before the first note;
     a chart starting at tick 0 (no BEAT lead-in) is rejected/can hang. Returns 0
     when the chart already has enough lead-in. Default 6 beats = 2.6s at 120 BPM
-    matching Onyx's magmaPad exact behaviour."""
+    matching Onyx's magmaPad exact behaviour.
+
+    Only applies when init markers exist (5 notes at tick 0: 96,101,84,72,60 vel=100 dur<=1).
+    Charts with intentional lead-in (no init markers) return 0."""
     tpb = mid.ticks_per_beat
-    first = None
+    
+    # Check for init markers at tick 0 in any PART track
+    INIT_NOTES = {96, 101, 84, 72, 60}
+    has_init_markers = False
+    first_note = None
     for tr in mid.tracks:
         nm = (tr.name or "").strip().upper()
         if not nm.startswith("PART"):
@@ -1390,13 +1397,66 @@ def lead_in_pad_ticks(mid: mido.MidiFile, min_beats: float = 6.0) -> int:
         t = 0
         for m in tr:
             t += m.time
-            if _msg_is_on(m) and _GEM_LO <= getattr(m, "note", -1) <= _GEM_HI:
-                first = t if first is None else min(first, t)
+            if m.type == "note_on" and m.velocity > 0:
+                note = getattr(m, "note", -1)
+                vel = m.velocity
+                # Check if this is an init marker at tick 0
+                if t == 0 and vel == 100 and note in INIT_NOTES:
+                    # Verify duration <= 1
+                    duration = 0
+                    next_t = t
+                    for m2 in tr:
+                        if m2.type == "note_off" and getattr(m2, "note", -1) == note:
+                            duration = next_t - t
+                            break
+                        next_t += m2.time
+                        if next_t > t + 1:
+                            break
+                    if duration <= 1:
+                        has_init_markers = True
+                first_note = t if first_note is None else min(first_note, t)
                 break
-    if first is None:
+    if first_note is None:
+        return 0
+    # Only apply magmaPad if init markers exist
+    if not has_init_markers:
         return 0
     need = int(round(min_beats * tpb))
-    return max(0, need - first)
+    return max(0, need - first_note)
+
+
+def find_first_real_note(mid: mido.MidiFile) -> int:
+    """Find the FIRST NOTE REAL across all PART tracks.
+    Skips init markers: the 5 notes at tick 0 (vel=100, duration<=1)
+    that initialise each difficulty level.
+    Returns tick position of first real gem note, or 999999 if none."""
+    INIT_NOTES = {96, 101, 84, 72, 60}
+    first_real = 999999
+    for tr in mid.tracks:
+        nm = (tr.name or "").strip().upper()
+        if not nm.startswith("PART"):
+            continue
+        t = 0
+        for m in tr:
+            t += m.time
+            if m.type == "note_on" and m.velocity > 0:
+                note = getattr(m, "note", -1)
+                vel = m.velocity
+                duration = 0
+                next_t = t
+                for m2 in tr:
+                    if m2.type == "note_off" and getattr(m2, "note", -1) == note:
+                        duration = next_t - t
+                        break
+                    next_t += m2.time
+                    if next_t > t + 1:
+                        break
+                # Only skip init markers at tick 0
+                if t == 0 and vel == 100 and note in INIT_NOTES and duration <= 1:
+                    continue
+                first_real = min(first_real, t)
+                break
+    return first_real
 
 
 def pad_start(mid: mido.MidiFile, pad_ticks: int) -> mido.MidiFile:

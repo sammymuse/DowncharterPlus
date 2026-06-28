@@ -725,10 +725,14 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     pad_seconds = 0.0
     pad_ticks = _convert.lead_in_pad_ticks(src_mid_raw, min_beats=6.0)
     if pad_ticks > 0:
-        tmap = build_tempo_map(out_mid)
-        init_us = tmap[0][1] if tmap else 500000
-        pad_seconds = pad_ticks / out_mid.ticks_per_beat * (init_us / 1_000_000.0)
+        tpb = out_mid.ticks_per_beat
+        orig_tmap = build_tempo_map(src_mid_raw)
+        first_tick = int(6.0 * tpb) - pad_ticks
+        orig_first_ms = tick_to_ms(first_tick, orig_tmap, tpb)
         out_mid = _convert.pad_start(out_mid, pad_ticks)
+        pad_tmap = build_tempo_map(out_mid)
+        pad_first_ms = tick_to_ms(first_tick + pad_ticks, pad_tmap, tpb)
+        pad_seconds = (pad_first_ms - orig_first_ms) / 1000.0
         log(f"    ◇ mid: padded {pad_ticks} tick(s) ({pad_seconds:.3f}s) of "
             f"lead-in before the first gem\n", "info")
     # NOTE: drummer limb animations (PART DRUMS 24-51) are authored during MIDI
@@ -786,10 +790,12 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
         # Copy verbatim — but re-encode to 44.1 kHz first if the source isn't,
         # since RB3 crashes at song LOAD on any other mogg sample rate. Channel
         # count is preserved, so a pre-existing/patched dta stays valid.
-        _mogg.ensure_mogg_44100(mogg_path, out_mogg, log, pad_seconds=pad_seconds)
+        _mogg.ensure_mogg_44100(mogg_path, out_mogg, log, pad_seconds=pad_seconds,
+                              src_mid_raw=mid_path)
     else:
         mogg_layout = _mogg.build_mogg_from_stems(src_folder, out_mogg, log,
-                                                  pad_seconds=pad_seconds)
+                                                   pad_seconds=pad_seconds,
+                                                   src_mid_raw=mid_path)
 
     # 3) MILO: build OUR lipsync milo here — this is the ONLY place a milo is made.
     #    Processing already authored the audio-guided LIPSYNC1 track; we reconstruct

@@ -39,6 +39,7 @@ from . import validate as _validate
 from . import mogg as _mogg
 from . import art as _art
 from . import ps3build as _ps3
+from .midi_utils import build_tempo_map, tick_to_ms
 
 # Reuse every platform-agnostic helper from the tested PS3 path verbatim.
 _parse_song_ini = _ps3._parse_song_ini
@@ -435,10 +436,14 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     pad_seconds = 0.0
     pad_ticks = _convert.lead_in_pad_ticks(src_mid_raw, min_beats=6.0)
     if pad_ticks > 0:
-        tmap = _ps3.build_tempo_map(out_mid)
-        init_us = tmap[0][1] if tmap else 500000
-        pad_seconds = pad_ticks / out_mid.ticks_per_beat * (init_us / 1_000_000.0)
+        tpb = out_mid.ticks_per_beat
+        orig_tmap = _ps3.build_tempo_map(src_mid_raw)
+        first_tick = int(6.0 * tpb) - pad_ticks
+        orig_first_ms = tick_to_ms(first_tick, orig_tmap, tpb)
         out_mid = _convert.pad_start(out_mid, pad_ticks)
+        pad_tmap = _ps3.build_tempo_map(out_mid)
+        pad_first_ms = tick_to_ms(first_tick + pad_ticks, pad_tmap, tpb)
+        pad_seconds = (pad_first_ms - orig_first_ms) / 1000.0
         log(f"    > mid: padded {pad_ticks} tick(s) ({pad_seconds:.3f}s) "
             f"lead-in before the first gem\n", "info")
     charted = _charted_instruments(out_mid)
@@ -491,7 +496,8 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
         # Re-encode to 44.1 kHz if needed (RB3 crashes at LOAD on other rates);
         # 44.1 kHz sources are copied verbatim. Channel count is preserved.
         tmp = os.path.join(tempfile.gettempdir(), f"{shortname}.mogg")
-        _mogg.ensure_mogg_44100(mogg_path, tmp, log, pad_seconds=pad_seconds)
+        _mogg.ensure_mogg_44100(mogg_path, tmp, log, pad_seconds=pad_seconds,
+                              src_mid_raw=mid_path)
         with open(tmp, "rb") as f:
             files[f"{base}/{shortname}.mogg"] = f.read()
         try:
@@ -502,7 +508,8 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
         import tempfile
         tmp = os.path.join(tempfile.gettempdir(), f"{shortname}.mogg")
         mogg_layout = _mogg.build_mogg_from_stems(src_folder, tmp, log,
-                                                  pad_seconds=pad_seconds)
+                                                  pad_seconds=pad_seconds,
+                                                  src_mid_raw=mid_path)
         with open(tmp, "rb") as f:
             files[f"{base}/{shortname}.mogg"] = f.read()
         try:
