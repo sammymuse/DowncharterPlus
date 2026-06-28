@@ -458,9 +458,17 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     # 2) MOGG: reuse source verbatim, else build from stems.
     mogg_layout = None
     if mogg_path:
-        with open(mogg_path, "rb") as f:
+        import tempfile
+        # Re-encode to 44.1 kHz if needed (RB3 crashes at LOAD on other rates);
+        # 44.1 kHz sources are copied verbatim. Channel count is preserved.
+        tmp = os.path.join(tempfile.gettempdir(), f"{shortname}.mogg")
+        _mogg.ensure_mogg_44100(mogg_path, tmp, log)
+        with open(tmp, "rb") as f:
             files[f"{base}/{shortname}.mogg"] = f.read()
-        log(f"    ◇ mogg: copied ({os.path.basename(mogg_path)})\n", "info")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
     else:
         import tempfile
         tmp = os.path.join(tempfile.gettempdir(), f"{shortname}.mogg")

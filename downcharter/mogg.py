@@ -97,6 +97,85 @@ def _resample(data, sr_from: int, sr_to: int):
     return out
 
 
+def _write_mogg(interleaved, total_ch: int, sr: int, out_path: str):
+    """Encode an interleaved float32 [frames, ch] array to a .mogg at `out_path`.
+
+    libsndfile's Vorbis encoder crashes (stack overflow) when handed one giant
+    array, so write in 1-second blocks to a temp .ogg, then prepend the 8-byte
+    unencrypted mogg header (version 0x0A, ogg_offset 8)."""
+    import soundfile as sf
+    max_len = interleaved.shape[0] if interleaved.ndim == 2 else 0
+    tmp_ogg = out_path + ".tmp.ogg"
+    chunk = max(1, sr)
+    with sf.SoundFile(tmp_ogg, mode="w", samplerate=sr, channels=total_ch,
+                      format="OGG", subtype="VORBIS") as f:
+        pos = 0
+        while pos < max_len:
+            n = min(chunk, max_len - pos)
+            f.write(interleaved[pos:pos + n])
+            pos += n
+    header = struct.pack("<II", 0x0A, 8)  # version 0x0A (unencrypted), offset 8
+    with open(tmp_ogg, "rb") as src, open(out_path, "wb") as dst:
+        dst.write(header)
+        while True:
+            block = src.read(1 << 20)
+            if not block:
+                break
+            dst.write(block)
+    try:
+        os.remove(tmp_ogg)
+    except OSError:
+        pass
+
+
+def _decode_mogg(path: str):
+    """Decode a *plain* (unencrypted, version 0x0A) .mogg to (data2d float32
+    [frames, ch], samplerate). Returns None if the mogg is encrypted (version
+    != 0x0A) — those carry a scrambled OGG stream we cannot read."""
+    import soundfile as sf
+    with open(path, "rb") as f:
+        ver, off = struct.unpack("<II", f.read(8))
+        if ver != 0x0A:
+            return None
+        f.seek(off)
+        ogg = f.read()
+    data, sr = sf.read(io.BytesIO(ogg), dtype="float32", always_2d=True)
+    return data, sr
+
+
+def ensure_mogg_44100(src_mogg: str, out_path: str, log_fn=None) -> bool:
+    """Copy `src_mogg` to `out_path`, re-encoding to 44.1 kHz if it isn't already.
+
+    Rock Band 3's audio engine assumes 44.1 kHz and crashes at song LOAD on any
+    other rate. A verbatim copy of a 48 kHz source mogg is exactly that crash, so
+    we decode, resample every channel to 44100 (channel COUNT is preserved, so the
+    existing dta channel map stays valid) and re-encode. Encrypted moggs (version
+    != 0x0A, e.g. an Onyx 0x0B) can't be decoded → copied verbatim with a warning.
+
+    Returns True if a copy/re-encode succeeded."""
+    import shutil
+    log = log_fn or (lambda *a, **k: None)
+    try:
+        decoded = _decode_mogg(src_mogg)
+    except Exception as e:
+        decoded = None
+        log(f"    ⚠ mogg: could not inspect source ({e}) — copied verbatim\n", "warn")
+    if decoded is None:
+        shutil.copy2(src_mogg, out_path)
+        return True
+    data, sr = decoded
+    if sr == _RB3_SAMPLE_RATE:
+        shutil.copy2(src_mogg, out_path)
+        log(f"    ◇ mogg: copied ({os.path.basename(src_mogg)}, "
+            f"{data.shape[1]}ch @ {sr} Hz)\n", "info")
+        return True
+    log(f"    ◇ mogg: re-encoding {os.path.basename(src_mogg)} "
+        f"{sr} Hz → {_RB3_SAMPLE_RATE} Hz (RB3 requires 44.1 kHz)\n", "info")
+    res = _resample(data, sr, _RB3_SAMPLE_RATE)
+    _write_mogg(res, res.shape[1], _RB3_SAMPLE_RATE, out_path)
+    return True
+
+
 def build_mogg_from_stems(folder: str, out_path: str, log_fn=None,
                           pad_seconds: float = 0.0):
     """Build `out_path` (.mogg) from the stems in `folder`.

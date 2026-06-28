@@ -739,8 +739,10 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     mogg_layout = None
     out_mogg = os.path.join(song_dir, f"{shortname}.mogg")
     if mogg_path:
-        shutil.copy2(mogg_path, out_mogg)
-        log(f"    ◇ mogg: copied ({os.path.basename(mogg_path)})\n", "info")
+        # Copy verbatim — but re-encode to 44.1 kHz first if the source isn't,
+        # since RB3 crashes at song LOAD on any other mogg sample rate. Channel
+        # count is preserved, so a pre-existing/patched dta stays valid.
+        _mogg.ensure_mogg_44100(mogg_path, out_mogg, log)
     else:
         mogg_layout = _mogg.build_mogg_from_stems(src_folder, out_mogg, log,
                                                   pad_seconds=pad_seconds)
