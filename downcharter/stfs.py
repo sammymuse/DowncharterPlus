@@ -419,9 +419,10 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     if fx["unison_removed"] or fx["close_fills_removed"]:
         log(f"    > mid: fixed {fx['unison_removed']} partial-unison phrase(s), "
             f"removed {fx['close_fills_removed']} close drum fill(s)\n", "info")
-    if fx.get("fills_extended"):
-        log(f"    > mid: extended {fx['fills_extended']} short drum fill(s) to a "
-            f"full measure (start moved back, activation kept)\n", "info")
+    if fx.get("fills_extended") or fx.get("fills_removed"):
+        log(f"    > mid: extended {fx.get('fills_extended', 0)} short drum fill(s) "
+            f"to a full measure, removed {fx.get('fills_removed', 0)}"
+            f" (blocked by OD)\n", "info")
     if fx["music_start_added"] or fx["music_end_added"]:
         log(f"    > mid: added "
             f"{'[music_start] ' if fx['music_start_added'] else ''}"

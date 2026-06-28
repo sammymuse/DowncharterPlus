@@ -1218,7 +1218,7 @@ def _remove_close_fills(mid: mido.MidiFile) -> int:
     return len(remove_ranges)
 
 
-def _extend_short_fills(mid: mido.MidiFile) -> int:
+def _extend_short_fills(mid: mido.MidiFile) -> dict:
     """RB3 drum fill activation lanes (notes 120-124) must span a real region — the
     default authored length is one measure. Some sources ship degenerate 1-tick fill
     markers (start==end+1); RB3 mishandles a zero-length fill (a known crash class).
@@ -1230,11 +1230,14 @@ def _extend_short_fills(mid: mido.MidiFile) -> int:
     RB3 (another crash class), so we never extend a fill back into one. Measure
     length is read from the authored time signature at the fill (data-derived).
     Operates on PART DRUMS only. No-op when every fill is already at least a measure
-    long. Returns fills extended."""
+    long.     Returns {"extended": int, "removed": int} where removed fills are ones
+    that were shorter than a measure and couldn't be extended to a full measure
+    (blocked by OD/prev fill/song start) — keeping them degenerate is more
+    dangerous than dropping them."""
     tr = next((t for t in mid.tracks
                if (t.name or "").strip().upper() == "PART DRUMS"), None)
     if tr is None:
-        return 0
+        return {"extended": 0, "removed": 0}
     tpb = mid.ticks_per_beat
     sig_changes = _time_sig_changes(mid)   # [(tick, num, den), ...] sorted
 
@@ -1276,10 +1279,12 @@ def _extend_short_fills(mid: mido.MidiFile) -> int:
             starts[on_e.abs_tick][1] = max(starts[on_e.abs_tick][1], e.abs_tick)
             starts[on_e.abs_tick][2].append(on_e)
     if not starts:
-        return 0
+        return {"extended": 0, "removed": 0}
     ordered = sorted(starts.values(), key=lambda s: s[0])
     extended = 0
+    removed = 0
     prev_end = 0
+    drop_ranges: list[tuple[int, int]] = []
     for start, end, on_events in ordered:
         meas = measure_ticks_at(end)
         if end - start < meas:
@@ -1288,18 +1293,33 @@ def _extend_short_fills(mid: mido.MidiFile) -> int:
             od_floor = max((oe for os, oe in od_spans if os < end and oe <= end),
                            default=0)
             new_start = max(prev_end, end - meas, 0, od_floor)
-            if new_start < start:
+            new_len = end - new_start
+            if new_len >= meas:
                 for on_e in on_events:
                     on_e.abs_tick = new_start
                 extended += 1
-                start = new_start
+            else:
+                # Blocked from extending to a full measure (OD/prev fill/song
+                # start) — remove the short fill entirely; keeping it degenerate
+                # is more dangerous than dropping it.
+                drop_ranges.append((start, end))
+                removed += 1
         prev_end = end
-    if not extended:
-        return 0
+    if not extended and not removed:
+        return {"extended": 0, "removed": 0}
+    if removed:
+        def _keep(e):
+            n = getattr(e.msg, "note", None)
+            if n is not None and n in _FILL_NOTES:
+                for ds, de in drop_ranges:
+                    if ds <= e.abs_tick <= de:
+                        return False
+            return True
+        events = [e for e in events if _keep(e)]
     name = tr.name
     tr[:] = to_track(events)
     tr.name = name
-    return extended
+    return {"extended": extended, "removed": removed}
 
 
 def apply_rb_fixups(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
@@ -1335,6 +1355,8 @@ def apply_rb_fixups(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
     unison_removed = _fix_partial_unisons(out)
     close_fills_removed = _remove_close_fills(out)
     fills_extended = _extend_short_fills(out)
+    fills_removed = fills_extended["removed"]
+    fills_extended = fills_extended["extended"]
 
     # basicTiming runs late so it can add an EVENTS/BEAT track without disturbing
     # the per-track loop above (and so a freshly built BEAT track is padded by
@@ -1347,6 +1369,7 @@ def apply_rb_fixups(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
                  "unison_removed": unison_removed,
                  "close_fills_removed": close_fills_removed,
                  "fills_extended": fills_extended,
+                 "fills_removed": fills_removed,
                  "music_start_added": music["music_start_added"],
                  "music_end_added": music["music_end_added"]}
 
