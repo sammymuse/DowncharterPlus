@@ -235,6 +235,20 @@ def build_mogg_from_stems(folder: str, out_path: str, log_fn=None,
         log(f"    ◇ mogg: prepended {pad_seconds:.3f}s lead-in silence\n", "info")
     max_len = max((len(d) for _, d in resampled), default=0)
 
+    # When the source has ONLY a backing mix (song.ogg/song.opus, no per-instrument
+    # stems), a 2-channel backing-only mogg makes the dta's (tracks ...) empty — and
+    # RB3 crashes at song LOAD on a charted song whose instruments map to NO audio
+    # channel. Onyx handles this by always emitting the standard RB layout: silent
+    # per-instrument stems (drum stereo + bass/guitar/vocals mono) plus the mix as
+    # stereo backing. We replicate that exactly so (tracks ...) is populated.
+    if max_len and not any(t != "song" for t, _ in resampled):
+        z2 = np.zeros((max_len, 2), dtype="float32")   # silent stereo (drums)
+        z1 = np.zeros((max_len, 1), dtype="float32")   # silent mono
+        resampled = ([("drum", z2.copy()), ("bass", z1.copy()),
+                      ("guitar", z1.copy()), ("vocals", z1.copy())] + resampled)
+        log("    ◇ mogg: no instrument stems — added silent drum/bass/guitar/"
+            "vocals stems + stereo backing (RB standard layout)\n", "info")
+
     layout: list[tuple[str, list[int]]] = []
     cols: list = []  # individual channel columns (1D arrays length max_len)
     ch = 0
