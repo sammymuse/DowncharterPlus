@@ -1425,40 +1425,6 @@ def lead_in_pad_ticks(mid: mido.MidiFile, min_beats: float = 6.0) -> int:
     return max(0, need - first_note)
 
 
-def find_first_real_note(mid: mido.MidiFile) -> int:
-    """Find the FIRST NOTE REAL across all PART tracks.
-    Skips init markers: the 5 notes at tick 0 (vel=100, duration<=1)
-    that initialise each difficulty level.
-    Returns tick position of first real gem note, or 999999 if none."""
-    INIT_NOTES = {96, 101, 84, 72, 60}
-    first_real = 999999
-    for tr in mid.tracks:
-        nm = (tr.name or "").strip().upper()
-        if not nm.startswith("PART"):
-            continue
-        t = 0
-        for m in tr:
-            t += m.time
-            if m.type == "note_on" and m.velocity > 0:
-                note = getattr(m, "note", -1)
-                vel = m.velocity
-                duration = 0
-                next_t = t
-                for m2 in tr:
-                    if m2.type == "note_off" and getattr(m2, "note", -1) == note:
-                        duration = next_t - t
-                        break
-                    next_t += m2.time
-                    if next_t > t + 1:
-                        break
-                # Only skip init markers at tick 0
-                if t == 0 and vel == 100 and note in INIT_NOTES and duration <= 1:
-                    continue
-                first_real = min(first_real, t)
-                break
-    return first_real
-
-
 def pad_start(mid: mido.MidiFile, pad_ticks: int) -> mido.MidiFile:
     """Return a NEW MidiFile matching Onyx's magmaPad exact output:
     1. Extend the first time-signature bar (4/4 → 10/4 for 6 extra beats).
