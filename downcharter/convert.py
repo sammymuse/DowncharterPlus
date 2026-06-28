@@ -631,18 +631,27 @@ def sanitize_for_rb(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
       * **Phase Shift sysex** (open-note / tap markers, F0 50 53 …) — the YARG/CH
         workaround keeps these (with their illegal 0xFF byte), but RB3 doesn't read
         them; remove them so they can't confuse the loader.
+      * **Tap-note markers (note 104)** on five-fret tracks — the Clone Hero/Phase
+        Shift "tap force" pitch. RB3's standard guitar engine has no tap notes and
+        104 is not a valid RB3 gem marker; Magma rejects it. We drop it (matching
+        Onyx's RB3 target) — the affected gems simply revert to strum/HOPO by
+        spacing, exactly as Onyx leaves them for RB3.
 
-    Never mutates the input. Returns (new_mid, {"overlaps_fixed", "sysex_removed"}).
+    Never mutates the input. Returns
+    (new_mid, {"overlaps_fixed", "sysex_removed", "tap_removed"}).
     """
     from collections import defaultdict, deque
     from .midi_utils import AbsEvent
 
     out = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
-    overlaps_fixed = sysex_removed = 0
+    overlaps_fixed = sysex_removed = tap_removed = 0
 
     for track in mid.tracks:
         abs_evts = to_abs(track)
         last_tick = abs_evts[-1].abs_tick if abs_evts else 0
+        # Tap-force pitch is only meaningful on the five-fret instrument tracks.
+        nm = (track.name or "").strip().upper()
+        strip_tap = nm in _FIVE_FRET_TRACKS
 
         # Pair note_on/off into intervals per pitch, then make the intervals of
         # each pitch non-overlapping. This matches RB3's model (and the validator):
@@ -663,6 +672,9 @@ def sanitize_for_rb(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
             m = e.msg
             if _is_ps_sysex(m):
                 sysex_removed += 1
+                continue
+            if strip_tap and getattr(m, "note", None) == _TAP_NOTE:
+                tap_removed += 1
                 continue
             n = getattr(m, "note", None)
             if n is not None and _msg_is_on(m):
@@ -709,7 +721,8 @@ def sanitize_for_rb(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
         out.tracks.append(to_track([AbsEvent(abs_tick=t, msg=m)
                                     for t, m in merged]))
 
-    return out, {"overlaps_fixed": overlaps_fixed, "sysex_removed": sysex_removed}
+    return out, {"overlaps_fixed": overlaps_fixed, "sysex_removed": sysex_removed,
+                 "tap_removed": tap_removed}
 
 
 # ── Onyx no-Magma fixups (PACK step only) ──────────────────────────────────────
@@ -722,6 +735,10 @@ def sanitize_for_rb(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
 
 _OVERDRIVE_NOTE = 116          # the single overdrive/star-power marker (all parts)
 _GEM_LO, _GEM_HI = 60, 100     # gem lane span across Easy..Expert (5-fret + drums)
+_TAP_NOTE = 104                # CH/Phase-Shift "tap force" pitch (no RB3 equivalent)
+# Five-fret instrument tracks that carry the CH/PS tap-force marker (note 104).
+_FIVE_FRET_TRACKS = {"PART GUITAR", "PART BASS", "PART KEYS", "PART RHYTHM",
+                     "PART GUITAR COOP"}
 
 # Drum difficulty → the lowest gem pitch of that difficulty (used to know which
 # difficulties are actually charted so we only mix events that exist).

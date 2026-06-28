@@ -399,9 +399,10 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     # RB3 crash-safety: fix overlapping/stuck same-pitch notes + strip Phase Shift
     # sysex (open/tap markers) the YARG/CH path keeps.
     out_mid, san = _convert.sanitize_for_rb(out_mid)
-    if san["overlaps_fixed"] or san["sysex_removed"]:
+    if san["overlaps_fixed"] or san["sysex_removed"] or san["tap_removed"]:
         log(f"    > mid: RB-safety - fixed {san['overlaps_fixed']} overlapping "
-            f"note(s), removed {san['sysex_removed']} Phase Shift sysex\n", "info")
+            f"note(s), removed {san['sysex_removed']} Phase Shift sysex, "
+            f"{san['tap_removed']} tap marker(s)\n", "info")
     # Onyx no-Magma fixups: empty overdrive (fixNotelessOD) + drum [mix] events.
     out_mid, fx = _convert.apply_rb_fixups(out_mid)
     if fx["noteless_od_removed"] or fx["drum_mix_added"]:
