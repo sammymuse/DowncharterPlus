@@ -334,7 +334,7 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
     cores = []
     for track, idxs in layout:
         for _ in idxs:
-            cores.append("1" if track == "guitar" else "-1")
+            cores.append("-1")
     # Pans: stereo pairs → -1 / 1; lone channel → 0.
     pans = []
     for track, idxs in layout:
@@ -403,6 +403,11 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
     if has_keys:
         rank_lines.append(f"      (keys {rank_k})")
         rank_lines.append(f"      (real_keys {rank_k})")
+    else:
+        rank_lines.append("      (keys 0)")
+        rank_lines.append("      (real_keys 0)")
+    rank_lines.append(f"      (real_bass 0)")
+    rank_lines.append(f"      (real_guitar 0)")
     rank_lines.append(f"      (band {rank_band})")
     rank_block = "\n".join(rank_lines)
     # Content rating. song.ini (YARG) uses 1=FF 2=SR 3=MC 4=NR 5=SC; RB3's dta
@@ -445,6 +450,7 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
       (vocal_parts {1 if has_vox else 0})
       (drum_solo (seqs (kick.cue snare.cue tom1.cue tom2.cue crash.cue)))
       (drum_freestyle (seqs (kick.cue snare.cue hat.cue ride.cue crash.cue)))
+      (hopo_threshold 170)
    )
    (bank "sfx/tambourine_bank.milo")
    (drum_bank "sfx/kit01_bank.milo")
@@ -465,6 +471,9 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
    (album_art {'TRUE' if has_art else 'FALSE'})
    (album_name "{album}")
    (album_track_number {album_track}){author_line}
+   (sub_genre subgenre_other)
+   (tuning_offset_cents 0.0)
+   (guide_pitch_volume -3.0)
    (encoding {enc_token})
    ;2xBass={'1' if is_2x else '0'}
 )
