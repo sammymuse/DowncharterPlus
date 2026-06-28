@@ -207,19 +207,27 @@ def _audio_guided_spans(mid, folder: str) -> list:
     tpb = mid.ticks_per_beat
     abs_evts = to_abs(mid.tracks[idx])
 
-    gems: list[tuple[int, int]] = []          # (start_tick, end_tick) talky tubes
+    # Collect vocal gems across the WHOLE vocal range (36-84), not just our talky
+    # pitch (50): a song with PRE-CHARTED, pitched vocals carries real melody notes
+    # there and no note-50 tubes, so keying off 50 alone produced zero spans → no
+    # lipsync milo for those songs. Onyx's autoLipsync likewise reads any charted
+    # vocal gem. Vocals are monophonic, so a single open note at a time is correct;
+    # phrase markers (105/106) and percussion (96/97) fall outside 36-84 and are
+    # excluded automatically.
+    gems: list[tuple[int, int]] = []          # (start_tick, end_tick) vocal gems
     open_t = None
     for e in abs_evts:
         m = e.msg
+        n = getattr(m, "note", None)
+        if n is None or not (36 <= n <= 84):
+            continue
         is_off = m.type == "note_off" or (m.type == "note_on"
                                           and getattr(m, "velocity", 0) == 0)
-        if (m.type == "note_on" and getattr(m, "velocity", 0) > 0
-                and getattr(m, "note", None) == _VOCAL_TALKY_PITCH):
+        if m.type == "note_on" and getattr(m, "velocity", 0) > 0:
             open_t = e.abs_tick
-        elif is_off and getattr(m, "note", None) == _VOCAL_TALKY_PITCH:
-            if open_t is not None:
-                gems.append((open_t, e.abs_tick))
-                open_t = None
+        elif is_off and open_t is not None:
+            gems.append((open_t, e.abs_tick))
+            open_t = None
     if not gems:
         return []
 
@@ -669,9 +677,10 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     #     Phase Shift sysex (open/tap markers) the YARG/CH path keeps. Without this
     #     a broken-chord/hung-sustain chart hangs RB3 in-game.
     out_mid, san = _convert.sanitize_for_rb(out_mid)
-    if san["overlaps_fixed"] or san["sysex_removed"]:
+    if san["overlaps_fixed"] or san["sysex_removed"] or san["tap_removed"]:
         log(f"    ◇ mid: RB-safety — fixed {san['overlaps_fixed']} overlapping "
-            f"note(s), removed {san['sysex_removed']} Phase Shift sysex\n", "info")
+            f"note(s), removed {san['sysex_removed']} Phase Shift sysex, "
+            f"{san['tap_removed']} tap marker(s)\n", "info")
     # b3) Onyx no-Magma fixups: remove note-less overdrive phrases (fixNotelessOD)
     #     and add missing drum [mix] events (drumsComplete).
     out_mid, fx = _convert.apply_rb_fixups(out_mid)
