@@ -38,6 +38,10 @@ _STEM_ORDER = [
 _AUDIO_EXT = (".ogg", ".opus", ".wav", ".flac", ".mp3")
 _NON_AUDIO = (".mogg",)
 
+# Rock Band 3's audio engine assumes 44.1 kHz moggs; any other rate crashes the
+# game at song load. We always encode the mogg at this rate.
+_RB3_SAMPLE_RATE = 44100
+
 
 def _classify(filename: str) -> str | None:
     low = os.path.basename(filename).lower()
@@ -114,7 +118,7 @@ def build_mogg_from_stems(folder: str, out_path: str, log_fn=None,
             "no audio (.ogg/.opus/.wav/.flac/.mp3 or a .mogg) found to build a .mogg")
 
     decoded = []
-    base_sr = None
+    src_sr = None
     failed: list[str] = []
     for track, path in stems:
         try:
@@ -126,14 +130,22 @@ def build_mogg_from_stems(folder: str, out_path: str, log_fn=None,
             log(f"    ⚠ skipped unreadable audio "
                 f"{os.path.basename(path)} ({e})\n", "warn")
             continue
-        if base_sr is None:
-            base_sr = sr
+        if src_sr is None:
+            src_sr = sr
         decoded.append((track, data, sr))
     if not decoded:
         listed = ", ".join(failed) if failed else "none"
         raise ValueError(f"no audio could be decoded (malformed/unreadable: {listed})")
 
-    # Resample everything to the first stem's rate, pad to the longest length.
+    # Rock Band 3 requires 44.1 kHz moggs — its audio engine assumes 44100 and
+    # crashes at song LOAD on any other rate (e.g. a 48 kHz source stem). Always
+    # resample the output to 44100, regardless of the source rate. (A 44.1 kHz
+    # source is a no-op.)
+    base_sr = _RB3_SAMPLE_RATE
+    if src_sr != base_sr:
+        log(f"    ◇ mogg: resampling {src_sr} Hz → {base_sr} Hz (RB3 requires "
+            f"44.1 kHz)\n", "info")
+    # Resample everything to RB3's 44.1 kHz, pad to the longest length.
     resampled = [(t, _resample(d, sr, base_sr)) for (t, d, sr) in decoded]
     # Lead-in silence (kept in lockstep with a lead-in-padded MIDI).
     pad_frames = int(round(max(0.0, pad_seconds) * base_sr))
