@@ -407,6 +407,11 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     if fx["noteless_od_removed"] or fx["drum_mix_added"]:
         log(f"    > mid: removed {fx['noteless_od_removed']} empty overdrive "
             f"phrase(s), added {fx['drum_mix_added']} drum mix event(s)\n", "info")
+    if fx["end_added"] or fx["beat_added"]:
+        log(f"    > mid: basicTiming - "
+            f"{'added [end]; ' if fx['end_added'] else ''}"
+            f"{('generated BEAT track (%d beats)' % fx['beat_added']) if fx['beat_added'] else 'BEAT present'}\n",
+            "info")
     # Lead-in pad (magmaPad): only when building the mogg from stems.
     pad_seconds = 0.0
     if mogg_path is None:

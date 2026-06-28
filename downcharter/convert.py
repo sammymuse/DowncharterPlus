@@ -809,9 +809,120 @@ def _add_drum_mix_events(track) -> int:
     return len(charted)
 
 
+def _time_sig_changes(mid: mido.MidiFile) -> list[tuple[int, int, int]]:
+    """Return [(abs_tick, numerator, denominator), ...] sorted, with an implicit
+    4/4 at tick 0 if none is authored there."""
+    changes: list[tuple[int, int, int]] = []
+    for tr in mid.tracks:
+        t = 0
+        for m in tr:
+            t += m.time
+            if m.type == "time_signature":
+                changes.append((t, m.numerator, m.denominator))
+    changes.sort(key=lambda c: c[0])
+    if not changes or changes[0][0] != 0:
+        changes.insert(0, (0, 4, 4))
+    return changes
+
+
+def _generate_beats(mid: mido.MidiFile, end_tick: int) -> list[tuple[int, bool]]:
+    """Produce [(tick, is_downbeat), ...] from tick 0 up to (not including)
+    end_tick, following the authored time signatures. Beat unit = a quarter note
+    scaled by the denominator (tpb*4/den); the first beat of each measure (and of
+    every time-sig change) is the downbeat. This is the data-derived skeleton Onyx
+    `basicTiming`/`fixBeatTrack` lays down — no per-song hard-coding."""
+    tpb = mid.ticks_per_beat
+    changes = _time_sig_changes(mid)
+    beats: list[tuple[int, bool]] = []
+    for idx, (seg_start, num, den) in enumerate(changes):
+        seg_end = changes[idx + 1][0] if idx + 1 < len(changes) else end_tick
+        seg_end = min(seg_end, end_tick)
+        beat_unit = max(1, tpb * 4 // max(1, den))
+        t = seg_start
+        bim = 0  # beat index within the measure (resets at each time-sig change)
+        while t < seg_end:
+            beats.append((t, bim % max(1, num) == 0))
+            t += beat_unit
+            bim += 1
+    return beats
+
+
+def _add_basic_timing(mid: mido.MidiFile) -> dict:
+    """Onyx `basicTiming`: guarantee an EVENTS ``[end]`` marker and a populated
+    BEAT track — songs we never processed (raw YARG/CH .mid) may ship neither, and
+    RB3 needs both (no [end] => the song never ends / can hang; no BEAT track =>
+    no measure grid). Mutates `mid` in place; adds only what is missing. Returns
+    {"end_added": 0|1, "beat_added": <beat notes added>}."""
+    from .midi_utils import AbsEvent
+    tpb = mid.ticks_per_beat
+
+    # Last event tick across the whole file (song extent).
+    last = 0
+    for tr in mid.tracks:
+        t = 0
+        for m in tr:
+            t += m.time
+        last = max(last, t)
+
+    # Existing [end] tick (in any track), if authored.
+    end_tick = None
+    for tr in mid.tracks:
+        t = 0
+        for m in tr:
+            t += m.time
+            if m.type == "text" and (m.text or "").strip().lower() == "[end]":
+                end_tick = t if end_tick is None else min(end_tick, t)
+
+    end_added = 0
+    if end_tick is None:
+        # Place [end] two beats past the last content, rounded up to a beat.
+        end_tick = (last // tpb + 2) * tpb
+        evt = AbsEvent(abs_tick=end_tick,
+                       msg=mido.MetaMessage("text", text="[end]", time=0))
+        ev_tr = next((tr for tr in mid.tracks
+                      if (tr.name or "").strip().upper() == "EVENTS"), None)
+        if ev_tr is None:
+            ev_tr = mido.MidiTrack()
+            mid.tracks.append(ev_tr)
+            ev_tr[:] = to_track([evt])
+        else:
+            ev_tr[:] = to_track(to_abs(ev_tr) + [evt])
+        ev_tr.name = "EVENTS"   # (re)set after content replace; to_track drops it
+        end_added = 1
+
+    # BEAT track: present AND carrying downbeat/upbeat (12/13) notes?
+    beat_tr = next((tr for tr in mid.tracks
+                    if (tr.name or "").strip().upper() == "BEAT"), None)
+    has_beats = beat_tr is not None and any(
+        getattr(m, "note", None) in (12, 13) for m in beat_tr)
+    beat_added = 0
+    if not has_beats and end_tick > 0:
+        beats = _generate_beats(mid, end_tick)
+        off_gap = max(1, tpb // 8)
+        evts = []
+        for tick, is_down in beats:
+            note = 12 if is_down else 13
+            evts.append(AbsEvent(abs_tick=tick,
+                                 msg=mido.Message("note_on", note=note,
+                                                  velocity=100, time=0)))
+            evts.append(AbsEvent(abs_tick=tick + off_gap,
+                                 msg=mido.Message("note_off", note=note,
+                                                  velocity=0, time=0)))
+        if beat_tr is None:
+            beat_tr = mido.MidiTrack()
+            beat_tr.name = "BEAT"
+            mid.tracks.append(beat_tr)
+        beat_tr[:] = to_track(evts)
+        beat_tr.name = "BEAT"
+        beat_added = len(beats)
+
+    return {"end_added": end_added, "beat_added": beat_added}
+
+
 def apply_rb_fixups(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
     """Apply Onyx's no-Magma MIDI fixups that affect RB3 load/playback, returning
-    a NEW MidiFile and a stats dict. Currently: remove note-less overdrive phrases
+    a NEW MidiFile and a stats dict. Currently: ensure an EVENTS ``[end]`` marker
+    and a BEAT track (`basicTiming`), remove note-less overdrive phrases
     (`fixNotelessOD`) on every instrument track, and add missing drum `[mix]`
     events (`drumsComplete`) on PART DRUMS. No-op where nothing needs fixing;
     never mutates the input. The lead-in pad is handled separately (it needs the
@@ -834,7 +945,14 @@ def apply_rb_fixups(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
         # which RB3 doesn't read and which would get a spurious mix event).
         if nm == "PART DRUMS":
             mix_added += _add_drum_mix_events(tr)
-    return out, {"noteless_od_removed": od_removed, "drum_mix_added": mix_added}
+
+    # basicTiming runs last so it can add an EVENTS/BEAT track without disturbing
+    # the per-track loop above (and so a freshly built BEAT track is padded by
+    # pad_start downstream).
+    timing = _add_basic_timing(out)
+    return out, {"noteless_od_removed": od_removed, "drum_mix_added": mix_added,
+                 "end_added": timing["end_added"],
+                 "beat_added": timing["beat_added"]}
 
 
 def lead_in_pad_ticks(mid: mido.MidiFile, min_beats: float = 2.0) -> int:
