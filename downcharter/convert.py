@@ -1225,9 +1225,12 @@ def _extend_short_fills(mid: mido.MidiFile) -> int:
     We lengthen any fill shorter than its measure by moving its START backward to
     ``end - one_measure`` so the ACTIVATION point (the fill end) stays exactly where
     it was — the fill still triggers in the same place. The new start is clamped to
-    the previous fill's end and to tick 0. Measure length is read from the authored
-    time signature at the fill (data-derived). Operates on PART DRUMS only. No-op
-    when every fill is already at least a measure long. Returns fills extended."""
+    the previous fill's end, to tick 0, AND to the end of any preceding overdrive
+    (note 116) phrase: a drum fill that overlaps an OD phrase is itself invalid in
+    RB3 (another crash class), so we never extend a fill back into one. Measure
+    length is read from the authored time signature at the fill (data-derived).
+    Operates on PART DRUMS only. No-op when every fill is already at least a measure
+    long. Returns fills extended."""
     tr = next((t for t in mid.tracks
                if (t.name or "").strip().upper() == "PART DRUMS"), None)
     if tr is None:
@@ -1245,6 +1248,18 @@ def _extend_short_fills(mid: mido.MidiFile) -> int:
         return max(1, num) * max(1, tpb * 4 // max(1, den))
 
     events = to_abs(tr)
+    # Overdrive (note 116) phrase spans on this drum track — a fill must not be
+    # extended back into one (fill overlapping OD is invalid in RB3).
+    od_spans = []
+    _od_open = None
+    for e in events:
+        if getattr(e.msg, "note", None) != _OVERDRIVE_NOTE:
+            continue
+        if _msg_is_on(e.msg):
+            _od_open = e.abs_tick
+        elif _msg_is_off(e.msg) and _od_open is not None:
+            od_spans.append((_od_open, e.abs_tick)); _od_open = None
+
     # Pair each fill-lane note_on with its matching note_off; group by start tick.
     open_at: dict[int, list] = {}        # note -> [on_event,...]
     spans = []                           # (start, end, [on_events])
@@ -1268,7 +1283,11 @@ def _extend_short_fills(mid: mido.MidiFile) -> int:
     for start, end, on_events in ordered:
         meas = measure_ticks_at(end)
         if end - start < meas:
-            new_start = max(prev_end, end - meas, 0)
+            # Floor at the end of any OD phrase that precedes this fill's end, so
+            # the widened fill never overlaps an overdrive phrase.
+            od_floor = max((oe for os, oe in od_spans if os < end and oe <= end),
+                           default=0)
+            new_start = max(prev_end, end - meas, 0, od_floor)
             if new_start < start:
                 for on_e in on_events:
                     on_e.abs_tick = new_start
