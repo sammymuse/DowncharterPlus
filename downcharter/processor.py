@@ -12,6 +12,7 @@ from .midi_utils import (
 )
 from .guitar import reduce_guitar
 from .chart import is_chart, chart_to_midi
+from .convert import normalize_source_midi
 from .quality import groove_check, GROOVE_FLOOR, expert_accents
 from .drums import reduce_drums_all
 from .venue import (
@@ -428,6 +429,11 @@ def process_midi(
     # (often 192). Normalise up-front so all downstream tick math AND the output
     # are 480.
     rescale_midi_tpb(mid, 480)
+    # Onyx-style source-format auto-detect: rename legacy tracks to RB names and
+    # remap FoF star-power (note 103) to RB overdrive (116). No-op on RB-format
+    # charts (incl. our own .chart imports). Runs before difficulty generation so
+    # the whole pipeline sees standard track names and overdrive on 116.
+    norm = normalize_source_midi(mid)
     tpb = mid.ticks_per_beat
     tempo_map = build_tempo_map(mid)
     time_sig_map = build_time_sig_map(mid)
@@ -441,6 +447,7 @@ def process_midi(
         "beat_extended": False,
         "audio_used": False, "audio_drums": False, "audio_lyrics": False,
         "audio_anim_instr": [],
+        "tracks_renamed": norm["tracks_renamed"], "sp_remapped": norm["sp_remapped"],
     }
 
     # Signals for generating the venue
@@ -1204,6 +1211,12 @@ def process_folder(
                 groove_fails.append(f"{name}: {w}")
             extra = f"  [2x: {s['converted_2x']}]" if do_expert_plus and s["total_kicks"] else ""
             log_fn(f"  ✓ {name}{extra}\n", "ok")
+            if s.get("tracks_renamed"):
+                ren = ", ".join(f"{o or '?'}→{n}" for o, n in s["tracks_renamed"])
+                log_fn(f"    ◇ normalized track names: {ren}\n", "info")
+            if s.get("sp_remapped"):
+                log_fn(f"    ◇ FoF star-power: remapped {s['sp_remapped']} "
+                       f"phrase(s) from note 103 → overdrive 116\n", "info")
             if do_venue and s.get("venue_events"):
                 audio = " · audio✓" if s.get("audio_used") else ""
                 extra = ""

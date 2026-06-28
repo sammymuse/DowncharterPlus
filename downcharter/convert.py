@@ -286,6 +286,78 @@ def convert_open_notes(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
     return out, {"converted": converted}
 
 
+# ── source-format normalisation (Onyx MIDI auto-detect) ────────────────────────
+# A raw .mid imported from FoF/GH/Phase-Shift uses conventions RB3 doesn't read.
+# Onyx auto-detects the source format and rewrites it into the RB layout before
+# anything else (its "RB Overdrive format, passing through unmodified" vs the
+# FoF/PS/CH import path). chart_to_midi already emits the RB layout directly, so
+# this brings a raw source .mid up to the SAME end-state. Two data-derived,
+# no-op-when-already-RB normalisations:
+#   • legacy track names → the exact RB names (RB3 ignores a track it can't name);
+#   • FoF star-power on note 103 → RB overdrive note 116 (FoF reused the pitch RB
+#     uses for solos, so an old chart's "star power" is otherwise invisible).
+
+# Canonical RB3 track names (upper-case). A track whose name only differs by case
+# or stray whitespace is snapped to the canonical spelling.
+_RB_TRACK_NAMES = {
+    "PART GUITAR", "PART BASS", "PART DRUMS", "PART KEYS", "PART VOCALS",
+    "PART GUITAR COOP", "PART RHYTHM", "HARM1", "HARM2", "HARM3",
+    "EVENTS", "VENUE", "BEAT",
+}
+# Legacy/aliased names → the RB standard (GH "T1/T2 GEMS", singular variants).
+_TRACK_ALIASES = {
+    "T1 GEMS": "PART GUITAR", "T2 GEMS": "PART GUITAR COOP",
+    "GUITAR": "PART GUITAR", "BASS": "PART BASS", "DRUMS": "PART DRUMS",
+    "PART GUITARS": "PART GUITAR", "PART DRUM": "PART DRUMS",
+    "PART KEY": "PART KEYS", "PART VOCAL": "PART VOCALS",
+}
+# Five-fret + drums gameplay tracks where note 103 means star power in FoF.
+_SP_REMAP_TRACKS = {
+    "PART GUITAR", "PART BASS", "PART KEYS", "PART RHYTHM",
+    "PART GUITAR COOP", "PART DRUMS",
+}
+
+
+def normalize_source_midi(mid: mido.MidiFile) -> dict:
+    """Onyx-style source-format auto-detect, mutating `mid` in place. Renames
+    legacy/aliased instrument tracks to the exact RB3 names, and — only when the
+    whole file has NO note-116 overdrive but DOES use note 103 (the unambiguous
+    FoF signature, since any RB chart with a solo also carries 116 overdrive) —
+    remaps note 103 on gameplay tracks to overdrive note 116. Both are no-ops on a
+    chart already in RB format. Returns {"tracks_renamed": [(old, new), ...],
+    "sp_remapped": <overdrive phrases remapped>}."""
+    renamed: list[tuple[str, str]] = []
+    for tr in mid.tracks:
+        nm = (tr.name or "").strip().upper()
+        canon = _TRACK_ALIASES.get(nm) or (nm if nm in _RB_TRACK_NAMES else None)
+        if canon and canon != (tr.name or ""):
+            old = tr.name
+            tr.name = canon
+            if (old or "").strip().upper() != canon:   # not just a case/space fix
+                renamed.append((old, canon))
+
+    c116 = c103 = 0
+    for tr in mid.tracks:
+        for m in tr:
+            if _msg_is_on(m):
+                n = getattr(m, "note", None)
+                if n == 116:
+                    c116 += 1
+                elif n == 103:
+                    c103 += 1
+    sp_remapped = 0
+    if c116 == 0 and c103 > 0:
+        for tr in mid.tracks:
+            if (tr.name or "").strip().upper() not in _SP_REMAP_TRACKS:
+                continue
+            for m in tr:
+                if getattr(m, "note", None) == 103 and m.type in ("note_on", "note_off"):
+                    m.note = 116
+                    if m.type == "note_on" and getattr(m, "velocity", 0) > 0:
+                        sp_remapped += 1
+    return {"tracks_renamed": renamed, "sp_remapped": sp_remapped}
+
+
 # ── drum limb animations ───────────────────────────────────────────────────────
 # RB3 animates the drummer from dedicated animation notes (24-51 on PART DRUMS).
 # YARG auto-animates from the chart, but RB3 needs them authored, so a chart with
