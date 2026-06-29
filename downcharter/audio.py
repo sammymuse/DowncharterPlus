@@ -151,42 +151,97 @@ def find_song_audio(folder: str) -> list[str]:
     return moggs[:1]
 
 
+def _find_ffmpeg():
+    """Locate ffmpeg binary. Returns path or None."""
+    import shutil
+    ff = shutil.which("ffmpeg")
+    if ff:
+        return ff
+    # Common Windows locations + user's shared build
+    for candidate in [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        os.path.expanduser(
+            r"~\Downloads\ffmpeg-master-latest-win64-gpl-shared"
+            r"\ffmpeg-master-latest-win64-gpl-shared\bin\ffmpeg.exe"),
+    ]:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def _read_all_or_blocks(src):
     """Read every frame of `src` (a path or BytesIO) to a 2D float32 array.
-    Some encoders emit .opus/.ogg files that libsndfile decodes fine by SEEK but
-    trips on ('Supported file format but file is malformed') during a SEQUENTIAL
-    read at a few bad pages. (The file is NOT corrupt — seeking past the page works.)
-    Fall back to SEEK-BASED chunked reading: read 1s at a time and, on a bad page,
-    substitute that 1s with silence and seek on. This recovers the WHOLE song
-    (vs sequential block-read, which stops dead at the first bad page) while keeping
-    the timeline aligned (silence gaps stay in place, so section→frame mapping holds).
+
+    Tries libsndfile first. If that fails (malformed OGG/OPUS pages), tries
+    ffmpeg as fallback — ffmpeg handles malformed pages gracefully without
+    inserting silence. Only falls back to the old seek-based chunked reading
+    (which substitutes silence for bad pages) as a last resort.
+
     Returns (data2d, sr)."""
     import numpy as np
     import soundfile as sf
     try:
         return sf.read(src, dtype="float32", always_2d=True)
     except Exception:
-        if hasattr(src, "seek"):
-            src.seek(0)
-        with sf.SoundFile(src) as f:
-            sr, ch, total = f.samplerate, f.channels, len(f)
-            chunk = max(1, sr)                    # 1 s
-            out, pos, good = [], 0, 0
-            while pos < total:
-                n = min(chunk, total - pos)
-                try:
-                    f.seek(pos)
-                    d = f.read(n, dtype="float32", always_2d=True)
-                    if len(d) < n:                # short read near a bad page
-                        d = np.vstack([d, np.zeros((n - len(d), ch), "float32")])
-                    good += 1
-                except Exception:
-                    d = np.zeros((n, ch), "float32")     # skip bad page, keep timing
-                out.append(d)
-                pos += n
-        if not good:
-            raise
-        return np.concatenate(out, axis=0), sr
+        pass
+
+    # If src is a file path (not BytesIO), try ffmpeg
+    if isinstance(src, str) and os.path.isfile(src):
+        ff = _find_ffmpeg()
+        if ff:
+            try:
+                return _decode_with_ffmpeg(src, ff)
+            except Exception:
+                pass
+
+    # Last resort: seek-based chunked reading (may insert silence for bad pages)
+    if hasattr(src, "seek"):
+        src.seek(0)
+    with sf.SoundFile(src) as f:
+        sr, ch, total = f.samplerate, f.channels, len(f)
+        chunk = max(1, sr)                    # 1 s
+        out, pos, good = [], 0, 0
+        while pos < total:
+            n = min(chunk, total - pos)
+            try:
+                f.seek(pos)
+                d = f.read(n, dtype="float32", always_2d=True)
+                if len(d) < n:                # short read near a bad page
+                    d = np.vstack([d, np.zeros((n - len(d), ch), "float32")])
+                good += 1
+            except Exception:
+                d = np.zeros((n, ch), "float32")     # skip bad page, keep timing
+            out.append(d)
+            pos += n
+    if not good:
+        raise
+    return np.concatenate(out, axis=0), sr
+
+
+def _decode_with_ffmpeg(src, ffmpeg_path):
+    """Decode audio via ffmpeg to WAV in memory, then read with soundfile.
+
+    ffmpeg handles malformed OGG/OPUS pages that trip libsndfile, avoiding
+    the silence-gap fallback of _read_all_or_blocks."""
+    import subprocess
+    import tempfile
+    import soundfile as sf
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    tmp.close()
+    try:
+        subprocess.run(
+            [ffmpeg_path, "-y", "-i", src,
+             "-f", "wav", "-acodec", "pcm_f32le",
+             "-ar", "48000", "-ac", "2", tmp.name],
+            capture_output=True, check=True)
+        data, sr = sf.read(tmp.name, dtype="float32", always_2d=True)
+        return data, sr
+    finally:
+        try:
+            os.remove(tmp.name)
+        except OSError:
+            pass
 
 
 def load_mono(path: str):
