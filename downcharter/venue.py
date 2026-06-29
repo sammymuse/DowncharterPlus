@@ -256,6 +256,9 @@ def parse_sections(events: list[AbsEvent], song_end: int) -> list[Section]:
 # the concrete light/post-proc flavor. Inspired by the Magma themes (VENUE_SPEC §2).
 
 # Energy tier of each section type.
+# Calibrated against the 20 official venue learn songs.
+# verse/intro/bridge stay calm — the density refinement splits them into play/mellow
+# based on onset density, matching the official ~30%/30% split.
 SECTION_ENERGY = {
     "intro": "calm", "verse": "calm", "bridge": "calm", "outro": "calm",
     "default": "calm", "prechorus": "mid", "postchorus": "mid", "riff": "mid",
@@ -1749,6 +1752,8 @@ def _mood_for_level(level: int, instrument: str, sec_idx: int,
         ratio = sec_density / max(song_mean_density, 0.01)
         if level == 0 and ratio > 1.2:
             level = 1
+        elif level == 1 and ratio < 0.6:
+            level = 0
         elif level == 2 and ratio < 0.6:
             level = 1
     return f"[{_MOOD_LADDER[max(0, min(level, 2))]}]"
