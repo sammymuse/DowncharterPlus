@@ -1603,7 +1603,7 @@ _INTENSE_THEMES = {"metal", "punk"}
 # venues: drums/bass idle sooner (shorter rests visible), guitar holds longer
 # (flicker-prone on sparse riffs), vocal is the most rest-heavy (idle 21%).
 _IDLE_DOWNTIME = {"drums": 2, "bass": 2, "guitar": 8, "keys": 3, "vocal": 1}
-_IDLE_DOWNTIME_INTENSE = 2
+_IDLE_DOWNTIME_INTENSE = 4
 
 
 def phrase_end_ticks(track) -> list[int]:
@@ -1668,9 +1668,9 @@ def _idle_marker_at(sections: list[Section], tick: int,
     energy there, so an idle that begins in a loud section and runs into a calm one stops
     standing intense and slackens (fixes idle_intense bleeding past a section boundary).
     idle_intense is only for keys/vocal sitting out a loud section — the official venues
-    use it 10%/22% for keys/vocal but <2% for guitar/bass/drums.
-    idle_realtime is reserved for the SONG BOUNDARIES only (emitted separately);
-    rests within intros/outros use plain [idle]."""
+    use it 10%/22% for keys/vocal but <2% for guitar/bass/drums, so we restrict it to
+    those instruments. idle_realtime is reserved for SONG BOUNDARIES only (emitted
+    separately); rests within intros/outros use plain [idle]."""
     s = _section_at(sections, tick)
     if s is None:
         return "[idle]"
