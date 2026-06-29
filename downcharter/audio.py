@@ -491,19 +491,13 @@ def _scale01(values):
     return np.clip((v - lo) / (hi - lo), 0.0, 1.0)
 
 
-# Empirical FEEL weights — derived from feel_study.py over the 20 venue learn
-# songs (HIGH = pyro/strobe/intense/keyframe vs CALM = blackout). Each cue is the
-# song-relative percentile rank; the weight is its discrimination gap (HIGH−CALM
-# median), normalized. Intensity is FEEL, not amplitude: loudness/flux lead, but
-# heaviness (low-end), wall/distortion (flatness) and transient hardness (density)
-# add real signal — and BRIGHTNESS IS INVERTED (high intensity is DARKER/heavier,
-# gap −16.5; the old code added it positively, pulling the wrong way).
-# Rebalanced toward HEAVINESS (low 0.11→0.16, flat→0.12, bright −0.11→−0.13; flux
-# 0.27→0.24 and dens 0.06→0.04 trimmed to keep Σ|w|≈1.0 so the calibrated tier
-# thresholds don't drift). Effect: dark/heavy moderate-loudness sections (e.g. a
-# heavy instrumental outro/riff) lift a tier; pure bright-loud peaks ease a hair.
-_FEEL_W = {"loud": 0.34, "flux": 0.24, "flat": 0.12,
-           "low": 0.16, "dens": 0.04, "bright": -0.13}
+# Empirical FEEL weights — calibrated against 100 official venue learn songs
+# (feel_calibrate.py grid search maximizing 3-way tier agreement).
+# loud leads (0.40), brightness inverted and weighted (-0.20) — high intensity
+# is DARKER. flux (0.20) captures transients. low/dens/flat at 0.10 each add
+# heaviness/hardness/wall. Σ|w| ≈ 1.0 for stable threshold calibration.
+_FEEL_W = {"loud": 0.40, "flux": 0.20, "flat": 0.10,
+           "low": 0.10, "dens": 0.10, "bright": -0.20}
 
 
 def _feel_frames(mono, sr):
@@ -643,7 +637,7 @@ def section_energy_subspans(paths, sections, tempo_map, tpb: int,
         heavy = np.convolve(heavy, np.ones(w) / w, mode="same")
     if w > 1:
         env = np.convolve(env, np.ones(w) / w, mode="same")
-    tier = np.where(env < 0.45, 0, np.where(env < 0.62, 1, 2)).astype(int)
+    tier = np.where(env < 0.40, 0, np.where(env < 0.45, 1, 2)).astype(int)
     min_frames = max(1, int(round(min_span_s / stft_s)))
     names = ("calm", "mid", "high")
     out: list[list[tuple[int, int, str]]] = []
@@ -716,7 +710,7 @@ def section_energy_tiers(paths, sections, tempo_map, tpb: int,
     scores = section_energy_scores(paths, sections, tempo_map, tpb, hop_s)
     if scores is None:
         return None
-    return ["calm" if v < 0.45 else ("mid" if v < 0.62 else "high") for v in scores]
+    return ["calm" if v < 0.40 else ("mid" if v < 0.45 else "high") for v in scores]
 
 
 def section_brightness_tiers(paths, sections, tempo_map, tpb: int,
