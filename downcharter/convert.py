@@ -1430,10 +1430,22 @@ def pad_start(mid: mido.MidiFile, pad_ticks: int) -> mido.MidiFile:
     for track in mid.tracks:
         nm = (track.name or "").strip().upper()
         abs_evts = to_abs(track)
-        # Strip original meta events we replace from shifted events.
+        # Strip events we replace from shifted list.  Keep set_tempo events
+        # AFTER the first one — they are valid tempo changes along the song
+        # that must shift with pad_ticks.  Only the first set_tempo (at tick 0)
+        # is replaced by the 120 BPM pad + restore pair below.
+        first_tempo_seen = False
+        def _keep_set_tempo(e):
+            nonlocal first_tempo_seen
+            if e.msg.type == "set_tempo":
+                if not first_tempo_seen:
+                    first_tempo_seen = True
+                    return False   # skip first tempo (replaced by pad)
+                return True        # keep subsequent tempo changes
+            return True
         shifted = [AbsEvent_shift(e, pad_ticks) for e in abs_evts
-                   if e.msg.type not in ("set_tempo", "time_signature",
-                                          "track_name")]
+                   if _keep_set_tempo(e)
+                   and e.msg.type not in ("time_signature", "track_name")]
         # For BEAT: drop shifted events inside the extended bar (we generated them).
         if nm == "BEAT":
             extended_end = new_num * tpb
