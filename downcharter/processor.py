@@ -96,15 +96,26 @@ def _section_midi_cues(mid, sections, part_onsets,
 
 
 def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
-                        mid, part_onsets, audio_path: str | None = None) -> bool:
-    """Set each section's energy from a COMPOSITE score, not loudness alone.
-    Blends song-relative cues: audio (loudness+flux+brightness) + MIDI (band
-    fullness + velocity) + the structural type. A chorus must be loud AND busy AND
-    bright AND full to read 'high' — plain volume no longer decides on its own.
-    Audio is used whenever ANY song audio exists (the mixed .ogg/.mogg/.mp3, not
-    only separated stems — find_song_audio falls back to the single mix). The
-    MIDI-only path (returns False) kicks in solely when the folder has NO audio file
-    at all; the MIDI cues still refine the energy there (dependency-free fallback)."""
+                        mid, part_onsets, audio_path: str | None = None,
+                        theme: str | None = None) -> bool:
+    """Set each section's energy using a HYBRID audio+MIDI approach.
+
+    Audio (feel_envelope) decides calm AND high — it has higher agreement
+    than the MIDI composite because it measures actual sound.  MIDI composite
+    decides mid (audio's overlap zone where calm/high scores are ambiguous).
+
+    Per-theme thresholds: each genre has a different audio baseline (metal is
+    louder than slow), so the calm/high thresholds shift by theme.  Calibrated
+    against 1450 official section markers across 100 venue learn songs
+    (dev/theme_offset_search.py).  Themes without enough data or with inverted
+    thresholds (audio can't separate tiers) fall back to the shared baseline.
+
+    Pipeline:
+      1. Audio feel_envelope < calm_threshold → calm; > high_threshold → high
+      2. Audio ambiguous: MIDI composite decides
+      3. energy_spans (sub-spans) add within-section dynamics from audio
+
+    Without audio, falls back to MIDI-only composite thresholds."""
     if not sections:
         return False
     from .venue import SECTION_ENERGY
@@ -134,36 +145,60 @@ def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
             if spans is not None:
                 for s, sp in zip(sections, spans):
                     s.energy_spans = sp
+    # ── MIDI composite: density-led mid/high decider ──────────────────────
+    # Optimized against the 20 official venue learn songs' section energy
+    # markers. Density + structure lead; fullness supports, velocity is
+    # zeroed (charts are often near-flat in velocity).
+    midi_comp = [0.70 * rdens[i] + 0.00 * rfull[i] + 0.20 * struct[i]
+                 + 0.10 * rvel[i] for i in range(len(sections))]
 
-    comp: list[float] = []
-    for i in range(len(sections)):
+    # ── Hybrid tier assignment ────────────────────────────────────────────
+    # Audio feel_envelope decides calm AND high — it has better agreement
+    # than the MIDI composite because it measures actual sound.
+    # MIDI composite decides mid (audio's overlap zone).
+    # When no audio, MIDI composite is used directly.
+    #
+    # Per-theme thresholds (calibrated dev/theme_offset_search.py):
+    #   slow/rock/synth/vintage/pop have distinct audio baselines.
+    #   metal/punk/prog/psych have weak audio↔tier correlation or inverted
+    #   thresholds — they use the shared baseline (0.40/0.45).
+    _SHARED_CALM = 0.40
+    _SHARED_HIGH = 0.45
+    _THEME_THRESHOLDS = {
+        "slow":    (0.42, 0.70),   # slow songs are quieter, raise high gate
+        "rock":    (0.35, 0.68),   # rock mid-range, wider calm zone
+        "synth":   (0.43, 0.50),   # synth has narrow high band
+        "vintage": (0.25, 0.53),   # vintage is loud-ish, lower calm gate
+        "pop":     (0.25, 0.48),   # pop similar to vintage
+    }
+    audio_calm, audio_high = _THEME_THRESHOLDS.get(theme, (_SHARED_CALM, _SHARED_HIGH))
+
+    for i, s in enumerate(sections):
         if au is not None:
-            # FEEL audio dominates (0.78). MIDI note-density cues are a weak support
-            # only (they track note count, not felt intensity) and the structural
-            # prior is barely-there (0.05) so energy is NOT locked to section type —
-            # a busy chorus no longer auto-reads 'high'.
-            comp.append(0.78 * au[i] + 0.06 * rfull[i] + 0.06 * rdens[i]
-                        + 0.05 * rvel[i] + 0.05 * struct[i])
+            if au[i] < audio_calm:
+                s.energy = "calm"
+            elif au[i] > audio_high:
+                s.energy = "high"
+            else:
+                # Audio ambiguous — MIDI decides
+                if midi_comp[i] < 0.25:
+                    s.energy = "calm"
+                elif midi_comp[i] > 0.55:
+                    s.energy = "high"
+                else:
+                    s.energy = "mid"
         else:
-            # No audio: note DENSITY leads (survives a missing vocal track), band
-            # fullness + structure support, velocity is the weakest (charts are often
-            # near-flat in velocity). Density-led so a heavy instrumental outro/
-            # breakdown (no singer) is no longer dragged to 'calm' by the fullness
-            # penalty — it reads by how busy the band actually is.
-            comp.append(0.45 * rdens[i] + 0.20 * rfull[i] + 0.25 * struct[i]
-                        + 0.10 * rvel[i])
+            # No audio — MIDI composite only
+            if midi_comp[i] < 0.20:
+                s.energy = "calm"
+            elif midi_comp[i] < 0.60:
+                s.energy = "mid"
+            else:
+                s.energy = "high"
 
-    # Tier by FIXED thresholds on the composite itself — NOT forced thirds, and NOT
-    # re-normalized to this song's range (which would undo the song-relative meaning
-    # and re-force a spread). The audio cue (au) is now MAGNITUDE-scaled song-relative
-    # (_scale01: judged vs the song's loud ceiling, not rank position), so a merely-
-    # moderate verse maps low and reads 'calm' instead of being inflated to 'mid' just
-    # for sitting above the quiet parts. 'high' stays rare (only the real peaks); a
-    # near-flat song collapses to ~0.5 → all 'mid' (no fake extremes). Thresholds
-    # recalibrated (calm<0.45) on the magnitude comp vs the 20 venues (CALM markers
-    # median ~0.40, HIGH ~0.69) + the Broken Mirror anchors (Verse 2 → calm).
-    for s, c in zip(sections, comp):
-        s.energy = "calm" if c < 0.45 else ("mid" if c < 0.62 else "high")
+    # Sub-spans from audio are NOT clamped — they provide within-section
+    # dynamics that may differ from the section-level tier.
+
     return au is not None
 
 
@@ -577,7 +612,7 @@ def process_midi(
         # energy. With no audio/libs, sections.energy stays None (MIDI-only intact).
         stats["audio_used"] = _apply_audio_energy(
             os.path.dirname(os.path.abspath(src_path)), sections, tempo_map, tpb,
-            mid, part_onsets, audio_path)
+            mid, part_onsets, audio_path, theme)
         # Drum hits for the lightshow (synced keyframes + pyro).
         drum_onsets = sorted(
             t for nm, ons in part_onsets.items()
