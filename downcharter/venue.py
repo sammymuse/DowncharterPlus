@@ -1679,12 +1679,12 @@ def _idle_marker_at(sections: list[Section], tick: int,
     energy there, so an idle that begins in a loud section and runs into a calm one stops
     standing intense and slackens (fixes idle_intense bleeding past a section boundary).
     idle_intense is only for keys/vocal sitting out a loud section — the official venues
-    use it 10%/22% for keys/vocal but <2% for guitar/bass/drums."""
+    use it 10%/22% for keys/vocal but <2% for guitar/bass/drums.
+    idle_realtime is reserved for the SONG BOUNDARIES only (emitted separately);
+    rests within intros/outros use plain [idle]."""
     s = _section_at(sections, tick)
     if s is None:
         return "[idle]"
-    if s.kind in ("intro", "outro"):
-        return "[idle_realtime]"
     if _energy_tier_at(s, tick) == "high" and instrument in ("keys", "vocal"):
         return "[idle_intense]"
     return "[idle]"
