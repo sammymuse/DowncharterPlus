@@ -185,7 +185,7 @@ def ensure_mogg_44100(src_mogg: str, out_path: str, log_fn=None,
             log(f"    [W] mogg: could not inspect source ({e})\n", "warn")
             src_first_real = 0.0
 
-        # Find first MIDI note (including init markers at tick 0)
+        # Find first PLAYABLE MIDI note (skip phrase markers >= 103)
         midi_first = 999999
         try:
             import mido
@@ -204,7 +204,9 @@ def ensure_mogg_44100(src_mogg: str, out_path: str, log_fn=None,
                 for m in tr:
                     t += m.time
                     if m.type == "note_on" and m.velocity > 0:
-                        midi_first = min(midi_first, t)
+                        # Skip phrase markers (105/106), BRE (120-124), etc.
+                        if getattr(m, "note", 0) < 103:
+                            midi_first = min(midi_first, t)
                         break
         except Exception as e:
             log(f"    [W] mogg: could not inspect MIDI ({e})\n", "warn")
@@ -315,7 +317,7 @@ def build_mogg_from_stems(folder: str, out_path: str, log_fn=None,
         if src_first_real is None:
             src_first_real = 0.0
 
-        # Find first MIDI note (including init markers at tick 0)
+        # Find first PLAYABLE MIDI note (skip phrase markers >= 103)
         midi_first = 999999
         try:
             import mido
@@ -334,7 +336,9 @@ def build_mogg_from_stems(folder: str, out_path: str, log_fn=None,
                 for m in tr:
                     t += m.time
                     if m.type == "note_on" and m.velocity > 0:
-                        midi_first = min(midi_first, t)
+                        # Skip phrase markers (105/106), BRE (120-124), etc.
+                        if getattr(m, "note", 0) < 103:
+                            midi_first = min(midi_first, t)
                         break
         except Exception as e:
             log(f"    [W] mogg: could not inspect MIDI ({e})\n", "warn")
