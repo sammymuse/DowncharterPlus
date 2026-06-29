@@ -772,7 +772,7 @@ def process_midi(
                 tname = _INST_TRACK[inst]
                 if tname.upper() in existing:
                     continue
-                markers = build_animations(ons, sections, theme, tpb, time_sig_map, inst)
+                markers = build_animations(ons, sections, tpb, time_sig_map, inst)
                 markers += instrument_extras(inst, ons, sections, tpb)
                 if markers:
                     new_mid.tracks.append(_build_anim_track(tname, markers))

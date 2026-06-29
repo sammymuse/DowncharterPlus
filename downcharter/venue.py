@@ -1649,20 +1649,6 @@ def _section_at(sections: list[Section], tick: int) -> Section | None:
     return sections[-1] if sections else None
 
 
-def _idle_state(s: Section) -> str:
-    """The right 'not playing' marker for a section. anim_study over the 20 official
-    venues: idle_realtime is the dead-quiet bookend (loud_p ~9, intro/outro), idle is
-    a calm pause (loud_p ~33), idle_intense is standing energetic during a LOUD section
-    (loud_p ~77, used 140× — we never emitted it). So an instrument silent in a high-
-    energy section stands intense, not slack."""
-    if s.kind in ("intro", "outro"):
-        return "[idle_realtime]"
-    # Use the heaviness-gated tier (same as [intense]/camera): a silent member only
-    # stands 'intense' in a genuinely heavy section (Breakdown), not in a loud-but-
-    # light sung chorus whose 'high' spans were demoted to 'mid'.
-    return "[idle_intense]" if _camera_energy(s) == "high" else "[idle]"
-
-
 def _energy_tier_at(s: Section, tick: int) -> str:
     """Energy tier of the sub-span COVERING `tick` (not the section peak). A calm pocket
     inside an otherwise-loud section reads calm; falls back to the section energy when
@@ -1693,15 +1679,6 @@ def _idle_marker_at(sections: list[Section], tick: int,
     return "[idle]"
 
 
-def _idle_segments(sections: list[Section], start: int, b: int,
-                   floor: int, instrument: str = "guitar") -> list[tuple[int, str]]:
-    """Emit a single idle marker for the rest [start, b). The official venues emit ONE
-    idle marker at the start of a rest, not one per energy boundary crossed. The marker
-    type is keyed to the local energy at the rest start."""
-    tick = max(start, floor)
-    m = _idle_marker_at(sections, tick, instrument)
-    return [(tick, m)]
-
 
 _MOOD_LADDER = ["mellow", "play", "intense"]
 _ENERGY_LEVEL = {"calm": 0, "mid": 1, "high": 2}
@@ -1726,7 +1703,7 @@ def _camera_energy(s: Section) -> str:
 # mood is purely energy-driven: calm→mellow, mid→play, high→intense.
 
 
-def _anim_state(s: Section, playing: bool, instrument: str,
+def _anim_state(s: Section, instrument: str,
                 sec_idx: int = 0, sec_onset_density: float = 0,
                 song_mean_density: float = 1) -> str:
     """Decide an instrument's mood marker in a section. Mood follows the section
@@ -1734,8 +1711,6 @@ def _anim_state(s: Section, playing: bool, instrument: str,
     a calm section where the instrument plays densely bumps up to play (active, not
     resting), and a high section where the instrument plays sparsely bumps down to
     play (present but not driving)."""
-    if not playing:
-        return _idle_state(s)
     if s.kind == "solo" and _solo_instrument(s.name) == instrument:
         return "[play_solo]"
     return _mood_for_level(_ENERGY_LEVEL[section_energy(s)], instrument, sec_idx,
@@ -1760,7 +1735,7 @@ def _mood_for_level(level: int, instrument: str, sec_idx: int,
 
 
 def build_animations(part_onsets: list[int], sections: list[Section],
-                     theme_name: str, tpb: int, time_sig_map: list,
+                     tpb: int, time_sig_map: list,
                      instrument: str) -> list[AbsEvent]:
     """Generate mood markers for ONE instrument. Offset of ±1/8 on transitions;
     [idle_realtime] at song boundaries; [idle] on long downtime after the last note."""
@@ -1844,7 +1819,7 @@ def build_animations(part_onsets: list[int], sections: list[Section],
             else:
                 tick = max(s.start - eighth, floor)
             if not _in_idle(tick):
-                timeline.append((tick, _anim_state(s, playing, instrument, i,
+                timeline.append((tick, _anim_state(s, instrument, i,
                                   _sec_density(s.start, s.end), song_mean_density)))
 
     # Emit idle markers at the computed ticks
@@ -1942,7 +1917,7 @@ def generate_animations(part_onsets_by_track: dict[str, list[int]],
         inst = _part_instrument(tname)
         if inst is None:
             continue
-        markers = build_animations(onsets, sections, theme_name, tpb,
+        markers = build_animations(onsets, sections, tpb,
                                    time_sig_map, inst)
         pe = vocal_phrase_ends if inst == "vocal" else None
         markers += instrument_extras(inst, onsets, sections, tpb, pe)
