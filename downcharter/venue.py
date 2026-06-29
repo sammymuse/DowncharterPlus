@@ -395,6 +395,38 @@ SECTION_PP_POOL = {
     "default":    ["ProFilm_a", "clean_trails", "film_contrast", "ProFilm_b"],
 }
 
+# Filter behavioral roles — derived from the 20 official venues study.
+# BURST: typically in rapid clusters (<1 beat gaps), intense sections
+# SHORT: transições 1-4 beats, prechorus/bridge
+# HOLD: seguram ≥4 beats, intro/outro/verse calmo
+# None = no strong bias (used in any context)
+_PP_FILTER_ROLE = {
+    # BURST (cluster-heavy, <1 beat after)
+    "film_contrast_red": "burst", "horror_movie_special": "burst",
+    "video_security": "burst", "clean_trails": "burst", "shitty_tv": "burst",
+    "desat_posterize_trails": "burst", "photo_negative": "burst",
+    # SHORT (1-4 beats after)
+    "film_b+w": "short", "film_contrast_blue": "short", "ProFilm_b": "short",
+    "photocopy": "short", "bloom": "short",
+    # HOLD (≥4 beats after, the one held in a cluster)
+    "film_16mm": "hold", "video_a": "hold", "ProFilm_a": "hold",
+    "film_silvertone": "hold", "posterize": "hold", "desat_blue": "hold",
+    "film_contrast_green": "hold", "film_sepia_ink": "hold",
+}
+
+
+def _reorder_pp_pool(pool: list[str], tier: str) -> list[str]:
+    """Reorder pool so the tier-appropriate filters come first:
+    high energy → burst filters first; calm → hold filters first; mid → short first."""
+    role_pref = {"high": "burst", "calm": "hold", "mid": "short"}
+    pref = role_pref.get(tier)
+    if not pref:
+        return pool
+    preferred = [f for f in pool if _PP_FILTER_ROLE.get(f) == pref]
+    others = [f for f in pool if _PP_FILTER_ROLE.get(f) != pref]
+    return preferred + others
+
+
 # Temperature swap: pulls the temperature-bearing presets toward the section's real
 # TIMBRE (audio spectral centroid). A dark/bassy section (low centroid) → 'warm';
 # a bright/cymbal/distorted section (high centroid) → 'cool'. The mid third (or no
@@ -964,6 +996,7 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
     env = sorted(energy_env) if energy_env else None
     walls = sorted(strobe_spans) if strobe_spans else []
     last: str | None = None
+
     for s in sections:
         # Pool BY SECTION TYPE (primary); fallback to the genre palette.
         palette = SECTION_PP_POOL.get(s.kind) or _section_pps(theme, s)
@@ -971,7 +1004,9 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
         palette = _pp_tone_pool(palette, s.warmth)
         if not palette:
             continue
+        # Reorder by energy tier: burst filters first in high, hold first in calm.
         sect_energy = section_energy(s)
+        palette = _reorder_pp_pool(palette, sect_energy)
         # Timbre gate: the pp_study shows loudness does NOT predict pp density
         # (corr≈0.04). The one cue that separates the two faces of a loud wall is
         # TIMBRE: a BRIGHT/aggressive wall (metalcore, e.g. BMTH — 836 pp) gets dense
