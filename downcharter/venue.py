@@ -378,21 +378,26 @@ SECTION_PP_POOL = {
     # Calibrated to the real FREQUENCIES of the official ones: film_contrast_red is the
     # #1 (590×) → dominates intense sections; the WHOLE catalog is used, incl. those
     # previously never placed (posterize, ProFilm_mirror_a, space_woosh, video_a,
-    # film_contrast_blue, video_security, ProFilm_a, film_b+w). contrast_a/desat_blue/
-    # film_blue_filter (official 3/12/7 — nearly nil) drop out of the pools.
-    "intro":      ["photocopy", "film_16mm", "video_bw", "ProFilm_a"],
-    "verse":      ["desat_posterize_trails", "film_contrast_blue", "film_contrast_red", "photocopy"],
+    # film_contrast_blue, video_security, ProFilm_a, film_b+w, bright,
+    # film_contrast_green, ProFilm_psychedelic_blue_red, desat_blue, film_blue_filter,
+    # contrast_a). All 30 official filters are now in the pools.
+    "intro":      ["photocopy", "film_16mm", "video_bw", "ProFilm_a", "bright", "desat_blue"],
+    "verse":      ["desat_posterize_trails", "film_contrast_blue", "film_contrast_red", "photocopy",
+                   "video_a", "film_contrast_green", "ProFilm_mirror_a", "film_blue_filter"],
     "prechorus":  ["film_contrast_red", "desat_posterize_trails", "shitty_tv", "clean_trails"],
-    "chorus":     ["film_contrast_red", "clean_trails", "bloom", "video_trails"],
-    "postchorus": ["film_contrast_red", "clean_trails", "bloom", "film_contrast"],
+    "chorus":     ["film_contrast_red", "clean_trails", "bloom", "video_trails",
+                   "bright", "desat_blue", "ProFilm_psychedelic_blue_red"],
+    "postchorus": ["film_contrast_red", "clean_trails", "bloom", "film_contrast", "desat_blue"],
     "bridge":     ["video_trails", "shitty_tv", "posterize", "video_security", "video_bw"],
-    "solo":       ["video_trails", "flicker_trails", "shitty_tv", "posterize"],
-    "breakdown":  ["film_contrast_red", "horror_movie_special", "shitty_tv", "photo_negative", "video_security"],
-    "build":      ["clean_trails", "space_woosh", "film_contrast", "film_contrast_red"],
+    "solo":       ["video_trails", "flicker_trails", "shitty_tv", "posterize", "film_blue_filter"],
+    "breakdown":  ["film_contrast_red", "horror_movie_special", "shitty_tv", "photo_negative",
+                   "video_security", "film_contrast_green"],
+    "build":      ["clean_trails", "space_woosh", "film_contrast", "film_contrast_red",
+                   "ProFilm_mirror_a"],
     "drop":       ["film_contrast_red", "flicker_trails", "space_woosh", "photo_negative"],
     "riff":       ["film_contrast_red", "desat_posterize_trails", "film_contrast", "ProFilm_b"],
-    "outro":      ["film_b+w", "video_bw", "ProFilm_b", "film_silvertone", "film_sepia_ink"],
-    "default":    ["ProFilm_a", "clean_trails", "film_contrast", "ProFilm_b"],
+    "outro":      ["film_b+w", "video_bw", "ProFilm_b", "film_silvertone", "film_sepia_ink", "bright"],
+    "default":    ["ProFilm_a", "clean_trails", "film_contrast", "ProFilm_b", "contrast_a"],
 }
 
 # Filter behavioral roles — derived from the 20 official venues study.
@@ -405,13 +410,15 @@ _PP_FILTER_ROLE = {
     "film_contrast_red": "burst", "horror_movie_special": "burst",
     "video_security": "burst", "clean_trails": "burst", "shitty_tv": "burst",
     "desat_posterize_trails": "burst", "photo_negative": "burst",
+    "bright": "burst", "ProFilm_mirror_a": "burst",
+    "ProFilm_psychedelic_blue_red": "burst", "film_blue_filter": "burst",
     # SHORT (1-4 beats after)
     "film_b+w": "short", "film_contrast_blue": "short", "ProFilm_b": "short",
     "photocopy": "short", "bloom": "short",
     # HOLD (≥4 beats after, the one held in a cluster)
     "film_16mm": "hold", "video_a": "hold", "ProFilm_a": "hold",
     "film_silvertone": "hold", "posterize": "hold", "desat_blue": "hold",
-    "film_contrast_green": "hold", "film_sepia_ink": "hold",
+    "film_contrast_green": "hold", "film_sepia_ink": "hold", "contrast_a": "hold",
 }
 
 
