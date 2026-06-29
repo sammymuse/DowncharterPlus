@@ -146,47 +146,41 @@ def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
                 for s, sp in zip(sections, spans):
                     s.energy_spans = sp
     # ── MIDI composite: density-led mid/high decider ──────────────────────
-    # Optimized against the 20 official venue learn songs' section energy
+    # Optimized against the 100 official venue learn songs' section energy
     # markers. Density + structure lead; fullness supports, velocity is
     # zeroed (charts are often near-flat in velocity).
     midi_comp = [0.70 * rdens[i] + 0.00 * rfull[i] + 0.20 * struct[i]
                  + 0.10 * rvel[i] for i in range(len(sections))]
 
     # ── Hybrid tier assignment ────────────────────────────────────────────
-    # Audio feel_envelope decides calm AND high — it has better agreement
-    # than the MIDI composite because it measures actual sound.
-    # MIDI composite decides mid (audio's overlap zone).
-    # When no audio, MIDI composite is used directly.
+    # BLENDED approach: combined = alpha * audio + (1-alpha) * midi, then
+    # thresholds on the combined score.  Alpha=0.6 means audio leads (60%)
+    # but MIDI fills in the mid zone that audio can't separate.
     #
-    # Per-theme thresholds (calibrated dev/theme_offset_search.py):
-    #   slow/rock/synth/vintage/pop have distinct audio baselines.
-    #   metal/punk/prog/psych have weak audio↔tier correlation or inverted
-    #   thresholds — they use the shared baseline (0.40/0.45).
-    _SHARED_CALM = 0.40
-    _SHARED_HIGH = 0.45
+    # Calibrated against 1450 official section markers across 100 songs
+    # (dev/blend_compare.py): alpha=0.6 + calm<0.40 + high>0.55 gives the
+    # best balance of agreement (41.2%) and distribution (23/35/42 vs
+    # official 31/35/35).
+    #
+    # Per-theme thresholds: slow songs have a quieter baseline, so the
+    # calm threshold drops and the high threshold rises.
+    _BLEND_ALPHA = 0.60
+    _BLEND_CALM = 0.40
+    _BLEND_HIGH = 0.55
     _THEME_THRESHOLDS = {
-        "slow":    (0.42, 0.70),   # slow songs are quieter, raise high gate
-        "rock":    (0.35, 0.68),   # rock mid-range, wider calm zone
-        "synth":   (0.43, 0.50),   # synth has narrow high band
-        "vintage": (0.25, 0.53),   # vintage is loud-ish, lower calm gate
-        "pop":     (0.25, 0.48),   # pop similar to vintage
+        "slow":    (0.42, 0.70),   # slow songs are quieter
     }
-    audio_calm, audio_high = _THEME_THRESHOLDS.get(theme, (_SHARED_CALM, _SHARED_HIGH))
+    blend_calm, blend_high = _THEME_THRESHOLDS.get(theme, (_BLEND_CALM, _BLEND_HIGH))
 
     for i, s in enumerate(sections):
         if au is not None:
-            if au[i] < audio_calm:
+            combined = _BLEND_ALPHA * au[i] + (1 - _BLEND_ALPHA) * midi_comp[i]
+            if combined < blend_calm:
                 s.energy = "calm"
-            elif au[i] > audio_high:
+            elif combined > blend_high:
                 s.energy = "high"
             else:
-                # Audio ambiguous — MIDI decides
-                if midi_comp[i] < 0.25:
-                    s.energy = "calm"
-                elif midi_comp[i] > 0.55:
-                    s.energy = "high"
-                else:
-                    s.energy = "mid"
+                s.energy = "mid"
         else:
             # No audio — MIDI composite only
             if midi_comp[i] < 0.20:
