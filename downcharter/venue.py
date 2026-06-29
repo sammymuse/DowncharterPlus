@@ -1654,9 +1654,9 @@ def _energy_tier_at(s: Section, tick: int) -> str:
     inside an otherwise-loud section reads calm; falls back to the section energy when
     there are no audio spans (MIDI-only path)."""
     if s.energy_spans:
-        for a, b, t in s.energy_spans:
+        for a, b, tier in s.energy_spans:
             if a <= tick < b:
-                return t
+                return tier
         return (s.energy_spans[0][2] if tick < s.energy_spans[0][0]
                 else s.energy_spans[-1][2])
     return section_energy(s)
@@ -1741,6 +1741,8 @@ def build_animations(part_onsets: list[int], sections: list[Section],
     [idle_realtime] at song boundaries; [idle] on long downtime after the last note."""
     onsets = sorted(part_onsets)
     if not onsets:
+        return [_txt(0, "[idle_realtime]")]
+    if not sections:
         return [_txt(0, "[idle_realtime]")]
     floor = onsets[0]
     eighth = max(1, tpb // 2)
