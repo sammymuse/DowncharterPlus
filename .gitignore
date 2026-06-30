@@ -33,10 +33,7 @@ CustomsBookv1.pdf
 dev/
 
 # ── Internal development notes (kept local, not published) ──
-CLAUDE.md
-VENUE_SPEC.md
-OFFICIAL_RULES.md
-drums-historico-remendos.md
+*.md
 
 # ── IDE / OS ────────────────────────────────────────────
 .idea/
