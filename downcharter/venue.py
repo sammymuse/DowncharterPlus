@@ -1602,8 +1602,8 @@ _INTENSE_THEMES = {"metal", "punk"}
 # (puts the instrument down). Per-instrument thresholds derived from the 20 official
 # venues: drums/bass idle sooner (shorter rests visible), guitar holds longer
 # (flicker-prone on sparse riffs), vocal is the most rest-heavy (idle 21%).
-_IDLE_DOWNTIME = {"drums": 2, "bass": 2, "guitar": 8, "keys": 3, "vocal": 1}
-_IDLE_DOWNTIME_INTENSE = 4
+_IDLE_DOWNTIME = {"drums": 2, "bass": 2, "guitar": 6, "keys": 3, "vocal": 1}
+_IDLE_DOWNTIME_INTENSE = 2
 
 
 def phrase_end_ticks(track) -> list[int]:
@@ -1676,17 +1676,17 @@ def _energy_tier_at(s: Section, tick: int) -> str:
 
 def _idle_marker_at(sections: list[Section], tick: int,
                     instrument: str = "guitar") -> str:
-    """The right 'not playing' marker for the EXACT tick of a rest — keyed to the LOCAL
-    energy there, so an idle that begins in a loud section and runs into a calm one stops
-    standing intense and slackens (fixes idle_intense bleeding past a section boundary).
-    idle_intense is only for keys/vocal sitting out a loud section — the official venues
-    use it 10%/22% for keys/vocal but <2% for guitar/bass/drums, so we restrict it to
-    those instruments. idle_realtime is reserved for SONG BOUNDARIES only (emitted
-    separately); rests within intros/outros use plain [idle]."""
+    """The right 'not playing' marker for the EXACT tick of a rest. Uses the
+    SECTION's overall energy (not the sub-span at the exact tick) so idle_intense
+    fires whenever the section is loud, even if the idle tick lands in a calm
+    pocket within the section. idle_intense is only for keys/vocal sitting out a
+    loud section — the official venues use it 10%/22% for keys/vocal but <2% for
+    guitar/bass/drums, so we restrict it to those instruments. idle_realtime is
+    reserved for SONG BOUNDARIES only (emitted separately)."""
     s = _section_at(sections, tick)
     if s is None:
         return "[idle]"
-    if _energy_tier_at(s, tick) == "high" and instrument in ("keys", "vocal"):
+    if section_energy(s) == "high" and instrument in ("keys", "vocal"):
         return "[idle_intense]"
     return "[idle]"
 
@@ -1799,11 +1799,7 @@ def build_animations(part_onsets: list[int], sections: list[Section],
     dt_measures = _IDLE_DOWNTIME.get(instrument, 4)
     for a, b in zip(onsets, onsets[1:]):
         mt = measure_ticks_at(a, time_sig_map, tpb)
-        sec = _section_at(sections, a)
-        thresh = (_IDLE_DOWNTIME_INTENSE
-                  if sec is not None and _energy_tier_at(sec, a) == "high"
-                  else dt_measures)
-        if b - a >= thresh * mt:
+        if b - a >= dt_measures * mt:
             idle_ranges.append((a, b))
             idle_ticks.add(a + quarter)
 
@@ -1847,14 +1843,20 @@ def build_animations(part_onsets: list[int], sections: list[Section],
         timeline.append((it, _idle_marker_at(sections, it, instrument)))
 
     # Boundary idle markers: [idle_realtime] at song start and end.
+    # End boundary: only when the gap from last note to end is large (≥ 2 measures),
+    # otherwise the section's own [idle] covers it.  This prevents over-emitting
+    # idle_realtime (2 beats was too short — almost every song has >2 beats after
+    # the last vocal note).
     if sections:
         first_sec = sections[0]
         if first_sec.kind in ("intro", "default") or floor > first_sec.start + quarter:
             timeline.insert(0, (0, "[idle_realtime]"))
         last_sec = sections[-1]
         song_end = last_sec.end
-        if last_onset + 2 * quarter < song_end:
-            timeline.append((last_onset + 2 * quarter, "[idle_realtime]"))
+        end_mt = measure_ticks_at(last_onset, time_sig_map, tpb)
+        end_thresh = max(2 * quarter, 4 * end_mt) if end_mt else 2 * quarter
+        if last_onset + end_thresh < song_end:
+            timeline.append((last_onset + end_thresh, "[idle_realtime]"))
 
     timeline.sort(key=lambda x: x[0])
     out: list[AbsEvent] = []
