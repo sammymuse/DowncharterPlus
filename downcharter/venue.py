@@ -277,31 +277,31 @@ THEMES = {
     # - stomp kept only in mid (1.4% official frequency)
     "rock":    {"calm": (["manual_warm", "loop_warm", "harmony", "loop_cool"], ["ProFilm_a", "ProFilm_b"]),
                 "mid": (["chorus", "searchlights", "sweep", "stomp"], ["bright", "contrast_a"]),
-                "high": (["chorus", "dischord", "strobe_slow"], ["bright", "film_contrast"]), "pace": 1.0},
+                "high": (["verse", "dischord", "strobe_slow"], ["bright", "film_contrast"]), "pace": 1.0},
     "metal":   {"calm": (["silhouettes_spot", "manual_cool"], ["film_b+w", "video_bw"]),
                 "mid": (["silhouettes_spot", "chorus", "manual_cool"], ["contrast_a", "film_contrast"]),
-                "high": (["chorus", "dischord", "strobe_slow"], ["photo_negative", "film_contrast_red"]), "pace": 0.85},
+                "high": (["verse", "dischord", "strobe_slow"], ["photo_negative", "film_contrast_red"]), "pace": 0.85},
     "prog":    {"calm": (["loop_cool", "harmony"], ["film_blue_filter", "desat_blue"]),
                 "mid": (["manual_cool", "sweep"], ["film_contrast_blue", "contrast_a"]),
                 "high": (["verse", "dischord", "strobe_slow"], ["film_contrast", "bright"]), "pace": 1.0},
     "pop":     {"calm": (["harmony", "loop_warm"], ["ProFilm_a", "bloom"]),
                 "mid": (["chorus", "searchlights"], ["bright", "ProFilm_b"]),
-                "high": (["chorus", "verse", "strobe_slow"], ["bloom", "bright"]), "pace": 1.0},
+                "high": (["chorus", "frenzy", "strobe_slow"], ["bloom", "bright"]), "pace": 1.0},
     "punk":    {"calm": (["loop_warm", "manual_warm"], ["video_a", "film_16mm"]),
                 "mid": (["chorus", "sweep", "stomp"], ["video_trails", "contrast_a"]),
-                "high": (["chorus", "dischord", "strobe_slow"], ["film_16mm", "video_trails"]), "pace": 0.8},
+                "high": (["chorus", "frenzy", "strobe_slow"], ["film_16mm", "video_trails"]), "pace": 0.8},
     "synth":   {"calm": (["silhouettes_spot", "loop_cool"], ["desat_blue", "film_blue_filter"]),
                 "mid": (["manual_cool", "sweep"], ["ProFilm_psychedelic_blue_red", "desat_blue"]),
-                "high": (["verse", "chorus", "strobe_slow"], ["ProFilm_psychedelic_blue_red", "bloom"]), "pace": 1.0},
+                "high": (["verse", "frenzy", "strobe_slow"], ["ProFilm_psychedelic_blue_red", "bloom"]), "pace": 1.0},
     "psych":   {"calm": (["loop_warm", "harmony"], ["posterize", "video_trails"]),
                 "mid": (["manual_warm", "sweep"], ["video_trails", "ProFilm_mirror_a"]),
-                "high": (["dischord", "verse", "strobe_slow"], ["ProFilm_mirror_a", "posterize"]), "pace": 1.1},
+                "high": (["dischord", "frenzy", "strobe_slow"], ["ProFilm_mirror_a", "posterize"]), "pace": 1.1},
     "slow":    {"calm": (["silhouettes_spot", "manual_warm"], ["film_sepia_ink", "film_silvertone"]),
                 "mid": (["verse", "harmony"], ["film_silvertone", "ProFilm_a"]),
-                "high": (["chorus", "verse", "strobe_slow"], ["bright", "ProFilm_a"]), "pace": 1.4},
+                "high": (["chorus", "frenzy", "strobe_slow"], ["bright", "ProFilm_a"]), "pace": 1.4},
     "vintage": {"calm": (["manual_warm", "loop_warm"], ["film_sepia_ink", "film_16mm"]),
                 "mid": (["chorus", "sweep", "stomp"], ["film_16mm", "film_contrast"]),
-                "high": (["dischord", "chorus", "strobe_slow"], ["film_contrast", "contrast_a"]), "pace": 1.1},
+                "high": (["dischord", "frenzy", "strobe_slow"], ["film_contrast", "contrast_a"]), "pace": 1.1},
 }
 DEFAULT_THEME = "rock"
 
@@ -357,15 +357,14 @@ _LIGHT_BLOCK_MEASURES = {"calm": 4, "mid": 3, "high": 2}
 # covered only ~46% of the vocabulary used.
 SECTION_LIGHT_POOL = {
     # Energy-dependent pools from official venue data (100 songs).
-    # Slot counts calibrated so pool-slot % matches official preset freq %:
-    #   dischord ~8.4% → 15/177 slots; flare_fast ~6.9% → 12; silhouettes_spot ~10.5% → 18;
-    #   manual_warm ~7.3% → 13; loop_cool ~10.0% → 17; searchlights ~6.5% → 11;
-    #   blackout_fast ~4.7% → 8; strobe_slow ~3.0% → 5; blackout_spot ~2.3% → 4;
-    #   flare_slow ~2.2% → 4; silhouettes ~1.6% → 3; stomp ~1.7% → 3.
+    # Preset distribution calibrated to match official frequencies.
+    # Over-represented presets (dischord/searchlights/frenzy) reduced in pool slots.
+    # Under-represented presets (silhouettes_spot/harmony/blackout_fast) boosted
+    # by appearing in mid/high pools too (not just calm).
     "intro": {
         "calm": ["silhouettes_spot", "sweep", "manual_warm", "loop_cool", "harmony"],
         "mid":  ["sweep", "verse", "manual_warm", "loop_warm", "loop_cool"],
-        "high": ["sweep", "frenzy", "manual_warm", "loop_cool", "manual_cool"],
+        "high": ["sweep", "manual_warm", "loop_cool", "manual_cool", "blackout_fast"],
     },
     "verse": {
         "calm": ["silhouettes_spot", "loop_cool", "harmony", "manual_warm", "silhouettes"],
@@ -373,19 +372,19 @@ SECTION_LIGHT_POOL = {
         "high": ["verse", "manual_cool", "manual_warm", "dischord", "blackout_fast"],
     },
     "prechorus": {
-        "calm": ["silhouettes_spot", "manual_cool", "dischord", "flare_slow", "blackout_spot"],
-        "mid":  ["manual_cool", "dischord", "searchlights", "manual_warm", "strobe_slow"],
-        "high": ["sweep", "dischord", "searchlights", "frenzy", "flare_fast"],
+        "calm": ["silhouettes_spot", "manual_cool", "flare_slow", "blackout_spot", "harmony"],
+        "mid":  ["manual_cool", "silhouettes_spot", "dischord", "manual_warm", "strobe_slow"],
+        "high": ["sweep", "dischord", "searchlights", "flare_fast", "blackout_fast"],
     },
     "chorus": {
-        "calm": ["chorus", "silhouettes_spot", "harmony", "dischord", "searchlights"],
-        "mid":  ["chorus", "loop_cool", "dischord", "searchlights", "frenzy"],
-        "high": ["frenzy", "loop_cool", "searchlights", "dischord", "flare_fast"],
+        "calm": ["chorus", "silhouettes_spot", "harmony", "searchlights", "sweep"],
+        "mid":  ["chorus", "loop_cool", "dischord", "searchlights", "silhouettes_spot"],
+        "high": ["chorus", "loop_cool", "searchlights", "flare_fast", "dischord"],
     },
     "postchorus": {
-        "calm": ["flare_fast", "silhouettes_spot", "searchlights", "dischord", "harmony"],
+        "calm": ["flare_fast", "silhouettes_spot", "searchlights", "harmony", "sweep"],
         "mid":  ["sweep", "chorus", "dischord", "blackout_fast", "flare_slow"],
-        "high": ["harmony", "silhouettes_spot", "dischord", "searchlights", "loop_warm"],
+        "high": ["harmony", "silhouettes_spot", "searchlights", "loop_warm", "dischord"],
     },
     "bridge": {
         "calm": ["sweep", "silhouettes_spot", "loop_cool", "flare_slow", "harmony"],
@@ -395,7 +394,7 @@ SECTION_LIGHT_POOL = {
     "solo": {
         "calm": ["loop_warm", "silhouettes_spot", "loop_cool", "flare_fast", "harmony"],
         "mid":  ["harmony", "chorus", "searchlights", "manual_warm", "flare_fast"],
-        "high": ["frenzy", "loop_cool", "loop_warm", "flare_fast", "dischord"],
+        "high": ["dischord", "loop_cool", "loop_warm", "flare_fast", "silhouettes_spot"],
     },
     "breakdown": {
         "calm": ["silhouettes_spot", "flare_fast", "blackout_fast", "flare_slow", "loop_cool"],
@@ -404,7 +403,7 @@ SECTION_LIGHT_POOL = {
     },
     "build": {
         "calm": ["blackout_spot", "silhouettes_spot", "loop_cool", "flare_slow", "silhouettes"],
-        "mid":  ["sweep", "silhouettes_spot", "loop_warm", "dischord", "blackout_spot"],
+        "mid":  ["sweep", "silhouettes_spot", "loop_warm", "blackout_spot", "dischord"],
         "high": ["searchlights", "chorus", "silhouettes_spot", "loop_cool", "verse"],
     },
     "drop": {
@@ -425,7 +424,7 @@ SECTION_LIGHT_POOL = {
     "default": {
         "calm": ["manual_warm", "silhouettes_spot", "loop_warm", "searchlights"],
         "mid":  ["manual_warm", "flare_fast", "loop_warm", "searchlights"],
-        "high": ["frenzy", "flare_fast", "searchlights", "manual_warm"],
+        "high": ["flare_fast", "searchlights", "manual_warm", "silhouettes_spot"],
     },
 }
 
@@ -625,7 +624,7 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
                 t += step
                 i += 1
                 continue
-            elif _in_span(tick, pause_spans):         # pause → blackout
+            if _in_span(tick, pause_spans):         # pause → blackout
                 preset = _PAUSE_LIGHT[pi % len(_PAUSE_LIGHT)]
                 pi += 1
             elif i % _LIGHT_ACCENT_EVERY == _LIGHT_ACCENT_EVERY - 1:
