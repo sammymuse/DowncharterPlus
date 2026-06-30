@@ -582,12 +582,12 @@ def section_energy_scores(paths, sections, tempo_map, tpb: int,
 
 
 def section_energy_subspans(paths, sections, tempo_map, tpb: int,
-                            hop_s: float = 0.1, smooth_s: float = 0.5,
-                            min_span_s: float = 3.0, heavy_gate: float = 0.5,
+                            hop_s: float = 0.1, smooth_s: float = 1.5,
+                            min_span_s: float = 3.0, heavy_gate: float = 999.0,
                             onsets: list[int] | None = None,
-                            subspan_alpha: float = 1.0,
-                            calm_thresh: float = 0.40,
-                            high_thresh: float = 0.45):
+                            subspan_alpha: float = 0.6,
+                            calm_thresh: float = 0.495,
+                            high_thresh: float = 0.595):
     """Per-section SUB-SPANS of energy tier, following the music WITHIN a section.
     Instead of one mean tier per section (which washes out a chorus that starts calm
     and builds, and collapses a compressed song to all-'mid'), this segments the
@@ -671,6 +671,12 @@ def section_energy_subspans(paths, sections, tempo_map, tpb: int,
         rank = np.empty_like(order, dtype="float64")
         rank[order] = np.linspace(0, 1, len(order))
         midi_env = rank
+        # Smooth MIDI density to match audio envelope smoothness — raw
+        # onset counts oscillate frame-to-frame (0–N per 2-beat window),
+        # creating micro-runs that the min_span merge absorbs entirely.
+        w_midi = max(1, int(round(smooth_s * 2 / stft_s)))
+        if w_midi > 1:
+            midi_env = np.convolve(midi_env, np.ones(w_midi) / w_midi, mode="same")
         # Blend
         env = subspan_alpha * env + (1.0 - subspan_alpha) * midi_env
     tier = np.where(env < calm_thresh, 0, np.where(env < high_thresh, 1, 2)).astype(int)
@@ -716,11 +722,12 @@ def section_energy_subspans(paths, sections, tempo_map, tpb: int,
             del runs[i]
         # Heaviness gate: a 'high' run that isn't heavy enough (sung loud chorus, not a
         # breakdown) drops to 'mid' → [play] instead of [intense].
-        for r in runs:
-            if r[2] == 2:
-                hh = float(np.mean(heavy[j0 + r[0]:j0 + r[1]]))
-                if hh < heavy_gate:
-                    r[2] = 1
+        if heavy_gate < 1.0:
+            for r in runs:
+                if r[2] == 2:
+                    hh = float(np.mean(heavy[j0 + r[0]:j0 + r[1]]))
+                    if hh < heavy_gate:
+                        r[2] = 1
         # collapse any adjacent equal-tier runs left after merging/gating
         collapsed: list[list[int]] = []
         for r in runs:

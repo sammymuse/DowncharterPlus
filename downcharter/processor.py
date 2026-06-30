@@ -167,10 +167,10 @@ def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
     # Per-theme thresholds: slow songs have a quieter baseline, so the
     # calm threshold drops and the high threshold rises.
     _BLEND_ALPHA = 0.60
-    _BLEND_CALM = 0.40
-    _BLEND_HIGH = 0.55
+    _BLEND_CALM = 0.475
+    _BLEND_HIGH = 0.570
     _THEME_THRESHOLDS = {
-        "slow":    (0.42, 0.70),   # slow songs are quieter
+        "slow":    (0.45, 0.70),   # slow songs are quieter
     }
     blend_calm, blend_high = _THEME_THRESHOLDS.get(theme, (_BLEND_CALM, _BLEND_HIGH))
 
