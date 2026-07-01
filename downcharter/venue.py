@@ -1381,6 +1381,53 @@ _PP_MARKOV: dict[str, dict[str, float]] = {
     },
 }
 
+# Markov transition weights for camera cuts (coop_* shots only).
+# Learned from 20 official venue songs. Uses SHORT names (pool format, e.g. "V_Near"),
+# matching the SECTION_CAMERA pool entries. Key patterns:
+#   • Pair switching: GV_Near ↔ BV_Near, G_Hand ↔ B_Hand, BG_Near ↔ GK_Near
+#   • Medium shots (Near) → mostly other medium shots
+#   • Wide shots (All_Behind, All_Far) → tend to stay wide (28% self-transition)
+#   • Drum closeups (D_Hand) → tend to repeat (14% self-transition)
+#   • Vocals (V_Near/V_Closeup) → rarely repeat, mostly go to other members
+_CAMERA_MARKOV: dict[str, dict[str, float]] = {
+    "All_Behind": {"All_Behind": 30, "Front_Behind": 20, "All_Far": 18, "D_Behind": 12, "All_Near": 10, "B_Behind": 8, "V_Behind": 6, "G_Behind": 5},
+    "All_Far": {"All_Far": 32, "All_Behind": 20, "Front_Near": 10, "All_Near": 10, "Front_Behind": 8},
+    "All_Near": {"Front_Near": 20, "All_Behind": 15, "V_Near": 12, "D_Near": 10, "G_Near": 8, "All_Far": 8, "B_Near": 6, "K_Near": 5},
+    "BD_Near": {"Front_Near": 15, "D_Near": 12, "B_Near": 10, "DG_Near": 8, "All_Near": 6},
+    "BG_Behind": {"BK_Behind": 22, "All_Behind": 15, "G_Behind": 10, "BG_Near": 8, "GK_Behind": 8},
+    "BG_Near": {"GK_Near": 29, "BK_Near": 28, "Front_Near": 12, "B_Near": 10, "G_Near": 10, "BG_Behind": 8},
+    "BK_Behind": {"BG_Behind": 20, "All_Behind": 15, "GK_Behind": 12, "K_Behind": 8, "BK_Near": 6},
+    "BK_Near": {"GK_Near": 27, "BG_Near": 20, "Front_Near": 12, "K_Near": 10, "B_Near": 8, "BK_Behind": 6},
+    "BV_Behind": {"All_Behind": 15, "GV_Behind": 12, "B_Behind": 10, "V_Behind": 8},
+    "BV_Near": {"GV_Near": 37, "Front_Near": 15, "B_Near": 12, "V_Near": 10, "KV_Near": 8, "All_Near": 6},
+    "B_Behind": {"G_Behind": 20, "All_Behind": 15, "B_Near": 10, "BG_Behind": 8, "Front_Behind": 8},
+    "B_Hand": {"G_Hand": 30, "B_Near": 15, "D_Hand": 12, "Front_Near": 10, "BG_Near": 8, "BK_Near": 8},
+    "B_Near": {"G_Near": 30, "BV_Near": 18, "Front_Near": 15, "B_Hand": 12, "BG_Near": 10, "BK_Near": 10, "All_Near": 8, "D_Near": 5},
+    "DG_Near": {"Front_Near": 15, "D_Near": 12, "G_Near": 10, "BD_Near": 8, "All_Near": 6},
+    "D_Behind": {"D_Near": 16, "All_Behind": 14, "Front_Behind": 12, "D_Behind": 10, "D_Hand": 8, "B_Behind": 6, "G_Behind": 6},
+    "D_Hand": {"D_Hand": 24, "D_Near": 20, "Front_Near": 15, "D_Head": 12, "G_Hand": 10, "D_Behind": 10, "B_Hand": 8, "All_Near": 5},
+    "D_Head": {"D_Near": 18, "V_Closeup": 12, "D_Hand": 12, "Front_Near": 10, "G_Head": 8, "D_Behind": 8},
+    "D_Near": {"D_Hand": 20, "Front_Near": 18, "D_Head": 15, "D_Behind": 12, "All_Near": 10, "BD_Near": 8, "DG_Near": 8, "G_Near": 5},
+    "Front_Behind": {"All_Behind": 20, "Front_Near": 15, "All_Far": 12, "D_Behind": 10, "B_Behind": 8, "V_Behind": 6},
+    "Front_Near": {"V_Near": 20, "G_Near": 15, "D_Near": 15, "B_Near": 12, "All_Near": 10, "D_Hand": 10, "Front_Behind": 8, "K_Near": 6},
+    "GK_Behind": {"BK_Behind": 20, "All_Behind": 15, "BG_Behind": 12, "G_Behind": 8, "GK_Near": 6},
+    "GK_Near": {"BG_Near": 22, "BK_Near": 20, "Front_Near": 10, "G_Near": 10, "K_Near": 8},
+    "GV_Behind": {"All_Behind": 15, "BV_Behind": 12, "G_Behind": 10, "V_Behind": 8},
+    "GV_Near": {"BV_Near": 37, "Front_Near": 15, "G_Near": 12, "V_Near": 10, "All_Near": 6},
+    "G_Behind": {"B_Behind": 20, "All_Behind": 15, "G_Near": 10, "Front_Behind": 10, "BG_Behind": 8},
+    "G_Hand": {"B_Hand": 30, "G_Near": 15, "G_Head": 12, "D_Hand": 12, "Front_Near": 10, "GK_Near": 8, "BG_Near": 6, "All_Near": 5},
+    "G_Head": {"G_Near": 15, "B_Head": 12, "D_Head": 10, "Front_Near": 8, "G_Hand": 8, "V_Closeup": 6},
+    "G_Near": {"B_Near": 30, "GV_Near": 18, "Front_Near": 15, "G_Hand": 12, "BG_Near": 10, "GK_Near": 10, "All_Near": 8, "D_Near": 6},
+    "KV_Behind": {"All_Behind": 15, "BV_Behind": 10, "K_Behind": 8, "V_Behind": 8},
+    "KV_Near": {"BV_Near": 29, "Front_Near": 12, "K_Near": 10, "V_Near": 8, "GK_Near": 6},
+    "K_Behind": {"All_Behind": 15, "BK_Behind": 12, "GK_Behind": 12, "K_Near": 8},
+    "K_Hand": {"K_Near": 15, "G_Hand": 12, "GK_Near": 10, "B_Hand": 10, "Front_Near": 8},
+    "K_Near": {"BK_Near": 18, "GK_Near": 18, "KV_Near": 15, "Front_Near": 12, "K_Hand": 10, "All_Near": 8, "K_Head": 6, "G_Near": 5},
+    "V_Behind": {"Front_Behind": 15, "All_Behind": 12, "B_Behind": 10, "V_Near": 8, "G_Behind": 8},
+    "V_Closeup": {"V_Near": 18, "Front_Near": 15, "B_Near": 12, "G_Near": 10, "All_Near": 8, "D_Head": 8, "G_Head": 6, "All_Behind": 5},
+    "V_Near": {"V_Closeup": 20, "BV_Near": 18, "Front_Near": 15, "GV_Near": 12, "All_Near": 10, "D_Near": 8, "D_Hand": 6, "G_Near": 6, "K_Near": 5, "All_Behind": 5},
+}
+
 # Post-proc TONE bias by audio timbre (Section.warmth). The pp_study over the 20
 # official venues showed B&W/desaturated filters sit in DARK, quieter audio
 # (bright_p 39) while bright/contrast/filmic filters sit in BRIGHT, loud audio
@@ -1887,7 +1934,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 placed = max(t, last_tick + min_gap)
             if placed >= s0.start:
                 break
-            cut = framing0[idx % len(framing0)]
+            cut = _markov_choice(last_cut, framing0, _CAMERA_MARKOV, framing0[0])
             if cut == last_cut:
                 idx += 1
                 cut = framing0[idx % len(framing0)]
@@ -1925,16 +1972,16 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             placed = _snap_to_music(t, accents, tpb, floor=last_tick + min_gap)
             if placed <= last_tick:
                 placed = max(t, last_tick + min_gap)
-            cut = pool[idx % len(pool)]
+            cut = _markov_choice(last_cut, pool, _CAMERA_MARKOV, pool[0])
             if cut == last_cut:                      # avoid immediate repetition
                 idx += 1
-                cut = pool[idx % len(pool)]
+                cut = _markov_choice(last_cut, pool, _CAMERA_MARKOV, pool[idx % len(pool)])
             # Anti-recency: skip a framing used in the recent window (wider variety).
             for _ in range(len(pool)):
                 if cut not in recent_coop and cut != last_cut:
                     break
                 idx += 1
-                cut = pool[idx % len(pool)]
+                cut = _markov_choice(last_cut, pool, _CAMERA_MARKOV, pool[idx % len(pool)])
             if placed < s.end:
                 slots.append((placed, cut))
                 recent_coop.append(cut)
