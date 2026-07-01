@@ -343,11 +343,6 @@ def _txt(tick: int, text: str) -> AbsEvent:
     return AbsEvent(tick, mido.MetaMessage("text", text=text, time=0))
 
 
-def _beat_ticks_at(tick: int, time_sig_map: list, tpb: int) -> int:
-    """Duration of 1 beat (the formula's denominator) in ticks — here = tpb."""
-    return tpb
-
-
 # Light sub-block (in measures) per energy tier: shorter = the light changes
 # faster. Approximates the density of light changes in authored venues.
 _LIGHT_BLOCK_MEASURES = {"calm": 4, "mid": 3, "high": 2}
@@ -612,17 +607,6 @@ _DENSITY_LOW_THRESH = 0.5      # Below this ratio → inject fallback triggers
 _DENSITY_HIGH_THRESH = 1.5     # Above this ratio → prune triggers
 _DOWNBEAT_INTERVAL = 1         # Every N bars for downbeat triggers
 
-_LIGHT_HOLD_BARS = {"calm": 4, "mid": 3, "high": 3}
-_LIGHT_HOLD_KINDS: dict[str, dict[str, float]] = {
-    "solo":       {"high": 1.70},
-    "riff":       {"mid":  1.70},
-    "bridge":     {"calm": 1.80},
-    "postchorus": {"mid":  0.55},
-    "build":      {"high": 0.75},
-    "outro":      {"calm": 0.75},
-    "drop":       {"high": 0.60},
-}
-
 # Markov transition weights learned from 100 official venue learn songs.
 # Maps previous_preset → {next_preset: weight}. Covers the 22 presets found
 # in the official MIDIs. Weights are raw transition counts ×10 (fractional
@@ -867,10 +851,6 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
     pause_spans = pause_spans or []
     strobe_spans = strobe_spans or []
     audio_onsets = sorted(audio_onsets) if audio_onsets else []
-    # Snap light changes to real transients: drum hits PLUS the strong audio flux
-    # accents (catches audio-only hits the MIDI drums miss). The cadence stays
-    # section-driven; only the PLACEMENT is pulled onto the nearest musical hit.
-    hits = sorted(set(drums) | set(audio_onsets)) if audio_onsets else drums
     env = sorted(energy_env) if energy_env else None
     pi = 0
     last: str | None = None
@@ -1043,15 +1023,7 @@ def find_strobe_spans(drum_onsets: list[int], tpb: int,
     spans = _fast_runs(drum_onsets, int(tpb / 4 * 1.12), min_span)        # 16th
     if dbass_onsets:
         spans += _fast_runs(dbass_onsets, int(tpb / 2 * 1.1), min_span)   # 8th dbass
-    spans.sort()
-    # merge nearby spans (or overlapping ones from the two sources)
-    merged: list[tuple[int, int]] = []
-    for a, b in spans:
-        if merged and a - merged[-1][1] < bridge:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
-        else:
-            merged.append((a, b))
-    return merged
+    return _merge_spans(spans, bridge)
 
 
 def find_pause_spans(onsets: list[int], time_sig_map: list, tpb: int,
@@ -2132,7 +2104,6 @@ _INTENSE_THEMES = {"metal", "punk"}
 # venues: drums/bass idle sooner (shorter rests visible), guitar holds longer
 # (flicker-prone on sparse riffs), vocal is the most rest-heavy (idle 21%).
 _IDLE_DOWNTIME = {"drums": 2, "bass": 2, "guitar": 6, "keys": 3, "vocal": 1}
-_IDLE_DOWNTIME_INTENSE = 2
 
 
 def phrase_end_ticks(track) -> list[int]:

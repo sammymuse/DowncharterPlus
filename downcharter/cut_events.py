@@ -707,24 +707,17 @@ _COMPANION_PAIRS: list[tuple[str, str, float]] = [
     ("directed_bass_cam",   "directed_drums_lt",     0.30),
 ]
 
-# Built once: {(D_xxx_primary, D_xxx_companion)} tuples
-_COMPANION_LOOKUP: set[tuple[str, str]] | None = None
+# Built once: official_name → D_xxx map
 _COMPANION_OFF2INT: dict[str, str] | None = None
 
 
 def _ensure_companion_map():
-    """Build internal name lookup for companion rules."""
-    global _COMPANION_LOOKUP, _COMPANION_OFF2INT
-    if _COMPANION_LOOKUP is not None:
+    """Build official → internal name map for companion rules."""
+    global _COMPANION_OFF2INT
+    if _COMPANION_OFF2INT is not None:
         return
     from .venue import DIRECTED_CUTS
     _COMPANION_OFF2INT = {v: k for k, v in DIRECTED_CUTS.items()}
-    _COMPANION_LOOKUP = set()
-    for primary_official, comp_official, _prob in _COMPANION_PAIRS:
-        p = _COMPANION_OFF2INT.get(primary_official)
-        c = _COMPANION_OFF2INT.get(comp_official)
-        if p and c:
-            _COMPANION_LOOKUP.add((p, c))
 
 
 def add_companion_shots(accepted: list[tuple[int, str]]) -> list[tuple[int, str]]:
@@ -739,29 +732,35 @@ def add_companion_shots(accepted: list[tuple[int, str]]) -> list[tuple[int, str]
 
     companions: list[tuple[int, str]] = []
     seen_at: dict[int, set[str]] = {}
-    pair_list = [(p, c, prob) for p, c, prob in _COMPANION_PAIRS if prob >= 0.30]
+    # Build internal → (companion_int, prob) pairs, filtered by P ≥ 0.30
+    pair_map: dict[str, list[tuple[str, float]]] = {}
+    for p_official, c_official, prob in _COMPANION_PAIRS:
+        if prob < 0.30:
+            continue
+        p_int = _COMPANION_OFF2INT.get(p_official) if _COMPANION_OFF2INT else None
+        c_int = _COMPANION_OFF2INT.get(c_official) if _COMPANION_OFF2INT else None
+        if not p_int or not c_int:
+            continue
+        pair_map.setdefault(p_int, []).append((c_int, prob))
 
     for tick, cut in accepted:
-        best = None
-        best_prob = 0.0
-        for p, c, prob in pair_list:
-            if p != cut or c == cut:
+        candidates = pair_map.get(cut)
+        if not candidates:
+            continue
+        # Pick the best companion NOT already seen at this tick
+        best: tuple[str, float] | None = None
+        for c_int, prob in candidates:
+            if tick in seen_at and c_int in seen_at[tick]:
                 continue
-            if tick in seen_at and c in seen_at[tick]:
+            if c_int == cut:
                 continue
-            if prob > best_prob:
-                # Verify the internal names are valid
-                c_int = _COMPANION_OFF2INT.get(c) if _COMPANION_OFF2INT else None
-                p_int = _COMPANION_OFF2INT.get(p) if _COMPANION_OFF2INT else None
-                if c_int and p_int:
-                    best = (tick, c_int)
-                    best_prob = prob
-
+            if best is None or prob > best[1]:
+                best = (c_int, prob)
         if best is not None:
-            tick2, c2 = best
-            if tick2 not in seen_at:
-                seen_at[tick2] = set()
-            companions.append(best)
-            seen_at[tick2].add(c2)
+            c_int, _prob = best
+            if tick not in seen_at:
+                seen_at[tick] = set()
+            companions.append((tick, c_int))
+            seen_at[tick].add(c_int)
 
     return companions
