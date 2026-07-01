@@ -568,6 +568,12 @@ _LIGHT_PULSE = {
 # Every how many switches a theme accent (auto preset) is inserted.
 _LIGHT_ACCENT_EVERY = 5
 
+# Hold (re-emissions of the same preset) per energy tier. Instead of advancing the
+# pool every cycle, we re-emit the same preset `hold` times before advancing.
+# This adds the 24% same-preset re-emissions that official venues use for "pulsing".
+# calm sections hold longer (more re-emissions), high sections advance every cycle.
+_LIGHT_HOLD = {"calm": 3, "mid": 2, "high": 1}
+
 
 def _in_span(t: int, spans: list[tuple[int, int]]) -> bool:
     import bisect
@@ -619,6 +625,8 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
         t = s.start
         i = 0
         bi = 0   # pool index, advances ONLY on base steps (separate from the accent)
+        hold_counter = 0   # how many more re-emissions before advancing the pool
+        held_preset: str | None = None
         placed: list[int] = []   # change ticks in this section (for forced audio hits)
         while t < s.end:
             # Cadence from the LOCAL energy (audio sub-section envelope) — speeds up in
@@ -640,9 +648,16 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
             elif i % _LIGHT_ACCENT_EVERY == _LIGHT_ACCENT_EVERY - 1:
                 preset = accents[(i // _LIGHT_ACCENT_EVERY) % len(accents)]
             else:
-                preset = base[bi % len(base)]
-                bi += 1
-            if preset != last and tick < s.end:
+                # Hold mechanism: re-emit the current preset `hold` times before advancing
+                if hold_counter > 0:
+                    preset = held_preset
+                    hold_counter -= 1
+                else:
+                    preset = base[bi % len(base)]
+                    held_preset = preset
+                    hold_counter = _LIGHT_HOLD.get(local, 1) - 1
+                    bi += 1
+            if tick < s.end:
                 out.append(_txt(tick, f"[lighting ({preset})]"))
                 light_events.append((tick, preset))
                 placed.append(tick)
@@ -693,7 +708,7 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
 # energy-driven _LIGHT_CADENCE; these keyframes animate the MANUAL presets that
 # persist, so we DENSIFY high-energy parts (½ beat) rather than starve calm ones —
 # choruses pulse faster, calm verses stay gentle, none go silent. Floored at 1/4 beat.
-_KEYFRAME_RATE = {"high": 0.65, "mid": 1.1, "calm": 2.2}
+_KEYFRAME_RATE = {"high": 0.55, "mid": 0.9, "calm": 1.8}
 
 
 def _energy_for_tick(sections: list["Section"], tick: int) -> str:
