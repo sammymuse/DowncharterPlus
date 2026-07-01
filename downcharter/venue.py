@@ -442,12 +442,11 @@ SECTION_PP_POOL = {
     #   rare (<1%)          → in 0-1 pool (contrast_a, security, mirror_a)
     "intro":      ["photocopy", "film_16mm", "video_bw", "bright", "ProFilm_a", "film_silvertone"],
     "verse":      ["desat_posterize_trails", "photocopy", "film_contrast_red", "film_contrast",
-                   "film_contrast_green", "clean_trails", "shitty_tv", "film_blue_filter",
-                   "flicker_trails"],
-    "prechorus":  ["film_contrast_red", "shitty_tv", "clean_trails", "space_woosh",
-                   "film_contrast", "desat_posterize_trails"],
+                   "film_contrast_green", "clean_trails", "shitty_tv", "flicker_trails"],
+    "prechorus":  ["film_contrast_red", "shitty_tv", "clean_trails", "flicker_trails",
+                   "ProFilm_a", "desat_posterize_trails"],
     "chorus":     ["film_contrast_red", "clean_trails", "video_trails",
-                   "bright", "film_contrast_blue", "flicker_trails", "ProFilm_b"],
+                   "bright", "film_contrast_blue", "bloom", "ProFilm_b"],
     "postchorus": ["film_contrast_red", "clean_trails", "video_trails", "film_contrast", "video_a"],
     "bridge":     ["video_trails", "shitty_tv", "posterize", "video_bw", "film_contrast_green",
                    "ProFilm_a", "clean_trails"],
@@ -458,12 +457,12 @@ SECTION_PP_POOL = {
     "build":      ["clean_trails", "space_woosh", "film_contrast", "film_contrast_red",
                    "ProFilm_mirror_a", "video_trails"],
     "drop":       ["film_contrast_red", "flicker_trails", "space_woosh", "photo_negative",
-                   "clean_trails"],
+                   "video_a"],
     "riff":       ["film_contrast_red", "desat_posterize_trails", "film_contrast",
                    "ProFilm_b", "video_trails"],
-    "outro":      ["bloom", "video_bw", "bright", "film_silvertone", "film_sepia_ink",
+    "outro":      ["video_bw", "bright", "film_silvertone", "film_sepia_ink",
                    "ProFilm_a", "ProFilm_b"],
-    "default":    ["clean_trails", "film_contrast", "film_contrast_red", "ProFilm_a", "photocopy"],
+    "default":    ["film_contrast", "film_contrast_red", "photocopy", "clean_trails", "ProFilm_a"],
 }
 
 # Filter behavioral roles — derived from the 20 official venues study.
