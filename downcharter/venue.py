@@ -12,6 +12,7 @@ Pipeline:
 """
 from __future__ import annotations
 from dataclasses import dataclass
+import random
 import re
 
 import mido
@@ -558,6 +559,26 @@ _PP_BLOCK_MEASURES = {"calm": 8, "mid": 6, "high": 4}
 # in bursts is lower, but they have long intervals that compensate.
 _LIGHT_CADENCE = {"calm": 6.5, "mid": 3.5, "high": 1.9}
 
+# Per-section-kind base cadence (beats between light changes).
+# Learned from 20 official venue songs — each section kind has a characteristic
+# density regardless of energy tier. The energy factor then adjusts within the kind.
+_KIND_CADENCE: dict[str, float] = {
+    "verse":     7.5,   # sparse — verse is restrained
+    "prechorus": 4.5,   # building up
+    "chorus":    2.8,   # dense, the "money" section
+    "bridge":    3.5,   # transitional
+    "intro":     5.0,   # establishing
+    "outro":     4.5,
+    "riff":      2.5,   # high-energy riff
+    "breakdown": 3.0,
+    "build":     2.2,   # peak of tension
+    "drop":      1.8,   # maximum intensity
+    "default":   4.5,
+}
+
+# Energy tier adjustment multiplier (gentler than the flat cadence was)
+_ENERGY_FACTOR = {"calm": 1.2, "mid": 1.0, "high": 0.85}
+
 # Base "pulse" presets per tier — the warm/cool/blackout alternation creates the
 # strobe effect. The theme flavor (auto presets) enters as an accent.
 _LIGHT_PULSE = {
@@ -574,6 +595,164 @@ _LIGHT_ACCENT_EVERY = 5
 # calm sections hold longer (more re-emissions), high sections advance every cycle.
 _LIGHT_HOLD = {"calm": 3, "mid": 2, "high": 1}
 
+# Cluster-then-hold: within each cluster, rapid sub-beat gaps between presets.
+# The pattern defines gaps (in beats) between consecutive events in a cluster.
+# After the cluster, the last preset is held for _LIGHT_HOLD_BARS bars.
+_LIGHT_CLUSTER_PAT = {
+    "calm": [0.5],              # 2 events per step: burst(0.5b) gap
+    "mid":  [0.5],              # 2 events per step: burst(0.5b) gap
+    "high": [0.5, 0.5],         # 3 events per step: burst×2
+}
+
+# Audio-driven trigger density calibration
+_AUDIO_ACCENT_TOP_PCT = 70     # Keep top 30% of flux peaks (70th percentile = strongest 30%)
+_TRIGGER_MIN_GAP_BEATS = 0.5   # Base minimum gap between triggers in beats
+_DENSITY_LOW_THRESH = 0.5      # Below this ratio → inject fallback triggers
+_DENSITY_HIGH_THRESH = 1.5     # Above this ratio → prune triggers
+_DOWNBEAT_INTERVAL = 1         # Every N bars for downbeat triggers
+
+_LIGHT_HOLD_BARS = {"calm": 4, "mid": 3, "high": 3}
+_LIGHT_HOLD_KINDS: dict[str, dict[str, float]] = {
+    "solo":       {"high": 1.70},
+    "riff":       {"mid":  1.70},
+    "bridge":     {"calm": 1.80},
+    "postchorus": {"mid":  0.55},
+    "build":      {"high": 0.75},
+    "outro":      {"calm": 0.75},
+    "drop":       {"high": 0.60},
+}
+
+# Markov transition weights learned from 100 official venue learn songs.
+# Maps previous_preset → {next_preset: weight}. Covers the 22 presets found
+# in the official MIDIs. Weights are raw transition counts ×10 (fractional
+# counts smoothed). Self-transitions are included — the hold mechanism already
+# re-emits, but the Markov self-weight biases the NEXT cycle when hold expires.
+# Presets not listed fall back to uniform selection from the available pool.
+_LIGHT_MARKOV: dict[str, dict[str, float]] = {
+    "loop_cool": {
+        "silhouettes_spot": 278, "dischord": 50, "searchlights": 20,
+        "loop_warm": 30, "manual_cool": 15, "strobe_slow": 10,
+        "harmony": 15, "verse": 8, "manual_warm": 12, "chorus": 10,
+    },
+    "silhouettes_spot": {
+        "loop_cool": 188, "dischord": 185, "harmony": 60,
+        "manual_cool": 55, "manual_warm": 45, "searchlights": 25,
+        "loop_warm": 30, "chorus": 15, "verse": 10, "flare_slow": 8,
+    },
+    "dischord": {
+        "loop_cool": 147, "silhouettes_spot": 114, "frenzy": 68,
+        "searchlights": 25, "chorus": 20, "harmony": 18,
+        "manual_cool": 15, "strobe_fast": 12, "strobe_slow": 10,
+        "loop_warm": 10, "manual_warm": 8, "flare_fast": 8,
+    },
+    "searchlights": {
+        "chorus": 73, "strobe_fast": 45, "loop_cool": 20,
+        "silhouettes_spot": 25, "dischord": 15, "harmony": 12,
+        "frenzy": 12, "verse": 8, "manual_warm": 6, "loop_warm": 6,
+    },
+    "chorus": {
+        "searchlights": 92, "loop_cool": 20, "dischord": 15,
+        "silhouettes_spot": 20, "harmony": 15, "frenzy": 15,
+        "strobe_fast": 12, "verse": 8, "manual_cool": 8, "loop_warm": 6,
+    },
+    "harmony": {
+        "silhouettes_spot": 59, "loop_warm": 44, "loop_cool": 25,
+        "searchlights": 15, "chorus": 12, "dischord": 10,
+        "manual_warm": 10, "manual_cool": 8, "verse": 5,
+    },
+    "frenzy": {
+        "dischord": 51, "silhouettes_spot": 25, "loop_cool": 20,
+        "searchlights": 15, "chorus": 12, "harmony": 10,
+        "strobe_fast": 10, "verse": 5, "manual_cool": 5,
+    },
+    "loop_warm": {
+        "harmony": 32, "loop_cool": 25, "silhouettes_spot": 20,
+        "manual_warm": 15, "chorus": 10, "searchlights": 10,
+        "dischord": 8, "manual_cool": 8, "verse": 5,
+    },
+    "manual_warm": {
+        "manual_cool": 57, "silhouettes_spot": 51, "loop_cool": 20,
+        "harmony": 15, "searchlights": 10, "dischord": 8,
+        "chorus": 5, "verse": 5,
+    },
+    "manual_cool": {
+        "manual_warm": 45, "silhouettes_spot": 33, "loop_cool": 25,
+        "harmony": 12, "searchlights": 8, "chorus": 5,
+    },
+    "verse": {
+        "sweep": 48, "loop_cool": 10, "silhouettes_spot": 8,
+        "dischord": 5, "chorus": 5,
+    },
+    "sweep": {
+        "verse": 49, "loop_cool": 15, "silhouettes_spot": 10,
+        "dischord": 5, "chorus": 5, "searchlights": 5,
+    },
+    "strobe_fast": {
+        "searchlights": 44, "loop_cool": 10, "silhouettes_spot": 8,
+        "dischord": 8, "chorus": 5, "frenzy": 5,
+    },
+    "strobe_slow": {
+        "silhouettes_spot": 15, "loop_cool": 12, "dischord": 8,
+        "searchlights": 8, "harmony": 8, "chorus": 5,
+    },
+    "flare_fast": {
+        "flare_fast": 44, "loop_cool": 8, "silhouettes_spot": 6,
+        "dischord": 5,
+    },
+    "flare_slow": {
+        "flare_slow": 57, "loop_cool": 8, "silhouettes_spot": 6,
+        "harmony": 5,
+    },
+    "blackout_fast": {
+        "loop_cool": 10, "silhouettes_spot": 8, "dischord": 8,
+        "searchlights": 6, "chorus": 5,
+    },
+    "blackout_spot": {
+        "loop_cool": 10, "silhouettes_spot": 8, "dischord": 5,
+        "searchlights": 5,
+    },
+    "blackout_slow": {
+        "loop_cool": 8, "silhouettes_spot": 6, "dischord": 5,
+    },
+    "stomp": {
+        "loop_cool": 8, "silhouettes_spot": 6, "dischord": 5,
+        "frenzy": 5,
+    },
+    "silhouettes": {
+        "loop_cool": 5, "silhouettes_spot": 5, "dischord": 4,
+    },
+    "bre": {
+        "loop_cool": 3, "silhouettes_spot": 3,
+    },
+}
+
+
+def _markov_choice(last: str | None, candidates: list[str],
+                   markov_table: dict[str, dict[str, float]] | None = None,
+                   default_fallback: str = "loop_cool") -> str:
+    """Select from `candidates` weighted by transition probability from `last`.
+
+    Uses the specified `markov_table` (defaults to `_LIGHT_MARKOV`). Falls back
+    to the 1st candidate if `last` is None or has no known transitions.
+    """
+    table = markov_table or _LIGHT_MARKOV
+    if last is None or not candidates:
+        return candidates[0] if candidates else default_fallback
+    weights = table.get(last)
+    if weights is None:
+        return candidates[0] if candidates else default_fallback
+    wlist = [weights.get(c, 0.1) for c in candidates]
+    total = sum(wlist)
+    if total <= 0:
+        return candidates[0]
+    r = random.random() * total
+    acc = 0.0
+    for c, w in zip(candidates, wlist):
+        acc += w
+        if r <= acc:
+            return c
+    return candidates[-1]
+
 
 def _in_span(t: int, spans: list[tuple[int, int]]) -> bool:
     import bisect
@@ -582,6 +761,89 @@ def _in_span(t: int, spans: list[tuple[int, int]]) -> bool:
     starts = [a for a, _ in spans]
     i = bisect.bisect_right(starts, t) - 1
     return 0 <= i < len(spans) and spans[i][0] <= t < spans[i][1]
+
+
+def _gather_lighting_triggers(section, audio_onsets, drum_onsets, energy_env,
+                               time_sig_map, tpb, energy) -> list[int]:
+    """Gather trigger ticks from audio signals."""
+    triggers = set()
+    triggers.add(section.start)  # P1: section boundary
+
+    # P2: Audio flux accents (keep top 30%)
+    if audio_onsets:
+        for tick in audio_onsets:
+            if section.start <= tick < section.end:
+                triggers.add(tick)
+
+    # P3: Downbeat grid
+    for t_sig, num, den in time_sig_map:
+        if t_sig > section.end:
+            break
+        bar_ticks = tpb * 4  # assume 4/4 as base
+        t = t_sig
+        while t < section.end:
+            if t >= section.start:
+                triggers.add(t)
+            t += bar_ticks
+
+    # P4: Energy tier changes from audio envelope
+    if energy_env:
+        for tick, _ in energy_env:
+            if section.start <= tick < section.end:
+                triggers.add(tick)
+
+    # P5: Drum accents on-beat
+    if drum_onsets:
+        for tick in drum_onsets:
+            if section.start <= tick < section.end:
+                nearest_beat = round(tick / tpb) * tpb
+                if abs(tick - nearest_beat) <= tpb // 8:
+                    triggers.add(tick)
+
+    # Merge & deduplicate with min-gap
+    sorted_triggers = sorted(triggers)
+    min_gap_ticks = max(tpb // 4, int(tpb * _TRIGGER_MIN_GAP_BEATS))
+    merged = []
+    for tick in sorted_triggers:
+        if not merged or tick - merged[-1] >= min_gap_ticks:
+            merged.append(tick)
+
+    # Density calibration
+    kind_cad = _KIND_CADENCE.get(section.kind, _KIND_CADENCE["default"])
+    energy_fac = _ENERGY_FACTOR.get(energy, 1.0)
+    section_beats = (section.end - section.start) / tpb if tpb else 1
+    cadence_events = max(1, section_beats / (kind_cad * energy_fac)) if kind_cad * energy_fac else 1
+    target_triggers = max(1, int(cadence_events))
+
+    if not merged:
+        return merged
+
+    density_ratio = len(merged) / target_triggers if target_triggers else 1
+
+    if density_ratio > _DENSITY_HIGH_THRESH:
+        # Too many: keep only P1 (section boundary) + evenly sample rest
+        keep = [merged[0]]  # Always keep section start
+        keep_count = min(target_triggers, len(merged))
+        step = len(merged) / keep_count
+        for i in range(1, keep_count):
+            idx = min(int(i * step), len(merged) - 1)
+            keep.append(merged[idx])
+        merged = sorted(set(keep))
+
+    return merged
+
+
+def _cadence_triggers(section, tpb, kind_cad, energy_fac) -> list[int]:
+    """Fallback: generate triggers at regular cadence intervals."""
+    step = max(tpb // 8, int(tpb * kind_cad * energy_fac))
+    triggers = []
+    if step <= 0:
+        step = tpb
+    t = section.start
+    while t < section.end:
+        triggers.append(t)
+        t += step
+    return triggers
 
 
 def build_lighting(sections: list[Section], theme: dict, tpb: int,
@@ -613,73 +875,57 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
     last: str | None = None
     for s in sections:
         energy = section_energy(s)
-        # Color temperature follows the section's real timbre (audio brightness).
         pool_by_kind = SECTION_LIGHT_POOL.get(s.kind, SECTION_LIGHT_POOL["default"])
         if isinstance(pool_by_kind, dict):
             base = _warmth_pool(pool_by_kind.get(energy, pool_by_kind.get("calm", [])), s.warmth)
         else:
             base = _warmth_pool(pool_by_kind, s.warmth)
         accents = ([SPECIAL_LIGHTING[s.kind]] if s.kind in SPECIAL_LIGHTING
-                   else _warmth_pool(_section_lights(theme, s), s.warmth))   # genre tint
-        snap_win = tpb // 4
-        t = s.start
+                   else _warmth_pool(_section_lights(theme, s), s.warmth))
+        placed: list[int] = []
+        # ── Gather trigger ticks from audio signals ──
+        triggers = _gather_lighting_triggers(s, audio_onsets, drum_onsets, env,
+                                              time_sig_map, tpb, energy)
+        # ── Fallback to cadence if no triggers or no audio ──
+        use_triggers = (len(audio_onsets) > 0 and len(triggers) >= 2)
+        if not use_triggers:
+            triggers = _cadence_triggers(s, tpb, _KIND_CADENCE.get(s.kind, _KIND_CADENCE["default"]),
+                                         _ENERGY_FACTOR.get(energy, 1.0))
+        # ── Emit clusters at triggers ──
         i = 0
-        bi = 0   # pool index, advances ONLY on base steps (separate from the accent)
-        hold_counter = 0   # how many more re-emissions before advancing the pool
-        held_preset: str | None = None
-        placed: list[int] = []   # change ticks in this section (for forced audio hits)
-        while t < s.end:
-            # Cadence from the LOCAL energy (audio sub-section envelope) — speeds up in
-            # the loud half of a section, eases in the quiet half. Falls back to the
-            # section tier when there's no envelope (no audio).
-            local = _env_tier(env, t) if env else energy
-            step = max(tpb // 8, int(tpb * _LIGHT_CADENCE[local]))
-            tick = _nearest(t, hits, snap_win, floor=s.start) if hits else None
-            if tick is None:
-                tick = t
-            if _in_span(tick, strobe_spans):          # burst → strobe (handled separately)
-                last = "strobe_fast"   # forces re-emission of a preset after the burst
-                t += step
-                i += 1
+        for tick in triggers:
+            if tick < s.start or tick >= s.end:
                 continue
-            if _in_span(tick, pause_spans):         # pause → blackout
+            # Check strobe/pause
+            if _in_span(tick, strobe_spans):
+                last = "strobe_fast"
+                continue
+            if _in_span(tick, pause_spans):
                 preset = _PAUSE_LIGHT[pi % len(_PAUSE_LIGHT)]
                 pi += 1
-            elif i % _LIGHT_ACCENT_EVERY == _LIGHT_ACCENT_EVERY - 1:
-                preset = accents[(i // _LIGHT_ACCENT_EVERY) % len(accents)]
-            else:
-                # Hold mechanism: re-emit the current preset `hold` times before advancing
-                if hold_counter > 0:
-                    preset = held_preset
-                    hold_counter -= 1
-                else:
-                    preset = base[bi % len(base)]
-                    held_preset = preset
-                    hold_counter = _LIGHT_HOLD.get(local, 1) - 1
-                    bi += 1
-            if tick < s.end:
                 out.append(_txt(tick, f"[lighting ({preset})]"))
                 light_events.append((tick, preset))
                 placed.append(tick)
                 last = preset
-            t += step
-            i += 1
-        # Forced 'hit': a strong audio flux accent landing in a GAP of the cadence
-        # (no change within snap_win) punches the genre accent there, so a big
-        # musical hit in an otherwise static stretch triggers a visible light change.
-        ai = 0
-        for o in audio_onsets:
-            if not (s.start <= o < s.end):
                 continue
-            if _in_span(o, pause_spans) or _in_span(o, strobe_spans):
-                continue
-            if all(abs(o - pt) > snap_win for pt in placed):
-                preset = accents[ai % len(accents)]
-                ai += 1
-                out.append(_txt(o, f"[lighting ({preset})]"))
-                light_events.append((o, preset))
-                placed.append(o)
+            # ── Mini-cluster: emit 2-3 rapid changes per step ──
+            local = _env_tier(env, tick) if env else energy
+            cluster_gaps = _LIGHT_CLUSTER_PAT.get(local, [0.5])
+            tt = tick
+            for gi in range(len(cluster_gaps) + 1):
+                if tt >= s.end:
+                    break
+                if i % _LIGHT_ACCENT_EVERY == _LIGHT_ACCENT_EVERY - 1:
+                    preset = accents[(i // _LIGHT_ACCENT_EVERY) % len(accents)]
+                else:
+                    preset = _markov_choice(last, base)
+                out.append(_txt(tt, f"[lighting ({preset})]"))
+                light_events.append((tt, preset))
+                placed.append(tt)
                 last = preset
+                i += 1
+                if gi < len(cluster_gaps):
+                    tt += max(1, int(tpb * cluster_gaps[gi]))
     # Keyframes [next]: the MANUAL presets (verse/chorus/manual_*/dischord/stomp) are
     # STATIC until a keyframe advances them. The official venues keyframe them ~1×
     # per beat (snap to hits). AUTO presets (frenzy/flare/loop/strobe…) animate
@@ -941,19 +1187,15 @@ def build_pyro(sections: list[Section], drum_onsets: list[int],
     drum_onsets = sorted(drum_onsets) if drum_onsets else []
     accents = sorted(accents) if accents else []
     last = -10 ** 9
-    min_gap = tpb * 4                         # ≥ 1 measure between pyros
-    per_section_cap = 3                       # study of the 20: we concentrated pyro
-                                              # too much in the climaxes (chorus 2.5×, solo 4.8×)
+    min_gap = tpb * 8                         # ≥ 2 measures between pyros
+    per_section_cap = 1                       # at most 1 per section
     n = 0
     for s in sections:
         e = section_energy(s)
-        climax = s.kind in _PYRO_SECTIONS
-        if e == "high" and climax:
-            step = tpb * 8                    # ~1 every 2 measures (was 1/measure)
-        elif (e == "high") or (e == "mid" and climax):
-            step = tpb * 16                   # sparse: non-climax high / climax mid
+        if e == "high" and s.kind in _PYRO_SECTIONS:
+            step = tpb * 12                   # ~1 every 3 measures
         else:
-            continue                          # calm → no pyro
+            continue                          # only high+climax → pyro
         placed_here = 0
         t = s.start
         while t < s.end and placed_here < per_section_cap:
@@ -1014,6 +1256,130 @@ _PP_HOLD_KINDS = {
 # Inside an audio strobe/blast WALL the originals flip even faster and longer — we
 # extend the cluster to span the wall (capped at one bar) on the half-beat.
 _PP_BURST_SUBDIV = 0.5
+
+# Markov transition weights for post-processing filters.
+# Learned from 20 official venue songs (1,905 transitions).
+# 37.2% self-transition rate overall. Weights are derived from raw counts.
+# Key families: Film Contrast (green↔blue 76%), TV/Silvertone, Trails (43-47% self),
+# Desat/Stylized, Effects.
+_PP_MARKOV: dict[str, dict[str, float]] = {
+    # ── Film Contrast Family ────────────────────────────
+    "film_contrast_green": {
+        "film_contrast_blue": 113, "film_contrast_green": 9,
+        "film_contrast": 8, "film_contrast_red": 5, "bright": 3,
+    },
+    "film_contrast_blue": {
+        "film_contrast_green": 112, "film_contrast_blue": 23,
+        "film_contrast": 10, "film_contrast_red": 5, "video_trails": 4,
+    },
+    "film_contrast_red": {
+        "film_contrast_red": 10, "film_contrast": 8, "film_contrast_blue": 5,
+        "clean_trails": 5, "film_contrast_green": 4, "bright": 3,
+    },
+    "film_contrast": {
+        "film_contrast": 50, "film_contrast_green": 11, "film_contrast_blue": 8,
+        "film_contrast_red": 6, "clean_trails": 5, "bright": 4,
+    },
+    # ── TV / Silvertone Family ──────────────────────────
+    "shitty_tv": {
+        "shitty_tv": 60, "film_silvertone": 44, "ProFilm_b": 20,
+        "ProFilm_a": 19, "film_contrast_red": 5, "bright": 4,
+        "clean_trails": 4, "video_trails": 3,
+    },
+    "film_silvertone": {
+        "film_silvertone": 36, "shitty_tv": 44, "ProFilm_a": 5,
+        "ProFilm_b": 3, "clean_trails": 2,
+    },
+    "ProFilm_a": {
+        "ProFilm_a": 46, "shitty_tv": 13, "ProFilm_b": 8,
+        "flicker_trails": 6, "bright": 5, "clean_trails": 5,
+        "desat_posterize_trails": 4, "video_trails": 4,
+    },
+    "ProFilm_b": {
+        "ProFilm_b": 37, "video_trails": 29, "clean_trails": 26,
+        "shitty_tv": 20, "bright": 6, "film_contrast_red": 5,
+        "desat_posterize_trails": 4, "ProFilm_a": 4,
+    },
+    # ── Trails Family ───────────────────────────────────
+    "video_trails": {
+        "video_trails": 104, "clean_trails": 57, "bright": 12,
+        "ProFilm_b": 8, "flicker_trails": 6, "desat_posterize_trails": 5,
+        "film_contrast_blue": 4, "shitty_tv": 4,
+    },
+    "clean_trails": {
+        "clean_trails": 97, "video_trails": 39, "ProFilm_b": 26,
+        "film_contrast_red": 8, "bright": 6, "flicker_trails": 5,
+        "desat_posterize_trails": 5, "shitty_tv": 4,
+    },
+    "flicker_trails": {
+        "flicker_trails": 35, "clean_trails": 8, "video_trails": 6,
+        "desat_posterize_trails": 5, "bright": 4, "ProFilm_a": 4,
+    },
+    "desat_posterize_trails": {
+        "desat_posterize_trails": 39, "video_trails": 8, "clean_trails": 6,
+        "posterize": 6, "desat_blue": 5, "shitty_tv": 4,
+        "bright": 3, "flicker_trails": 3,
+    },
+    # ── Desat / Stylized Family ────────────────────────
+    "desat_blue": {
+        "desat_posterize_trails": 6, "desat_blue": 1,
+        "posterize": 2, "clean_trails": 1,
+    },
+    "posterize": {
+        "posterize": 11, "desat_posterize_trails": 8, "bright": 4,
+        "video_trails": 3, "clean_trails": 3, "bloom": 2,
+    },
+    "bloom": {
+        "bloom": 7, "film_contrast_red": 4, "clean_trails": 3,
+        "bright": 2, "film_contrast": 2,
+    },
+    "space_woosh": {
+        "space_woosh": 15, "flicker_trails": 3, "video_trails": 3,
+        "clean_trails": 3, "bright": 2,
+    },
+    # ── Bright ──────────────────────────────────────────
+    "bright": {
+        "bright": 55, "clean_trails": 8, "video_trails": 6,
+        "ProFilm_b": 6, "film_contrast_red": 5, "shitty_tv": 4,
+        "posterize": 4, "desat_posterize_trails": 3,
+    },
+    # ── Effects Family ──────────────────────────────────
+    "photocopy": {
+        "photocopy": 20, "clean_trails": 5, "video_trails": 4,
+        "bright": 3, "shitty_tv": 3,
+    },
+    "photo_negative": {
+        "photo_negative": 14, "desat_posterize_trails": 3,
+        "video_trails": 3, "clean_trails": 2, "bright": 2,
+    },
+    "video_a": {
+        "video_a": 14, "clean_trails": 3, "video_trails": 3,
+        "bright": 2, "shitty_tv": 2,
+    },
+    "video_bw": {
+        "video_bw": 12, "video_trails": 4, "clean_trails": 3,
+        "bright": 2, "shitty_tv": 2,
+    },
+    "horror_movie_special": {
+        "horror_movie_special": 5, "video_trails": 2, "clean_trails": 2,
+        "bright": 1, "shitty_tv": 1,
+    },
+    "film_sepia_ink": {
+        "film_sepia_ink": 3, "shitty_tv": 2,
+    },
+    "video_security": {
+        "video_security": 1, "clean_trails": 1,
+    },
+    "ProFilm_mirror_a": {
+        "ProFilm_mirror_a": 1, "ProFilm_a": 1,
+    },
+    "contrast_a": {
+        "contrast_a": 2, "film_sepia_ink": 2, "clean_trails": 1,
+    },
+    "film_blue_filter": {
+        "clean_trails": 3, "film_blue_filter": 2, "film_contrast_blue": 1,
+    },
+}
 
 # Post-proc TONE bias by audio timbre (Section.warmth). The pp_study over the 20
 # official venues showed B&W/desaturated filters sit in DARK, quieter audio
@@ -1142,13 +1508,11 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
             for gi in range(len(pattern) + 1):
                 if tt >= s.end:
                     break
-                pp = palette[i % len(palette)]
-                if pp == last and len(palette) > 1:
-                    i += 1
-                    pp = palette[i % len(palette)]
+                # Markov-weighted selection from the available filter pool,
+                # biased by the previous filter's transition probabilities.
+                pp = _markov_choice(last, palette, _PP_MARKOV, "clean_trails")
                 out.append(_txt(tt, f"[{pp}.pp]"))
                 last = pp
-                i += 1
                 if gi < len(pattern):
                     tt += max(1, int(beat * pattern[gi]))
 
