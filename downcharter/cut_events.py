@@ -426,255 +426,145 @@ def detect_events(sections: list[Section],
     return ev
 
 
-# ── Density constants ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  BASELINE GENERATOR (Layer 1)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Most official directed cuts (57%) are >4 beats from any section boundary,
+# placed at a statistical MIDPOINT (mean offset = 0.458). They are NOT "special
+# moments" — they are COVERAGE SHOTS following an instrument hierarchy per
+# section kind, with ~42% self-repetition rate.
+#
+# This generator replicates the learned patterns: it distributes directed cuts
+# at the right positions, at the right density, with the right instrument focus,
+# at low priority (20) so special events (BRE, rises, solos) still override.
 
-_DEFAULT_CATEGORY_PCT = {
-    "directed_vocals_cam_pt": 10.3,
-    "directed_drums_lt": 8.13,
-    "directed_guitar_cls": 7.76,
-    "directed_vocals_cls": 4.47,
-    "directed_all_cam": 4.33,
-    "directed_bass_cls": 4.1,
-    "directed_duo_gb": 3.93,
-    "directed_duo_guitar": 3.77,
-    "directed_duo_bass": 3.77,
-    "directed_duo_kb": 3.6,
-    "directed_crowd": 3.57,
-    "directed_vocals": 3.5,
-    "directed_vocals_cam_pr": 3.2,
-    "directed_all_lt": 3.17,
-    "directed_all": 3.1,
-    "directed_all_yeah": 2.97,
-    "directed_duo_kg": 2.93,
-    "directed_drums_kd": 2.93,
-    "directed_guitar_cam_pt": 2.8,
-    "directed_bass": 2.3,
-    "directed_duo_kv": 1.97,
-    "directed_drums_pnt": 1.87,
-    "directed_bass_cam": 1.4,
-    "directed_guitar": 1.37,
-    "directed_keys": 1.27,
-    "directed_duo_drums": 1.13,
-    "directed_keys_cam": 1.1,
-    "directed_vocals_np": 1.07,
-    "directed_bass_np": 0.97,
-    "directed_brej": 0.8,
-    "directed_crowd_b": 0.8,
-    "directed_guitar_cam_pr": 0.57,
-    "directed_guitar_np": 0.4,
-    "directed_crowd_g": 0.3,
-    "directed_drums": 0.17,
-    "directed_keys_np": 0.1,
-    "directed_drums_np": 0.07,
-    "directed_stagedive": 0.07,
+_BASELINE_EVENTS_PER_BEAT: dict[str, float] = {
+    "chorus": 0.055, "verse": 0.035, "solo": 0.10,
+    "intro": 0.050, "outro": 0.035, "breakdown": 0.065,
+    "build": 0.060, "bridge": 0.040, "riff": 0.055,
+    "prechorus": 0.035, "postchorus": 0.055, "drop": 0.060,
+    "default": 0.040,
 }
 
-_DEFAULT_EVENTS_PER_BEAT = {
-    "verse": {"low": 0.0, "mid": 0.026, "high": 0.039},
-    "chorus": {"mid": 0.040, "high": 0.070},
-    "bridge": {"high": 0.058, "mid": 0.037, "low": 0.0},
-    "solo": {"mid": 0.064, "high": 0.074, "very_high": 0.150},
-    "intro": {"low": 0.042, "mid": 0.057, "high": 0.052, "very_high": 0.103},
-    "outro": {"low": 0.018, "high": 0.070, "mid": 0.058},
-    "breakdown": {"high": 0.050, "mid": 0.043, "low": 0.0},
-    "prechorus": {"mid": 0.027, "high": 0.042},
-    "postchorus": {"mid": 0.047, "high": 0.085},
-    "build": {"high": 0.065, "mid": 0.038, "very_high": 0.0},
-    "riff": {"high": 0.055, "mid": 0.020},
-    "default": {"low": 0.032, "mid": 0.043, "high": 0.052, "very_high": 0.080},
-}
+# Mean offset within section to place each baseline event (learned: 0.458).
+_BASELINE_OFFSET_MEAN = 0.458
+_BASELINE_OFFSET_STD = 0.12   # approximate from p25-p75 spread
 
-_DEFAULT_BEAT_OFFSET_DIST = {
-    "verse": {"p5": 0.0, "p25": 0.33, "p50": 0.52, "p75": 0.75, "p95": 1.0},
-    "chorus": {"p5": 0.0, "p25": 0.01, "p50": 0.42, "p75": 0.84, "p95": 1.0},
-    "bridge": {"p5": 0.0, "p25": 0.10, "p50": 0.39, "p75": 0.64, "p95": 1.0},
-    "solo": {"p5": 0.0, "p25": 0.04, "p50": 0.37, "p75": 0.75, "p95": 1.0},
-    "intro": {"p5": 0.0, "p25": 0.13, "p50": 0.48, "p75": 0.73, "p95": 1.0},
-    "outro": {"p5": 0.0, "p25": 0.0, "p50": 0.39, "p75": 0.66, "p95": 1.0},
-    "breakdown": {"p5": 0.0, "p25": 0.13, "p50": 0.48, "p75": 0.71, "p95": 1.0},
-    "default": {"p5": 0.0, "p25": 0.17, "p50": 0.47, "p75": 0.74, "p95": 1.0},
-}
+# Self-repeat probability (Markov self-transition ~42% in official data).
+_SELF_REPEAT_PROB = 0.42
 
-_DEFAULT_MARKOV = {
-    "directed_vocals_cam_pt": {"directed_vocals_cam_pt": 0.422, "directed_drums_lt": 0.063, "directed_guitar_cls": 0.056, "directed_duo_guitar": 0.053, "directed_guitar_cam_pt": 0.040},
-    "directed_drums_lt": {"directed_drums_lt": 0.494, "directed_vocals_cam_pt": 0.071, "directed_guitar_cls": 0.054, "directed_duo_guitar": 0.046, "directed_duo_kb": 0.029},
-    "directed_guitar_cls": {"directed_guitar_cls": 0.276, "directed_bass_cls": 0.241, "directed_crowd": 0.075, "directed_all_lt": 0.057, "directed_drums_lt": 0.044},
-    "directed_duo_guitar": {"directed_duo_bass": 0.283, "directed_vocals_cam_pt": 0.106, "directed_duo_guitar": 0.097, "directed_duo_gb": 0.062, "directed_duo_kb": 0.053},
-    "directed_duo_bass": {"directed_duo_kv": 0.177, "directed_vocals_cam_pt": 0.133, "directed_duo_guitar": 0.124, "directed_vocals_cls": 0.080, "directed_all_cam": 0.053},
+# Instrument-targeted cut list per section kind (top = most common for that section).
+# The guard (_guard_directed) filters cuts that don't make sense (absent instrument,
+# idle character, no real vocals for crowd, etc.) — so we provide generous options.
+_BASELINE_CUTS_BY_KIND: dict[str, list[str]] = {
+    "verse":      ["D_Vox_Cam_PT", "D_Vocals", "D_Vox_CLS", "D_Gtr_CLS", "D_Bass_CLS"],
+    "chorus":     ["D_Vox_Cam_PT", "D_All_Cam", "D_All", "D_Vocals", "D_Gtr"],
+    "prechorus":  ["D_Vocals", "D_Vox_Cam_PT", "D_Gtr", "D_Bass_CLS"],
+    "postchorus": ["D_Vox_Cam_PT", "D_All_Cam", "D_All", "D_Vocals"],
+    "riff":       ["D_Gtr_CLS", "D_Gtr", "D_Bass_CLS", "D_Drums_LT"],
+    "solo":       ["D_Gtr_CLS", "D_Bass_CLS", "D_Keys_Cam", "D_Vox_CLS"],
+    "build":      ["D_Drums_LT", "D_Gtr_CLS", "D_All_LT", "D_Bass_CLS"],
+    "drop":       ["D_All_LT", "D_Drums_LT", "D_All", "D_All_Cam"],
+    "breakdown":  ["D_Gtr_CLS", "D_Drums_LT", "D_Bass_CLS", "D_All_LT"],
+    "bridge":     ["D_Vox_CLS", "D_Duo_KV", "D_Keys", "D_Vox_Cam_PT"],
+    "intro":      ["D_All_Cam", "D_All", "D_Gtr", "D_Vocals"],
+    "outro":      ["D_All", "D_Vox_CLS", "D_All_Yeah", "D_Vox_Cam_PT"],
+    "default":    ["D_Vox_Cam_PT", "D_Vocals", "D_Gtr_CLS", "D_All_Cam"],
 }
 
 
-class BeatDensityGenerator:
-    """Gera eventos directed baseados em densidade de notas e estatisticas aprendidas.
+def detect_baseline_cuts(sections: list[Section],
+                         inst_onsets: dict[str, list[int]] | None,
+                         accents: list[int] | None,
+                         time_sig_map: list, tpb: int,
+                         events_per_beat: dict[str, float] | None = None
+                         ) -> list[CutEvent]:
+    """Distribute directed cuts at the statistical pattern learned from 100 songs.
 
-    Em vez de detetar momentos musicais especificos, distribui eventos directed
-    proporcionalmente a densidade de notas dentro da seccao, replicando o padrao
-    observado nos dados oficiais.
+    For each section, computes target event count (events_per_beat × length),
+    places them at ∼offset=0.458 (midsection), snaps to nearest accent, and
+    selects cut type from the instrument hierarchy per section kind (with
+    ~42% self-repeat probability).
+
+    Priority 30 — below special events (40-100) but above nothing.
     """
-
-    def __init__(self, stats_path: str | Path | None = None):
-        import json
-        if stats_path is None:
-            candidate = Path(__file__).parent.parent / "dev" / "camera_stats.json"
-            if candidate.exists():
-                stats_path = candidate
-        if stats_path and Path(stats_path).exists():
-            with open(stats_path, encoding="utf-8") as f:
-                data = json.load(f)
-            self.events_per_beat = data.get("events_per_beat_by_section", _DEFAULT_EVENTS_PER_BEAT)
-            self.beat_offsets = data.get("beat_offset_distribution", _DEFAULT_BEAT_OFFSET_DIST)
-            self.markov_table = data.get("directed_markov_table", _DEFAULT_MARKOV)
-            self.category_pct = data.get("category_distribution_pct", _DEFAULT_CATEGORY_PCT)
-        else:
-            self.events_per_beat = dict(_DEFAULT_EVENTS_PER_BEAT)
-            self.beat_offsets = dict(_DEFAULT_BEAT_OFFSET_DIST)
-            self.markov_table = dict(_DEFAULT_MARKOV)
-            self.category_pct = dict(_DEFAULT_CATEGORY_PCT)
-
-        # Build reverse lookup: official_directed_name -> internal D_xxx name
-        from .venue import DIRECTED_CUTS
-        self._official_to_internal_map = {v: k for k, v in DIRECTED_CUTS.items()}
-
-    def _density_bucket(self, notes_per_beat: float) -> str:
-        if notes_per_beat < 2:
-            return "low"
-        elif notes_per_beat < 6:
-            return "mid"
-        elif notes_per_beat < 15:
-            return "high"
-        else:
-            return "very_high"
-
-    def _sample_from_category(self) -> str:
-        import random
-        r = random.random() * 100.0
-        cumulative = 0.0
-        for cut_type, pct in self.category_pct.items():
-            cumulative += pct
-            if r <= cumulative:
-                return cut_type
-        return list(self.category_pct.keys())[0] if self.category_pct else "directed_vocals_cam_pt"
-
-    def _pick_cut_type(self, prev_cut_type: str | None) -> str:
-        import random
-        if prev_cut_type is None or random.random() < 0.10:
-            return self._sample_from_category()
-        transitions = self.markov_table.get(prev_cut_type, {})
-        if transitions:
-            r = random.random()
-            cumulative = 0.0
-            for cut_type, prob in transitions.items():
-                cumulative += prob
-                if r <= cumulative:
-                    return cut_type
-        return self._sample_from_category()
-
-    def _sample_positions(self, n_events: int, sec_start: int, sec_end: int,
-                          offset_dist: dict, tpb: int) -> list[int]:
-        import random
-        if n_events <= 0:
-            return []
-        sec_duration = sec_end - sec_start
-        if sec_duration <= 0:
-            return []
-        p5 = offset_dist.get("p5", 0.0)
-        p25 = offset_dist.get("p25", 0.17)
-        p50 = offset_dist.get("p50", 0.47)
-        p75 = offset_dist.get("p75", 0.74)
-        p95 = offset_dist.get("p95", 0.95)
-        min_gap = tpb * 2
-
-        candidates = []
-        for _ in range(n_events * 5):
-            r = random.random()
-            if r < 0.05:
-                frac = random.uniform(0.01, p5) if p5 > 0.01 else 0.01
-            elif r < 0.25:
-                frac = random.uniform(p5, p25)
-            elif r < 0.50:
-                frac = random.uniform(p25, p50)
-            elif r < 0.75:
-                frac = random.uniform(p50, p75)
-            elif r < 0.95:
-                frac = random.uniform(p75, p95)
-            else:
-                frac = random.uniform(p95, 0.99)
-            frac = max(0.01, min(0.99, frac))
-            tick = sec_start + int(frac * sec_duration)
-            candidates.append(tick)
-        candidates.sort()
-
-        positions = []
-        for c in candidates:
-            if not positions or c - positions[-1] >= min_gap:
-                positions.append(c)
-            if len(positions) >= n_events:
-                break
-        return positions
-
-    def generate(self, sections: list[Section], inst_onsets: dict[str, list[int]] | None,
-                 time_sig_map: list, tpb: int,
-                 accents: list[int] | None = None) -> list[CutEvent]:
-        import bisect, random
-        out = []
-        if not inst_onsets or not sections:
-            return out
-        prev_cut_type = None
-        last_tick = -10 ** 9
-        acc = sorted(accents) if accents else []
-        for sec in sections:
-            sec_beats = (sec.end - sec.start) / tpb
-            if sec_beats < 2:
-                continue
-            n_notes = 0
-            for inst, ons in inst_onsets.items():
-                if inst.startswith("_") or not ons:
-                    continue
-                lo = bisect.bisect_left(ons, sec.start)
-                hi = bisect.bisect_left(ons, sec.end)
-                n_notes += hi - lo
-            notes_per_beat = n_notes / max(sec_beats, 0.001)
-            d_bucket = self._density_bucket(notes_per_beat)
-            kind_epb = self.events_per_beat.get(sec.kind, self.events_per_beat.get("default", {}))
-            epb = kind_epb.get(d_bucket, kind_epb.get("mid", 0.04))
-            n_events = max(0, int(round(epb * sec_beats)))
-            if n_events == 0:
-                continue
-            offset_dist = self.beat_offsets.get(sec.kind, self.beat_offsets.get("default", {}))
-            positions = self._sample_positions(n_events, sec.start, sec.end, offset_dist, tpb)
-            for tick in positions:
-                # Snap to nearest accent (within 2 beats) or beat
-                snapped = tick
-                if acc:
-                    i = bisect.bisect_left(acc, tick)
-                    for ci in (i - 1, i):
-                        if 0 <= ci < len(acc) and abs(acc[ci] - tick) <= tpb * 2:
-                            if abs(acc[ci] - tick) < abs(snapped - tick):
-                                snapped = acc[ci]
-                else:
-                    snapped = round(tick / tpb) * tpb
-                tick = snapped
-                if tick - last_tick < tpb * 2:
-                    continue
-                cut_type = self._pick_cut_type(prev_cut_type)
-                internal_cut = self._official_to_internal_map.get(cut_type)
-                if internal_cut is None:
-                    continue
-                out.append(CutEvent(
-                    tick=tick,
-                    etype="density",
-                    cuts=[internal_cut],
-                    priority=25,
-                    dramatic=False,
-                    note=f"density {sec.kind}/{d_bucket} ({n_notes}n/{sec_beats:.0f}b)"
-                ))
-                prev_cut_type = cut_type
-                last_tick = tick
+    import random, bisect
+    out: list[CutEvent] = []
+    if not inst_onsets or not sections:
         return out
+    eb = events_per_beat or _BASELINE_EVENTS_PER_BEAT
+    acc = sorted(accents) if accents else []
+    prev_cut: str | None = None
+    last_tick = -10 ** 9
+    min_gap = tpb * 2  # minimum 2 beats between baseline events
+
+    for sec in sections:
+        sec_beats = (sec.end - sec.start) / tpb
+        if sec_beats < 2:
+            continue
+        # Target event count
+        epb = eb.get(sec.kind, eb.get("default", 0.04))
+        n_events = max(1, int(round(epb * sec_beats)))
+        # Place events at ~midsection offset, spread evenly
+        positions_placed = 0
+        for _ in range(n_events * 3):  # oversample to fill min_gap
+            if positions_placed >= n_events:
+                break
+            # Gaussian-ish jitter around mean offset 0.458
+            frac = _BASELINE_OFFSET_MEAN + random.gauss(0, _BASELINE_OFFSET_STD)
+            frac = max(0.05, min(0.95, frac))
+            tick = sec.start + int(frac * (sec.end - sec.start))
+            # Gentle snap to nearest accent (within 1 beat) — keeps midsection position
+            if acc:
+                i = bisect.bisect_left(acc, tick)
+                for ci in (i - 1, i):
+                    if 0 <= ci < len(acc) and abs(acc[ci] - tick) <= tpb:
+                        tick = acc[ci]
+                        break
+            # Minimum gap from previous event
+            if tick - last_tick < min_gap:
+                continue
+            # Pick cut type: self-repeat or from hierarchy
+            cut = _pick_baseline_cut(prev_cut, sec.kind)
+            if cut is None:
+                continue
+            out.append(CutEvent(
+                tick=tick, etype="baseline", cuts=[cut],
+                priority=30, dramatic=False,
+                note=f"baseline {sec.kind} ({positions_placed + 1}/{n_events})"
+            ))
+            prev_cut = cut
+            last_tick = tick
+            positions_placed += 1
+
+    return out
+
+
+def _pick_baseline_cut(prev: str | None, kind: str) -> str | None:
+    """Pick a directed cut for a baseline event.
+
+    - 42% chance: repeat previous cut (self-repeat, matching official data)
+    - 58% chance: cycle through the section's hierarchy (variety)
+    """
+    import random
+    pool = _BASELINE_CUTS_BY_KIND.get(kind, _BASELINE_CUTS_BY_KIND["default"])
+    if not pool:
+        return None
+    # Self-repeat
+    if prev is not None and random.random() < _SELF_REPEAT_PROB:
+        return prev
+    # Pick from pool avoiding immediate repeat + cycling variety
+    if prev is not None and prev in pool:
+        # Pick a DIFFERENT cut from the pool (no-immediate-repeat but allow later repeat)
+        others = [c for c in pool if c != prev]
+        return random.choice(others) if others else pool[0]
+    return random.choice(pool)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  COMPANION SHOTS (Phase 3)
+#  (END of Baseline Generator)
+# ══════════════════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # Co-occurrence learned from 100 official songs: certain cut types fire
