@@ -1868,7 +1868,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     sections (few notes) the pace is stretched to the real note spacing (avoids
     over-cutting in slow ballads/post-metal)."""
     from collections import deque
-    from .cut_events import detect_events, detect_baseline_cuts
+    from .cut_events import detect_events
     out: list[AbsEvent] = []
     accents = sorted(accents) if accents else []
     onsets = sorted(onsets) if onsets else []
@@ -1970,21 +1970,26 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     # context (_NP if idle, None if it makes no sense). Full-band cuts are throttled to
     # `fullband_gap`; one stage dive per song; anti-recency on the rest.
     events = detect_events(sections, inst_onsets, accents, bre_spans, time_sig_map, tpb)
-    # Density-based directed events (baseline coverage shots at midsection)
-    if inst_onsets:
-        baseline_events = detect_baseline_cuts(sections, inst_onsets, accents, time_sig_map, tpb)
-        events += baseline_events
-        events.sort(key=lambda e: (-e.priority, e.tick))
-    # Cap events at 40 highest-priority (official avg ~20, 2× margin)
-    events = events[:40]
+    events.sort(key=lambda e: (e.tick, -e.priority))
     accepted: list[tuple[int, str]] = []
+    recent_dir: deque = deque(maxlen=4)
     last_fullband = -10 ** 9
     did_stagedive = False
+    import random
     for e in events:
         chosen = None
         for cand in e.cuts:                          # 1st candidate that passes the guard
             g = _guard_directed(cand, e.tick, tpb, inst_onsets)
-            if g is not None:
+            if g is None:
+                continue
+            # 42% chance of self-repeat (matching official data)
+            if accepted and g == accepted[-1][1] and random.random() < 0.42:
+                chosen = g
+                break
+            if g in recent_dir and chosen is None:
+                chosen = g           # fallback
+                continue
+            if g not in recent_dir:
                 chosen = g
                 break
         if chosen is None:
@@ -1997,6 +2002,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 continue                             # at most one per song
             did_stagedive = True
         accepted.append((e.tick, chosen))
+        recent_dir.append(chosen)
         if is_fullband:
             last_fullband = e.tick
 

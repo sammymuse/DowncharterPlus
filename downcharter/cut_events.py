@@ -22,7 +22,7 @@ import json
 from dataclasses import dataclass, field
 
 from .venue import (Section, section_energy, _camera_energy, _energy_tier_at,
-                    find_pause_spans, measure_ticks_at)
+                    find_pause_spans, measure_ticks_at, _solo_instrument)
 
 
 @dataclass
@@ -39,8 +39,7 @@ class CutEvent:
 # rises/impact entries anchor structure; the rest are texture.
 PRIO = {
     "bre": 100, "stagedive": 90, "rise": 80, "solo": 70, "impact": 60,
-    "vocal_hold": 55, "vocal_peak": 50, "duo": 45, "downtime": 40,
-    "drum_fill": 40, "kick": 35, "technical": 30,
+    "downtime": 40, "baseline": 30,
 }
 
 _MELODIC = ("guitar", "bass", "keys")
@@ -226,43 +225,11 @@ def detect_downtime(inst_onsets: dict[str, list[int]] | None,
     return out
 
 
-def detect_vocal_peaks(inst_onsets: dict[str, list[int]] | None,
-                       accents: list[int], time_sig_map: list, tpb: int) -> list[CutEvent]:
-    """Last note of a vocal phrase (proxy for a sustained/peak note) → vocal close-up."""
-    out = []
-    if not inst_onsets:
-        return out
-    vocal = inst_onsets.get("_vocal_real") or []
-    last_emit = -10 ** 9
-    for ps, last, n in _phrases(vocal, time_sig_map, tpb):
-        if n < 2:                     # an isolated stab is not a phrase to peak on
-            continue
-        if last - last_emit < tpb * 4:  # throttle: at most ~1 vocal close-up / 4 beats
-            continue
-        out.append(CutEvent(_nearest_accent(last, accents, tpb), "vocal_peak",
-                            ["D_Vox_CLS", "D_Vox_Cam_PT"], PRIO["vocal_peak"],
-                            note="vocal phrase peak"))
-        last_emit = last
-    return out
-
-
 # Single-character close-up per instrument (the feature shot for whoever leads).
 _FEATURE_CLOSEUP = {
     "guitar": ["D_Gtr_CLS", "D_Gtr"], "bass": ["D_Bass_CLS", "D_Bass"],
     "keys": ["D_Keys_Cam", "D_Keys"], "drums": ["D_Drums_LT", "D_Drums"],
     "vocal": ["D_Vox_CLS", "D_Vox_Cam_PT"],
-}
-# Interaction shot for two members that CO-lead a section (frozenset of the pair → cut).
-_FEATURE_DUO = {
-    frozenset({"guitar", "bass"}): "D_Duo_GB",
-    frozenset({"keys", "bass"}): "D_Duo_KB",
-    frozenset({"keys", "guitar"}): "D_Duo_KG",
-    frozenset({"keys", "vocal"}): "D_Duo_KV",
-    frozenset({"guitar", "vocal"}): "D_Duo_Gtr",
-    frozenset({"bass", "vocal"}): "D_Duo_Bass",
-    # NOTE: D_Duo_Drums (drummer-vocalist) is intentionally omitted — it asserts the
-    # drummer is the singer, which is almost never the case; a drums+vocal section
-    # falls to a vocal close-up instead.
 }
 
 
@@ -338,328 +305,73 @@ def detect_stagedive(sections: list[Section], inst_onsets: dict[str, list[int]] 
     return out
 
 
-def detect_technical(sections: list[Section], inst_onsets: dict[str, list[int]] | None,
-                     accents: list[int], tpb: int) -> list[CutEvent]:
-    """Fast/dense melodic passage (small onset spacing) → fretboard close-up."""
-    out = []
-    if not inst_onsets:
-        return out
-    for s in sections:
-        for inst, cut in (("guitar", "D_Gtr_CLS"), ("bass", "D_Bass_CLS")):
-            seg = _onsets_in(inst_onsets.get(inst), s.start, s.end)
-            if len(seg) < 8:
-                continue
-            gaps = sorted(seg[i + 1] - seg[i] for i in range(len(seg) - 1))
-            if gaps[len(gaps) // 2] <= tpb // 2:      # median spacing ≤ 1/8
-                mid = (s.start + s.end) // 2
-                out.append(CutEvent(_nearest_accent(mid, accents, tpb), "technical",
-                                    [cut], PRIO["technical"], note=f"fast {inst} @{s.kind}"))
-                break
-    return out
+def detect_events(sections: list[Section],
+                  inst_onsets: dict[str, list[int]] | None,
+                  accents: list[int] | None,
+                  bre_spans: list[tuple[int, int]] | None,
+                  time_sig_map: list, tpb: int) -> list[CutEvent]:
+    """Full event timeline. Sorted by tick (ties broken by priority desc)."""
+    acc = sorted(accents) if accents else []
+    ev: list[CutEvent] = []
+    ev += detect_bre(bre_spans)
+    ev += detect_stagedive(sections, inst_onsets, acc, time_sig_map, tpb)
+    ev += detect_downtime(inst_onsets, time_sig_map, tpb)
+    ev += detect_rises(sections, acc, tpb)
+    ev += detect_impacts(sections, acc, tpb)
+    ev += detect_solos(sections, inst_onsets, acc, tpb)
+    ev += detect_baseline_cuts(sections, inst_onsets, acc, time_sig_map, tpb)
+    ev.sort(key=lambda e: (e.tick, -e.priority))
+    return ev
 
 
-def detect_duos(sections: list[Section],
-                inst_onsets: dict[str, list[int]] | None,
-                accents: list[int], tpb: int) -> list[CutEvent]:
-    """Feature + DUO shot per section: film whoever LEADS the section.
+def detect_baseline_cuts(sections: list[Section],
+                         inst_onsets: dict[str, list[int]] | None,
+                         accents: list[int] | None,
+                         time_sig_map: list, tpb: int) -> list[CutEvent]:
+    """One structural directed cut per qualifying section (mid/high energy).
 
-    Fires once per mid/high energy section. When two instruments strongly co-lead
-    (second ≥ 60% of lead's score), generates a DUO cut. With a single leader,
-    generates a close-up.
+    3 categories:
+    1. SOLO → instrument close-up (D_Gtr_CLS, D_Bass_CLS, D_Keys_Cam)
+    2. DROP/BUILD → full-band cut (D_All_LT, D_All_Cam, D_Drums_LT)
+    3. All other mid/high sections → vocal cut (D_Vox_Cam_PT, D_Vocals)
 
-    Official data: ~24% of cuts are duos.
+    Placed at the busiest onset of the lead instrument in the section,
+    or midsection if no onsets. Priority 30 (below special events).
     """
     out = []
-    if not inst_onsets:
+    if not inst_onsets or not sections:
         return out
     totals = {k: len(v) for k, v in inst_onsets.items()
               if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
-    real_vox = bool(inst_onsets.get("_vocal_real"))
+    acc = sorted(accents) if accents else []
     for s in sections:
-        if _RANK[_camera_energy(s)] < 1:          # only mid/high
+        if _RANK[_camera_energy(s)] < 1:  # skip calm sections
             continue
         if s.end - s.start < tpb * 4:
             continue
         leaders = _section_leaders(inst_onsets, s.start, s.end, totals)
         if not leaders:
             continue
-        lead, lead_score = leaders[0]
-        if lead_score < 0.02:
-            continue
+        lead, _ = leaders[0]
         mid = (s.start + s.end) // 2
-        # Try DUO: co-leaders with second ≥ 75% of lead (very strong co-lead only)
-        duo = None
-        if len(leaders) >= 2 and leaders[1][1] >= lead_score * 0.75:
-            second = leaders[1][0]
-            duo = _FEATURE_DUO.get(frozenset({lead, second}))
-            if duo and "vocal" in (lead, second) and not real_vox:
-                duo = None
-        if duo:
-            cuts = [duo]
+        # Determine cut type by section kind
+        if s.kind == "solo":
+            cuts = _FEATURE_CLOSEUP.get(_solo_instrument(s.name), ["D_Gtr_CLS"])
+        elif s.kind in ("drop", "build"):
+            cuts = ["D_All_LT", "D_All_Cam", "D_Drums_LT"]
         else:
+            # Most sections: film the leader
             cuts = _FEATURE_CLOSEUP.get(lead, ["D_Vox_Cam_PT"])
+        # Position at busiest onset of lead
         lead_ons = inst_onsets.get(lead) or []
         tick = (_busiest_onset(lead_ons, s.start, s.end, tpb, mid)
                 if lead_ons else mid)
-        tick = _nearest_accent(tick, accents, tpb)
-        out.append(CutEvent(tick, "duo", cuts, PRIO["duo"],
-                            note=f"duo/feature {lead}@{s.kind}"))
+        tick = _nearest_accent(tick, acc, tpb) if acc else tick
+        out.append(CutEvent(tick, "baseline", cuts, 30,
+                            note=f"structural {lead}@{s.kind}"))
     return out
 
 
-def detect_rhythm_accents(drum_onsets: list[int] | None,
-                          accents: list[int], tpb: int) -> list[CutEvent]:
-    """Drum fills and fast patterns → D_Drums_LT (2nd most common cut, 8.13%).
-
-    Detection: scan drum onsets for CLUSTERS of very fast hits (gaps ≤ 1/16 beat).
-    Only clusters with ≥ 8 hits in a ~2-beat window qualify as genuine fills.
-    """
-    out = []
-    if not drum_onsets or len(drum_onsets) < 8:
-        return out
-    drum = sorted(drum_onsets)
-    min_gap = max(1, tpb // 16)  # 1/16 note gap = very fast fill
-    # Find clusters of rapid hits
-    clusters: list[list[int]] = []
-    cur: list[int] = [drum[0]]
-    for i in range(1, len(drum)):
-        if drum[i] - drum[i - 1] <= min_gap:
-            cur.append(drum[i])
-        else:
-            if len(cur) >= 8:  # require fill of 8+ 1/16 hits
-                clusters.append(cur)
-            cur = [drum[i]]
-    if len(cur) >= 8:
-        clusters.append(cur)
-
-    last_tick = -10 ** 9
-    for cl in clusters:
-        # Busiest onset within cluster
-        best, best_cnt = cl[0], 0
-        for o in cl:
-            cnt = sum(1 for c in cl if abs(c - o) <= tpb)
-            if cnt > best_cnt:
-                best, best_cnt = o, cnt
-        tick = _nearest_accent(best, accents, tpb)
-        if tick - last_tick < tpb * 8:  # at most 1 per 8 beats
-            continue
-        out.append(CutEvent(tick, "drum_fill", ["D_Drums_LT", "D_Drums_Point", "D_Drums_KD"],
-                            PRIO["drum_fill"], note=f"drum fill ({len(cl)} hits)"))
-        last_tick = tick
-    return out
-
-
-def detect_vocal_hold(inst_onsets: dict[str, list[int]] | None,
-                      sections: list[Section],
-                      accents: list[int], time_sig_map: list,
-                      tpb: int) -> list[CutEvent]:
-    """Sustained vocal notes → directed_vocals_cam_pt (#1 cut, 10.3%).
-
-    Detection: in sections where vocal LEADS, find sustained notes (gap ≥ 4 beats
-    between vocal onsets). At most 1 per section, placed at the onset.
-    """
-    out = []
-    if not inst_onsets:
-        return out
-    vocal = inst_onsets.get("_vocal_real") or inst_onsets.get("vocal")
-    if not vocal or len(vocal) < 5:
-        return out
-    vocal = sorted(vocal)
-    totals = {k: len(v) for k, v in inst_onsets.items()
-              if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
-    for s in sections:
-        if s.end - s.start < tpb * 4:
-            continue
-        # Only fire when vocal is the section leader
-        leaders = _section_leaders(inst_onsets, s.start, s.end, totals)
-        if not leaders or leaders[0][0] != "vocal":
-            continue
-        # Find the best sustained note (longest gap) in this section
-        import bisect
-        lo = bisect.bisect_left(vocal, s.start)
-        hi = bisect.bisect_left(vocal, s.end)
-        in_sec = vocal[lo:hi]
-        if len(in_sec) < 5:
-            continue
-        best_gap, best_tick = 0, 0
-        for i in range(len(in_sec) - 1):
-            gap = in_sec[i + 1] - in_sec[i]
-            if gap >= tpb * 6 and gap > best_gap:  # ≥ 6 beats sustain
-                best_gap = gap
-                best_tick = in_sec[i]
-        if best_gap == 0:
-            continue
-        tick = _nearest_accent(best_tick, accents, tpb)
-        out.append(CutEvent(tick, "vocal_hold",
-                            ["D_Vox_Cam_PT", "D_Vocals", "D_Vox_CLS"],
-                            PRIO["vocal_hold"],
-                            note=f"vocal hold ({best_gap // tpb:.0f}b)"))
-    return out
-
-
-def detect_events(sections: list[Section],
-                  inst_onsets: dict[str, list[int]] | None,
-                  accents: list[int] | None,
-                  bre_spans: list[tuple[int, int]] | None,
-                  time_sig_map: list, tpb: int) -> list[CutEvent]:
-    """Full event timeline, sorted by tick (ties broken by priority desc)."""
-    acc = sorted(accents) if accents else []
-    drum = sorted(inst_onsets.get("drums")) if inst_onsets and inst_onsets.get("drums") else None
-    ev: list[CutEvent] = []
-    ev += detect_bre(bre_spans)
-    ev += detect_rises(sections, acc, tpb)
-    ev += detect_impacts(sections, acc, tpb)
-    ev += detect_solos(sections, inst_onsets, acc, tpb)
-    ev += detect_downtime(inst_onsets, time_sig_map, tpb)
-    ev += detect_vocal_peaks(inst_onsets, acc, time_sig_map, tpb)
-    ev += detect_vocal_hold(inst_onsets, sections, acc, time_sig_map, tpb)
-    ev += detect_duos(sections, inst_onsets, acc, tpb)
-    ev += detect_rhythm_accents(drum, acc, tpb)
-    ev += detect_stagedive(sections, inst_onsets, acc, time_sig_map, tpb)
-    # detect_technical is defined but not wired yet (Phase 2+: precise fast-run anchor).
-    ev.sort(key=lambda e: (e.tick, -e.priority))
-    return ev
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  BASELINE GENERATOR (Layer 1)
-# ══════════════════════════════════════════════════════════════════════════════
-#
-# Most official directed cuts (57%) are >4 beats from any section boundary,
-# placed at a statistical MIDPOINT (mean offset = 0.458). They are NOT "special
-# moments" — they are COVERAGE SHOTS following an instrument hierarchy per
-# section kind, with ~42% self-repetition rate.
-#
-# This generator replicates the learned patterns: it distributes directed cuts
-# at the right positions, at the right density, with the right instrument focus,
-# at low priority (20) so special events (BRE, rises, solos) still override.
-
-_BASELINE_EVENTS_PER_BEAT: dict[str, float] = {
-    "chorus": 0.055, "verse": 0.035, "solo": 0.10,
-    "intro": 0.050, "outro": 0.035, "breakdown": 0.065,
-    "build": 0.060, "bridge": 0.040, "riff": 0.055,
-    "prechorus": 0.035, "postchorus": 0.055, "drop": 0.060,
-    "default": 0.040,
-}
-
-# Mean offset within section to place each baseline event (learned: 0.458).
-_BASELINE_OFFSET_MEAN = 0.458
-_BASELINE_OFFSET_STD = 0.12   # approximate from p25-p75 spread
-
-# Self-repeat probability (Markov self-transition ~42% in official data).
-_SELF_REPEAT_PROB = 0.42
-
-# Instrument-targeted cut list per section kind (top = most common for that section).
-# The guard (_guard_directed) filters cuts that don't make sense (absent instrument,
-# idle character, no real vocals for crowd, etc.) — so we provide generous options.
-_BASELINE_CUTS_BY_KIND: dict[str, list[str]] = {
-    "verse":      ["D_Vox_Cam_PT", "D_Vocals", "D_Vox_CLS", "D_Gtr_CLS", "D_Bass_CLS"],
-    "chorus":     ["D_Vox_Cam_PT", "D_All_Cam", "D_All", "D_Vocals", "D_Gtr"],
-    "prechorus":  ["D_Vocals", "D_Vox_Cam_PT", "D_Gtr", "D_Bass_CLS"],
-    "postchorus": ["D_Vox_Cam_PT", "D_All_Cam", "D_All", "D_Vocals"],
-    "riff":       ["D_Gtr_CLS", "D_Gtr", "D_Bass_CLS", "D_Drums_LT"],
-    "solo":       ["D_Gtr_CLS", "D_Bass_CLS", "D_Keys_Cam", "D_Vox_CLS"],
-    "build":      ["D_Drums_LT", "D_Gtr_CLS", "D_All_LT", "D_Bass_CLS"],
-    "drop":       ["D_All_LT", "D_Drums_LT", "D_All", "D_All_Cam"],
-    "breakdown":  ["D_Gtr_CLS", "D_Drums_LT", "D_Bass_CLS", "D_All_LT"],
-    "bridge":     ["D_Vox_CLS", "D_Duo_KV", "D_Keys", "D_Vox_Cam_PT"],
-    "intro":      ["D_All_Cam", "D_All", "D_Gtr", "D_Vocals"],
-    "outro":      ["D_All", "D_Vox_CLS", "D_All_Yeah", "D_Vox_Cam_PT"],
-    "default":    ["D_Vox_Cam_PT", "D_Vocals", "D_Gtr_CLS", "D_All_Cam"],
-}
-
-
-def detect_baseline_cuts(sections: list[Section],
-                         inst_onsets: dict[str, list[int]] | None,
-                         accents: list[int] | None,
-                         time_sig_map: list, tpb: int,
-                         events_per_beat: dict[str, float] | None = None
-                         ) -> list[CutEvent]:
-    """Distribute directed cuts at the statistical pattern learned from 100 songs.
-
-    For each section, computes target event count (events_per_beat × length),
-    places them at ∼offset=0.458 (midsection), snaps to nearest accent, and
-    selects cut type from the instrument hierarchy per section kind (with
-    ~42% self-repeat probability).
-
-    Priority 30 — below special events (40-100) but above nothing.
-    """
-    import random, bisect
-    out: list[CutEvent] = []
-    if not inst_onsets or not sections:
-        return out
-    eb = events_per_beat or _BASELINE_EVENTS_PER_BEAT
-    acc = sorted(accents) if accents else []
-    prev_cut: str | None = None
-    last_tick = -10 ** 9
-    min_gap = tpb * 2  # minimum 2 beats between baseline events
-
-    for sec in sections:
-        sec_beats = (sec.end - sec.start) / tpb
-        if sec_beats < 2:
-            continue
-        # Target event count
-        epb = eb.get(sec.kind, eb.get("default", 0.04))
-        n_events = max(1, int(round(epb * sec_beats)))
-        # Place events at ~midsection offset, spread evenly
-        positions_placed = 0
-        for _ in range(n_events * 3):  # oversample to fill min_gap
-            if positions_placed >= n_events:
-                break
-            # Gaussian-ish jitter around mean offset 0.458
-            frac = _BASELINE_OFFSET_MEAN + random.gauss(0, _BASELINE_OFFSET_STD)
-            frac = max(0.05, min(0.95, frac))
-            tick = sec.start + int(frac * (sec.end - sec.start))
-            # Gentle snap to nearest accent (within 1 beat) — keeps midsection position
-            if acc:
-                i = bisect.bisect_left(acc, tick)
-                for ci in (i - 1, i):
-                    if 0 <= ci < len(acc) and abs(acc[ci] - tick) <= tpb:
-                        tick = acc[ci]
-                        break
-            # Minimum gap from previous event
-            if tick - last_tick < min_gap:
-                continue
-            # Pick cut type: self-repeat or from hierarchy
-            cut = _pick_baseline_cut(prev_cut, sec.kind)
-            if cut is None:
-                continue
-            out.append(CutEvent(
-                tick=tick, etype="baseline", cuts=[cut],
-                priority=30, dramatic=False,
-                note=f"baseline {sec.kind} ({positions_placed + 1}/{n_events})"
-            ))
-            prev_cut = cut
-            last_tick = tick
-            positions_placed += 1
-
-    return out
-
-
-def _pick_baseline_cut(prev: str | None, kind: str) -> str | None:
-    """Pick a directed cut for a baseline event.
-
-    - 42% chance: repeat previous cut (self-repeat, matching official data)
-    - 58% chance: cycle through the section's hierarchy (variety)
-    """
-    import random
-    pool = _BASELINE_CUTS_BY_KIND.get(kind, _BASELINE_CUTS_BY_KIND["default"])
-    if not pool:
-        return None
-    # Self-repeat
-    if prev is not None and random.random() < _SELF_REPEAT_PROB:
-        return prev
-    # Pick from pool avoiding immediate repeat + cycling variety
-    if prev is not None and prev in pool:
-        # Pick a DIFFERENT cut from the pool (no-immediate-repeat but allow later repeat)
-        others = [c for c in pool if c != prev]
-        return random.choice(others) if others else pool[0]
-    return random.choice(pool)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  (END of Baseline Generator)
-# ══════════════════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # Co-occurrence learned from 100 official songs: certain cut types fire
