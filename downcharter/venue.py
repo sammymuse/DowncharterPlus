@@ -428,41 +428,40 @@ SECTION_LIGHT_POOL = {
     },
 }
 
-# Post-procs BY SECTION TYPE (same idea). Clear signatures: chorus→film_contrast_red,
-# solo→trails, intro→vintage/gritty, breakdown→contrast_red/horror.
+# Post-procs BY SECTION TYPE. Rebalanced against 30-song audio context study.
+# Each pool ordered: official context-optimal filters first (higher cycling frequency).
 SECTION_PP_POOL = {
-    # Calibrated to official filter FREQUENCIES (50-song study):
-    #   film_contrast_red 12.3% → in 8 intense pools
-    #   clean_trails      12.4% → in 8 pools
-    #   video_trails      10.0% → in 6 pools
-    #   bright/shitty_tv   6.8% → in 4-5 pools each
-    #   ProFilm_a/b        4-5% → in 3-4 pools each
-    #   film_contrast_*     3-5% → in 2-4 relevant pools
-    #   bloom/video_a      1-2% → in 1-2 pools (was missing)
-    #   rare (<1%)          → in 0-1 pool (contrast_a, security, mirror_a)
-    "intro":      ["photocopy", "film_16mm", "video_bw", "bright", "ProFilm_a", "film_silvertone"],
-    "verse":      ["desat_posterize_trails", "photocopy", "film_contrast_red", "film_contrast",
-                   "film_contrast_green", "clean_trails", "shitty_tv", "flicker_trails"],
-    "prechorus":  ["film_contrast_red", "shitty_tv", "clean_trails", "flicker_trails",
-                   "ProFilm_a", "desat_posterize_trails"],
-    "chorus":     ["film_contrast_red", "clean_trails", "video_trails",
-                   "bright", "film_contrast_blue", "bloom", "ProFilm_b"],
-    "postchorus": ["film_contrast_red", "clean_trails", "video_trails", "film_contrast", "video_a"],
-    "bridge":     ["video_trails", "shitty_tv", "posterize", "video_bw", "film_contrast_green",
-                   "ProFilm_a", "clean_trails"],
-    "solo":       ["video_trails", "flicker_trails", "shitty_tv", "posterize", "film_blue_filter",
-                   "clean_trails"],
-    "breakdown":  ["film_contrast_red", "horror_movie_special", "shitty_tv", "photo_negative",
-                   "video_security", "film_contrast_green", "clean_trails"],
-    "build":      ["clean_trails", "space_woosh", "film_contrast", "film_contrast_red",
-                   "ProFilm_mirror_a", "video_trails"],
-    "drop":       ["film_contrast_red", "flicker_trails", "space_woosh", "photo_negative",
+    "intro":      ["clean_trails", "film_sepia_ink", "shitty_tv", "film_contrast_red",
+                   "posterize", "ProFilm_a", "film_silvertone", "bloom",
+                   "video_bw"],
+    "verse":      ["clean_trails", "film_contrast", "ProFilm_b", "film_16mm",
+                   "desat_posterize_trails", "video_trails", "shitty_tv", "bright",
+                   "film_blue_filter"],
+    "prechorus":  ["shitty_tv", "ProFilm_a", "bright", "clean_trails",
+                   "film_contrast_red", "flicker_trails", "desat_posterize_trails"],
+    "chorus":     ["video_trails", "clean_trails", "film_contrast_red", "film_contrast_blue",
+                   "bright", "film_contrast_green", "ProFilm_b", "bloom",
+                   "ProFilm_psychedelic_blue_red"],
+    "postchorus": ["film_contrast_red", "film_contrast_blue", "film_contrast_green",
+                   "shitty_tv", "bright", "clean_trails", "video_trails", "film_contrast",
                    "video_a"],
-    "riff":       ["film_contrast_red", "desat_posterize_trails", "film_contrast",
-                   "ProFilm_b", "video_trails"],
-    "outro":      ["video_bw", "bright", "film_silvertone", "film_sepia_ink",
-                   "ProFilm_a", "ProFilm_b"],
-    "default":    ["film_contrast", "film_contrast_red", "photocopy", "clean_trails", "ProFilm_a"],
+    "bridge":     ["clean_trails", "video_trails", "bright", "flicker_trails",
+                   "film_contrast", "posterize", "film_blue_filter", "desat_blue"],
+    "solo":       ["shitty_tv", "video_trails", "flicker_trails", "desat_posterize_trails",
+                   "photocopy", "clean_trails", "bright"],
+    "breakdown":  ["posterize", "clean_trails", "space_woosh", "film_silvertone",
+                   "shitty_tv", "horror_movie_special", "photo_negative", "film_contrast_red"],
+    "build":      ["film_contrast", "flicker_trails", "clean_trails", "video_trails",
+                   "desat_posterize_trails", "space_woosh", "film_contrast_red", "ProFilm_mirror_a"],
+    "drop":       ["film_contrast_red", "flicker_trails", "space_woosh", "photo_negative",
+                   "video_a", "horror_movie_special"],
+    "riff":       ["shitty_tv", "video_trails", "posterize", "ProFilm_b",
+                   "film_16mm", "clean_trails", "contrast_a", "desat_posterize_trails"],
+    "outro":      ["video_security", "shitty_tv", "clean_trails", "film_contrast",
+                   "space_woosh", "film_silvertone", "film_sepia_ink", "ProFilm_a",
+                   "video_bw"],
+    "default":    ["space_woosh", "clean_trails", "flicker_trails", "bright",
+                   "film_silvertone", "film_contrast", "ProFilm_a", "ProFilm_psychedelic_blue_red"],
 }
 
 # Filter behavioral roles — derived from the 20 official venues study.
@@ -974,11 +973,26 @@ def build_pyro(sections: list[Section], drum_onsets: list[int],
 _PP_CLUSTER_PAT = {
     "calm": [0.5, 2.0],                 # 3 changes: 1 burst + 1 short & hold
     "mid":  [0.5, 0.5, 2.0],            # 4 changes: 2 burst + 1 short & hold
-    "high": [0.5, 0.5, 2.0, 2.0],      # 5 changes: 2 burst + 2 short & hold
+    "high": [0.5, 0.5, 2.0],            # 4 changes: 2 burst + 1 short & hold
 }
 # Hold to the next anchor, in BARS — longer gaps between clusters = more holds
-# (gap ≥4 beats). Calibrated to match official 50/29/21 split.
-_PP_HOLD_BARS = {"calm": 8, "mid": 6, "high": 4}
+# (gap ≥4 beats). Calibrated to match official density per tier:
+#   calm: ~0.50 events/bar (was 0.38, under-generating)
+#   high: ~0.67 events/bar (was 1.00, over-generating)
+_PP_HOLD_BARS = {"calm": 6, "mid": 6, "high": 6}
+
+# Per-section-kind hold DISTORTION.  Some section kinds are much sparser (solo) or
+# denser (build) than the tier average in the official venues.  These coefficients
+# adjust the hold length for those outliers only.  1.0 = same as the tier default.
+# Calibrated against the 30-song audio context study ratios.
+_PP_HOLD_KINDS = {
+    "solo":       {"high": 1.70},
+    "riff":       {"mid":  1.70},
+    "bridge":     {"calm": 1.80},
+    "postchorus": {"mid":  0.55},
+    "build":      {"high": 0.75},
+    "outro":      {"calm": 0.75},
+}
 
 # Inside an audio strobe/blast WALL the originals flip even faster and longer — we
 # extend the cluster to span the wall (capped at one bar) on the half-beat.
@@ -1122,7 +1136,9 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
                     tt += max(1, int(beat * pattern[gi]))
 
             # ── Hold to the next downbeat anchor (whole bars), filter held across it ──
-            t += max(_PP_HOLD_BARS[tier] * bar, ((tt - t) // bar + 1) * bar)
+            hb = _PP_HOLD_BARS[tier]
+            kind_coeff = _PP_HOLD_KINDS.get(s.kind, {}).get(tier, 1.0)
+            t += max(int(hb * bar * kind_coeff), ((tt - t) // bar + 1) * bar)
     out.sort(key=lambda e: e.abs_tick)
     return out
 
