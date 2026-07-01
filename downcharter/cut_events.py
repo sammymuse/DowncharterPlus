@@ -39,7 +39,7 @@ class CutEvent:
 # rises/impact entries anchor structure; the rest are texture.
 PRIO = {
     "bre": 100, "stagedive": 90, "rise": 80, "solo": 70, "energy_rise": 65,
-    "impact": 60, "downtime": 40, "baseline": 30,
+    "impact": 60, "vocal_peak": 50, "duo": 45, "downtime": 40, "baseline": 30,
 }
 
 _MELODIC = ("guitar", "bass", "keys")
@@ -273,6 +273,16 @@ _FEATURE_CLOSEUP = {
     "vocal": ["D_Vox_CLS", "D_Vox_Cam_PT"],
 }
 
+# Interaction shot for two members that co-lead a section.
+_FEATURE_DUO: dict[frozenset[str], str] = {
+    frozenset({"guitar", "bass"}): "D_Duo_GB",
+    frozenset({"keys", "bass"}): "D_Duo_KB",
+    frozenset({"keys", "guitar"}): "D_Duo_KG",
+    frozenset({"keys", "vocal"}): "D_Duo_KV",
+    frozenset({"guitar", "vocal"}): "D_Duo_Gtr",
+    frozenset({"bass", "vocal"}): "D_Duo_Bass",
+}
+
 
 def _section_leaders(inst_onsets: dict[str, list[int]], start: int, end: int,
                      totals: dict[str, int]) -> list[tuple[str, float]]:
@@ -346,6 +356,98 @@ def detect_stagedive(sections: list[Section], inst_onsets: dict[str, list[int]] 
     return out
 
 
+def detect_duos(sections: list[Section],
+                inst_onsets: dict[str, list[int]] | None,
+                accents: list[int], tpb: int
+                ) -> tuple[list[CutEvent], set[int]]:
+    """Co-lead section → duo shot showing both musicians interacting.
+
+    Finds the best duo pair by checking ALL instrument pairs, not just the
+    top 2 leaders. This catches vocal+keys duos even when guitar overshadows
+    vocal in onset count. Official data: ~19% of directed cuts are duos.
+
+    Returns (events, covered_section_starts) so detect_baseline_cuts can
+    skip sections already handled by a duo."""
+    out: list[CutEvent] = []
+    covered: set[int] = set()
+    if not inst_onsets:
+        return out, covered
+    totals = {k: len(v) for k, v in inst_onsets.items()
+              if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
+    real_vox = bool(inst_onsets.get("_vocal_real"))
+    for s in sections:
+        if _RANK[_camera_energy(s)] < 1:          # only mid/high
+            continue
+        if s.end - s.start < tpb * 4:
+            continue
+        leaders = _section_leaders(inst_onsets, s.start, s.end, totals)
+        if len(leaders) < 2:
+            continue
+        lead, lead_score = leaders[0]
+        if lead_score < 0.02:
+            continue
+        # Find the BEST duo pair: scan all pairs with score ≥ 40% of lead
+        best_duo: tuple[str, str, str] | None = None  # (a, b, D_xxx)
+        best_combined = 0.0
+        threshold = lead_score * 0.40
+        for i, (a, sa) in enumerate(leaders):
+            if sa < threshold:
+                continue
+            for b, sb in leaders[i + 1:]:
+                if sb < threshold:
+                    continue
+                duo = _FEATURE_DUO.get(frozenset({a, b}))
+                if duo is None:
+                    continue
+                if "vocal" in (a, b) and not real_vox:
+                    continue
+                combined = sa + sb
+                if combined > best_combined:
+                    best_combined = combined
+                    best_duo = (a, b, duo)
+        if best_duo is None:
+            continue
+        a, b, duo = best_duo
+        mid = (s.start + s.end) // 2
+        # Place on the busier instrument's onset
+        ons = inst_onsets.get(a) or []
+        tick = (_busiest_onset(ons, s.start, s.end, tpb, mid)
+                if ons else mid)
+        tick = _nearest_accent(tick, accents, tpb)
+        out.append(CutEvent(tick, "duo", [duo], PRIO["duo"],
+                            note=f"duo {a}+{b} @{s.kind}"))
+        covered.add(s.start)
+    return out, covered
+
+
+def detect_vocal_peaks(inst_onsets: dict[str, list[int]] | None,
+                       accents: list[int],
+                       time_sig_map: list, tpb: int) -> list[CutEvent]:
+    """Last note of a vocal phrase (a sustained/peak note) → vocal close-up.
+
+    Groups vocal onsets into phrases (gap ≥ 1 measure splits phrases),
+    then fires a D_Vox_CLS on the last onset of each phrase of ≥2 notes,
+    throttled to ≤1 per 4 beats. Official data: vocals are the #1 category
+    for first events in a section (29%)."""
+    out = []
+    if not inst_onsets:
+        return out
+    vocal = inst_onsets.get("_vocal_real") or []
+    if len(vocal) < 5:
+        return out
+    last_emit = -10 ** 9
+    for ps, last, n in _phrases(vocal, time_sig_map, tpb):
+        if n < 3:                                  # require substantial phrase
+            continue
+        if last - last_emit < tpb * 8:              # throttle: ≤1 per 8 beats
+            continue
+        out.append(CutEvent(_nearest_accent(last, accents, tpb), "vocal_peak",
+                            ["D_Vox_CLS", "D_Vox_Cam_PT"], PRIO["vocal_peak"],
+                            note="vocal phrase peak"))
+        last_emit = last
+    return out
+
+
 def detect_events(sections: list[Section],
                   inst_onsets: dict[str, list[int]] | None,
                   accents: list[int] | None,
@@ -374,11 +476,17 @@ def detect_events(sections: list[Section],
     ev += detect_bre(bre_spans)
     ev += detect_stagedive(sections, inst_onsets, acc, time_sig_map, tpb)
     ev += detect_downtime(inst_onsets, time_sig_map, tpb)
+    ev += detect_vocal_peaks(inst_onsets, acc, time_sig_map, tpb)
     ev += detect_rises(sections, acc, tpb)
     ev += detect_impacts(sections, acc, tpb)
     ev += detect_energy_transitions(sections, energy_env, acc, tpb)
     ev += detect_solos(sections, inst_onsets, acc, tpb)
+    # detect_duos runs BEFORE baseline; baseline skips sections where duo fired
+    # to avoid double-counting (a section gets either a duo or a closeup, not both).
+    duo_events, duo_covered = detect_duos(sections, inst_onsets, acc, tpb)
+    ev += duo_events
     ev += detect_baseline_cuts(sections, inst_onsets, acc, time_sig_map, tpb,
+                                skip_sections=duo_covered,
                                 audio_onsets=audio_onsets,
                                 band_activity=band_activity)
     ev.sort(key=lambda e: (e.tick, -e.priority))
@@ -389,10 +497,14 @@ def detect_baseline_cuts(sections: list[Section],
                          inst_onsets: dict[str, list[int]] | None,
                          accents: list[int] | None,
                          time_sig_map: list, tpb: int,
+                         skip_sections: set[int] | None = None,
                          audio_onsets: list[int] | None = None,
                          band_activity: dict[str, list[int]] | None = None
                          ) -> list[CutEvent]:
     """One structural directed cut per qualifying section (mid/high energy).
+
+    Skips sections whose .start is in skip_sections (already covered by
+    a higher-priority event like a duo).
 
     3 categories:
     1. SOLO → instrument close-up (D_Gtr_CLS, D_Bass_CLS, D_Keys_Cam)
@@ -405,6 +517,7 @@ def detect_baseline_cuts(sections: list[Section],
     out = []
     if not inst_onsets or not sections:
         return out
+    skip = skip_sections or set()
     totals = {k: len(v) for k, v in inst_onsets.items()
               if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
     acc = sorted(accents) if accents else []
@@ -446,6 +559,8 @@ def detect_baseline_cuts(sections: list[Section],
 
     for s in sections:
         if _RANK[_camera_energy(s)] < 1:  # skip calm sections
+            continue
+        if s.start in skip:               # already covered by a duo event
             continue
         if s.end - s.start < tpb * 4:
             continue
