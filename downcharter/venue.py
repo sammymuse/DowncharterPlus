@@ -2033,6 +2033,13 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
         if is_fullband:
             last_fullband = e.tick
 
+    # ── Add companion shots at the same tick as primary directed cuts ──────
+    # Official venues frequently fire MULTIPLE directed cuts at the same tick
+    # (e.g. directed_drums_lt + directed_guitar_cls). Add companions using
+    # co-occurrence pairs learned from 100 official songs.
+    from .cut_events import add_companion_shots
+    companions = add_companion_shots(accepted)
+
     # ── MERGE: directed wins near a framing slot; drop the filler within min_gap ──
     import bisect
     dir_ticks = sorted(t for t, _ in accepted)
@@ -2046,13 +2053,17 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
 
     merged = [(tk, c) for tk, c in slots if not _near_directed(tk)]
     merged += list(accepted)
+    merged += companions
     merged.sort(key=lambda x: x[0])
 
     prev_tick = -10 ** 9
     prev_cut: str | None = None
     for tk, cut in merged:
-        if tk - prev_tick < min_gap or cut == prev_cut:
+        if cut == prev_cut:
             continue
+        if tk - prev_tick < min_gap:
+            if tk != prev_tick:          # allow same-tick different-category companions
+                continue
         ev = _cut_event(tk, cut)
         if ev is not None:
             out.append(ev)

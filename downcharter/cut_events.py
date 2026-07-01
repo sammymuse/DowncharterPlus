@@ -615,7 +615,7 @@ class BeatDensityGenerator:
     def generate(self, sections: list[Section], inst_onsets: dict[str, list[int]] | None,
                  time_sig_map: list, tpb: int,
                  accents: list[int] | None = None) -> list[CutEvent]:
-        import bisect
+        import bisect, random
         out = []
         if not inst_onsets or not sections:
             return out
@@ -652,7 +652,6 @@ class BeatDensityGenerator:
                             if abs(acc[ci] - tick) < abs(snapped - tick):
                                 snapped = acc[ci]
                 else:
-                    # Snap to nearest beat boundary
                     snapped = round(tick / tpb) * tpb
                 tick = snapped
                 if tick - last_tick < tpb * 2:
@@ -672,3 +671,97 @@ class BeatDensityGenerator:
                 prev_cut_type = cut_type
                 last_tick = tick
         return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  COMPANION SHOTS (Phase 3)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Co-occurrence learned from 100 official songs: certain cut types fire
+# together at the same tick (e.g. directed_drums_lt + directed_guitar_cls).
+# The table below captures P(companion_B | primary_A) ≥ 0.25 (high confidence).
+
+_COMPANION_PAIRS: list[tuple[str, str, float]] = [
+    # primary_official      companion_official       prob
+    ("directed_duo_guitar", "directed_duo_bass",     0.51),
+    ("directed_duo_bass",   "directed_duo_kv",       0.51),
+    ("directed_duo_bass",   "directed_duo_guitar",   0.43),
+    ("directed_keys",       "directed_bass",         0.54),
+    ("directed_guitar",     "directed_bass",         0.65),
+    ("directed_guitar_cls", "directed_bass_cls",     0.44),
+    ("directed_guitar_cls", "directed_crowd",        0.16),  # < 0.25 but important for crowd
+    ("directed_guitar_cls", "directed_all_lt",       0.11),
+    ("directed_drums_lt",   "directed_guitar_cls",   0.45),
+    ("directed_drums_lt",   "directed_bass_cls",     0.20),
+    ("directed_drums_lt",   "directed_guitar_cam_pt", 0.15),
+    ("directed_drums_lt",   "directed_bass_cam",     0.10),
+    ("directed_duo_kv",     "directed_duo_bass",     0.81),
+    ("directed_duo_kb",     "directed_duo_gb",       0.42),
+    ("directed_duo_kb",     "directed_duo_kg",       0.42),
+    ("directed_duo_kg",     "directed_duo_gb",       0.46),
+    ("directed_duo_kg",     "directed_duo_kb",       0.46),
+    ("directed_duo_gb",     "directed_duo_kb",       0.47),
+    ("directed_duo_gb",     "directed_duo_kg",       0.46),
+    ("directed_all_cam",    "directed_all_lt",       0.25),
+    ("directed_bass_cls",   "directed_guitar_cls",   0.35),
+    ("directed_bass_cam",   "directed_drums_lt",     0.30),
+]
+
+# Built once: {(D_xxx_primary, D_xxx_companion)} tuples
+_COMPANION_LOOKUP: set[tuple[str, str]] | None = None
+_COMPANION_OFF2INT: dict[str, str] | None = None
+
+
+def _ensure_companion_map():
+    """Build internal name lookup for companion rules."""
+    global _COMPANION_LOOKUP, _COMPANION_OFF2INT
+    if _COMPANION_LOOKUP is not None:
+        return
+    from .venue import DIRECTED_CUTS
+    _COMPANION_OFF2INT = {v: k for k, v in DIRECTED_CUTS.items()}
+    _COMPANION_LOOKUP = set()
+    for primary_official, comp_official, _prob in _COMPANION_PAIRS:
+        p = _COMPANION_OFF2INT.get(primary_official)
+        c = _COMPANION_OFF2INT.get(comp_official)
+        if p and c:
+            _COMPANION_LOOKUP.add((p, c))
+
+
+def add_companion_shots(accepted: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """Add best companion directed cut at the same tick as accepted primary cuts.
+
+    Uses high-confidence co-occurrence pairs (P ≥ 0.30) learned from 100 songs.
+    At most 1 companion per tick, matched to the highest probability pair.
+
+    Returns list of (tick, D_xxx_cut) to merge into the accepted list.
+    """
+    _ensure_companion_map()
+
+    companions: list[tuple[int, str]] = []
+    seen_at: dict[int, set[str]] = {}
+    pair_list = [(p, c, prob) for p, c, prob in _COMPANION_PAIRS if prob >= 0.30]
+
+    for tick, cut in accepted:
+        best = None
+        best_prob = 0.0
+        for p, c, prob in pair_list:
+            if p != cut or c == cut:
+                continue
+            if tick in seen_at and c in seen_at[tick]:
+                continue
+            if prob > best_prob:
+                # Verify the internal names are valid
+                c_int = _COMPANION_OFF2INT.get(c) if _COMPANION_OFF2INT else None
+                p_int = _COMPANION_OFF2INT.get(p) if _COMPANION_OFF2INT else None
+                if c_int and p_int:
+                    best = (tick, c_int)
+                    best_prob = prob
+
+        if best is not None:
+            tick2, c2 = best
+            if tick2 not in seen_at:
+                seen_at[tick2] = set()
+            companions.append(best)
+            seen_at[tick2].add(c2)
+
+    return companions
