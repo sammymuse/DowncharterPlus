@@ -431,29 +431,39 @@ SECTION_LIGHT_POOL = {
 # Post-procs BY SECTION TYPE (same idea). Clear signatures: chorus→film_contrast_red,
 # solo→trails, intro→vintage/gritty, breakdown→contrast_red/horror.
 SECTION_PP_POOL = {
-    # Calibrated to the real FREQUENCIES of the official ones: film_contrast_red is the
-    # #1 (590×) → dominates intense sections; the WHOLE catalog is used, incl. those
-    # previously never placed (posterize, ProFilm_mirror_a, space_woosh, video_a,
-    # film_contrast_blue, video_security, ProFilm_a, film_b+w, bright,
-    # film_contrast_green, ProFilm_psychedelic_blue_red, desat_blue, film_blue_filter,
-    # contrast_a). All 30 official filters are now in the pools.
-    "intro":      ["photocopy", "film_16mm", "video_bw", "ProFilm_a", "bright", "desat_blue"],
-    "verse":      ["desat_posterize_trails", "film_contrast_blue", "film_contrast_red", "photocopy",
-                   "video_a", "film_contrast_green", "ProFilm_mirror_a", "film_blue_filter"],
-    "prechorus":  ["film_contrast_red", "desat_posterize_trails", "shitty_tv", "clean_trails"],
-    "chorus":     ["film_contrast_red", "clean_trails", "bloom", "video_trails",
-                   "bright", "desat_blue", "ProFilm_psychedelic_blue_red"],
-    "postchorus": ["film_contrast_red", "clean_trails", "bloom", "film_contrast", "desat_blue"],
-    "bridge":     ["video_trails", "shitty_tv", "posterize", "video_security", "video_bw"],
-    "solo":       ["video_trails", "flicker_trails", "shitty_tv", "posterize", "film_blue_filter"],
+    # Calibrated to official filter FREQUENCIES (50-song study):
+    #   film_contrast_red 12.3% → in 8 intense pools
+    #   clean_trails      12.4% → in 8 pools
+    #   video_trails      10.0% → in 6 pools
+    #   bright/shitty_tv   6.8% → in 4-5 pools each
+    #   ProFilm_a/b        4-5% → in 3-4 pools each
+    #   film_contrast_*     3-5% → in 2-4 relevant pools
+    #   bloom/video_a      1-2% → in 1-2 pools (was missing)
+    #   rare (<1%)          → in 0-1 pool (contrast_a, security, mirror_a)
+    "intro":      ["photocopy", "film_16mm", "video_bw", "bright", "ProFilm_a", "film_silvertone"],
+    "verse":      ["desat_posterize_trails", "photocopy", "film_contrast_red", "film_contrast",
+                   "film_contrast_green", "clean_trails", "shitty_tv", "film_blue_filter",
+                   "flicker_trails"],
+    "prechorus":  ["film_contrast_red", "shitty_tv", "clean_trails", "space_woosh",
+                   "film_contrast", "desat_posterize_trails"],
+    "chorus":     ["film_contrast_red", "clean_trails", "video_trails",
+                   "bright", "film_contrast_blue", "flicker_trails", "ProFilm_b"],
+    "postchorus": ["film_contrast_red", "clean_trails", "video_trails", "film_contrast", "video_a"],
+    "bridge":     ["video_trails", "shitty_tv", "posterize", "video_bw", "film_contrast_green",
+                   "ProFilm_a", "clean_trails"],
+    "solo":       ["video_trails", "flicker_trails", "shitty_tv", "posterize", "film_blue_filter",
+                   "clean_trails"],
     "breakdown":  ["film_contrast_red", "horror_movie_special", "shitty_tv", "photo_negative",
-                   "video_security", "film_contrast_green"],
+                   "video_security", "film_contrast_green", "clean_trails"],
     "build":      ["clean_trails", "space_woosh", "film_contrast", "film_contrast_red",
-                   "ProFilm_mirror_a"],
-    "drop":       ["film_contrast_red", "flicker_trails", "space_woosh", "photo_negative"],
-    "riff":       ["film_contrast_red", "desat_posterize_trails", "film_contrast", "ProFilm_b"],
-    "outro":      ["film_b+w", "video_bw", "ProFilm_b", "film_silvertone", "film_sepia_ink", "bright"],
-    "default":    ["ProFilm_a", "clean_trails", "film_contrast", "ProFilm_b", "contrast_a"],
+                   "ProFilm_mirror_a", "video_trails"],
+    "drop":       ["film_contrast_red", "flicker_trails", "space_woosh", "photo_negative",
+                   "clean_trails"],
+    "riff":       ["film_contrast_red", "desat_posterize_trails", "film_contrast",
+                   "ProFilm_b", "video_trails"],
+    "outro":      ["bloom", "video_bw", "bright", "film_silvertone", "film_sepia_ink",
+                   "ProFilm_a", "ProFilm_b"],
+    "default":    ["clean_trails", "film_contrast", "film_contrast_red", "ProFilm_a", "photocopy"],
 }
 
 # Filter behavioral roles — derived from the 20 official venues study.
