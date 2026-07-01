@@ -972,14 +972,13 @@ def build_pyro(sections: list[Section], drum_onsets: list[int],
 # gaps 1-4) reproduces the official 56% burst / 24% short split; the long inter-anchor
 # hold supplies the 20% holds. More/tighter changes when the local energy is high.
 _PP_CLUSTER_PAT = {
-    "calm": [0.5],                  # 2 changes, one burst
-    "mid":  [0.5, 0.5, 2.0],        # 4 changes: two bursts + one short
-    "high": [0.5, 0.5, 2.0, 2.0],   # 5 changes: two bursts + two short
+    "calm": [0.5, 2.0],                 # 3 changes: 1 burst + 1 short & hold
+    "mid":  [0.5, 0.5, 2.0],            # 4 changes: 2 burst + 1 short & hold
+    "high": [0.5, 0.5, 2.0, 2.0],      # 5 changes: 2 burst + 2 short & hold
 }
-# Hold to the next anchor, in BARS — anchors stay on the downbeat so the on-downbeat
-# first change of each cluster yields ~the official 40% downbeat-alignment, and density
-# (cluster size / hold-beats) lands near the official 0.17 pp/beat median.
-_PP_HOLD_BARS = {"calm": 6, "mid": 5, "high": 3}
+# Hold to the next anchor, in BARS — longer gaps between clusters = more holds
+# (gap ≥4 beats). Calibrated to match official 50/29/21 split.
+_PP_HOLD_BARS = {"calm": 8, "mid": 6, "high": 4}
 
 # Inside an audio strobe/blast WALL the originals flip even faster and longer — we
 # extend the cluster to span the wall (capped at one bar) on the half-beat.
