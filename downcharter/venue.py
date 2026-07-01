@@ -12,6 +12,7 @@ Pipeline:
 """
 from __future__ import annotations
 from dataclasses import dataclass
+from pathlib import Path
 import random
 import re
 
@@ -1883,7 +1884,8 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                  pace_scale: float = 1.0,
                  accents: list[int] | None = None,
                  onsets: list[int] | None = None,
-                 inst_onsets: dict[str, list[int]] | None = None) -> list[AbsEvent]:
+                 inst_onsets: dict[str, list[int]] | None = None,
+                 density_stats: str | Path | None = None) -> list[AbsEvent]:
     """Places camera cuts at the rate of SECTION_PACE_S (× the theme's pace_scale),
     cycling the section pool without repeating the previous cut. Injects D_BRE on BREs.
     If `accents` is given, snaps each cut to the nearest musical accent (±1 beat) —
@@ -1892,7 +1894,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     sections (few notes) the pace is stretched to the real note spacing (avoids
     over-cutting in slow ballads/post-metal)."""
     from collections import deque
-    from .cut_events import detect_events
+    from .cut_events import detect_events, BeatDensityGenerator
     out: list[AbsEvent] = []
     accents = sorted(accents) if accents else []
     onsets = sorted(onsets) if onsets else []
@@ -1994,6 +1996,13 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     # context (_NP if idle, None if it makes no sense). Full-band cuts are throttled to
     # `fullband_gap`; one stage dive per song; anti-recency on the rest.
     events = detect_events(sections, inst_onsets, accents, bre_spans, time_sig_map, tpb)
+    # Density-based directed events (complement the musical detectors)
+    if inst_onsets:
+        density_gen = BeatDensityGenerator(density_stats)
+        density_events = density_gen.generate(sections, inst_onsets, time_sig_map, tpb,
+                                               accents=accents)
+        events += density_events
+        events.sort(key=lambda e: (e.tick, -e.priority))
     accepted: list[tuple[int, str]] = []
     recent_dir: deque = deque(maxlen=5)
     last_fullband = -10 ** 9
@@ -2521,7 +2530,8 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
                    audio_onsets: list[int] | None = None,
                    energy_env: list[tuple[int, str]] | None = None,
                    audio_strobe_spans: list[tuple[int, int]] | None = None,
-                   drop_ticks: list[int] | None = None) -> list[AbsEvent]:
+                   drop_ticks: list[int] | None = None,
+                   density_stats: str | Path | None = None) -> list[AbsEvent]:
     """Generate all the text events of an explicit VENUE, sorted by tick.
     `theme` is the THEMES key (derived from the genre via genre_to_theme).
     `accents` (ticks of the Expert accents) syncs the cuts with the music.
@@ -2558,7 +2568,7 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     # EVENTS by the processor, not appended here.
     out += build_camera(sections, tempo_map, time_sig_map, tpb, bre_spans,
                         pace_scale=th["pace"], accents=accents, onsets=onsets,
-                        inst_onsets=inst_onsets)
+                        inst_onsets=inst_onsets, density_stats=density_stats)
     if inst_onsets:
         out += build_spotlights(sections, inst_onsets, tpb)
         # Sing-along only with REAL vocals (chart/lyrics), never with the audio proxy.
