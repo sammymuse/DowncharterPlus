@@ -556,16 +556,26 @@ def detect_events(sections: list[Section],
     return ev
 
 
+# Budget (distinct tick positions) per section kind, from 100-song density data.
+# Official: solo 2.23/s, chorus 2.00/s, verse 1.28/s, prechorus 0.86/s, etc.
+# Rounded down to int. Budget 2 = entry + close; budget 1 = entry only.
+_SECTION_BUDGET: dict[str, int] = {
+    "solo": 2, "chorus": 2, "breakdown": 2,
+    "verse": 1, "prechorus": 1, "build": 1, "intro": 1,
+    "outro": 1, "bridge": 1, "postchorus": 1, "riff": 1, "drop": 1,
+}
+
+
 def _cluster_limit(events: list[CutEvent],
                    sections: list[Section],
                    tpb: int) -> list[CutEvent]:
-    """Keep at most 2 distinct tick positions per section, max 1 event per tick.
+    """Limit events per-section-kind to the official budget, max 1 event per tick.
 
-    Official data: 1.31 events/section avg. Our detectors over-generate (entry +
-    close + duos + impacts = 3-4 events/section). Limiting to 1 per tick keeps
-    the BEST cut at each position, matching official density."""
+    Budget = distinct tick positions per section (1 = entry only, 2 = entry+close).
+    Multiple events at the same tick are reduced to 1 (highest priority)."""
     kept = [True] * len(events)
     for s in sections:
+        budget = _SECTION_BUDGET.get(s.kind, 1)
         buckets: dict[int, list[int]] = {}
         for i, e in enumerate(events):
             if s.start <= e.tick < s.end:
@@ -577,12 +587,12 @@ def _cluster_limit(events: list[CutEvent],
             idxs.sort(key=lambda i: -events[i].priority)
             for i in idxs[1:]:
                 kept[i] = False
-        # If more than 2 distinct ticks, keep top 2 by summed priority
-        if len(buckets) > 2:
+        # Keep top N ticks by budget
+        if len(buckets) > budget:
             sorted_ticks = sorted(buckets.keys(),
                                   key=lambda t: sum(events[i].priority for i in buckets[t]),
                                   reverse=True)
-            discard_ticks = set(sorted_ticks[2:])
+            discard_ticks = set(sorted_ticks[budget:])
             for tick in discard_ticks:
                 for i in buckets[tick]:
                     kept[i] = False
