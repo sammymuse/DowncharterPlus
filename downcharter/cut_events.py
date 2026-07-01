@@ -38,8 +38,8 @@ class CutEvent:
 # Priority ladder (higher wins on collision). BRE/stagedive are unique moments;
 # rises/impact entries anchor structure; the rest are texture.
 PRIO = {
-    "bre": 100, "stagedive": 90, "rise": 80, "solo": 70, "impact": 60,
-    "downtime": 40, "baseline": 30,
+    "bre": 100, "stagedive": 90, "rise": 80, "solo": 70, "energy_rise": 65,
+    "impact": 60, "downtime": 40, "baseline": 30,
 }
 
 _MELODIC = ("guitar", "bass", "keys")
@@ -146,6 +146,47 @@ def detect_impacts(sections: list[Section], accents: list[int], tpb: int) -> lis
             out.append(CutEvent(_nearest_accent(s.start, accents, tpb), "impact",
                                 ["D_All_Cam", "D_All_LT"], PRIO["impact"],
                                 dramatic=True, note=f"impact entry @{s.kind}"))
+    return out
+
+
+def detect_energy_transitions(sections: list[Section],
+                              energy_env: list[tuple[int, str]] | None,
+                              accents: list[int], tpb: int) -> list[CutEvent]:
+    """Sub-section energy transitions from audio -> full-band impact cuts.
+
+    The audio energy envelope provides sub-section granularity (calm->mid->high).
+    When energy jumps UP significantly within a section (calm->high or mid->high),
+    generates a full-band impact cut (D_All_LT, D_All_Cam, D_All_Yeah).
+
+    This catches energy builds that section-level detection misses - e.g., a
+    chorus that opens calm and only reaches high energy mid-way through.
+
+    Priority: 65 (between impact=60 and solo=70, since these are genuine audio
+    moments that should override structural cuts).
+    """
+    out = []
+    if not energy_env or len(energy_env) < 3:
+        return out
+    ev = sorted(energy_env)  # [(tick, tier), ...]
+    _RANK_ENERGY = {"calm": 0, "mid": 1, "high": 2}
+    last_tick = -10 ** 9
+    min_gap = tpb * 8  # at most 1 per 8 beats
+
+    for i in range(len(ev) - 1):
+        cur_tick, cur_tier = ev[i]
+        next_tick, next_tier = ev[i + 1]
+        # Only upward jumps: calm->high or mid->high
+        if _RANK_ENERGY.get(next_tier, 0) - _RANK_ENERGY.get(cur_tier, 0) < 2:
+            continue
+        # Position: at the transition point (next_tick) snapped to nearest accent
+        tick = _nearest_accent(next_tick, accents, tpb)
+        if tick - last_tick < min_gap:
+            continue
+        out.append(CutEvent(tick, "energy_rise",
+                            ["D_All_LT", "D_All_Cam", "D_All_Yeah"],
+                            65, dramatic=True,
+                            note=f"energy {cur_tier}->{next_tier}"))
+        last_tick = tick
     return out
 
 
@@ -310,7 +351,8 @@ def detect_events(sections: list[Section],
                   accents: list[int] | None,
                   bre_spans: list[tuple[int, int]] | None,
                   time_sig_map: list, tpb: int,
-                  audio_onsets: list[int] | None = None) -> list[CutEvent]:
+                  audio_onsets: list[int] | None = None,
+                  energy_env: list[tuple[int, str]] | None = None) -> list[CutEvent]:
     """Full event timeline. Sorted by tick (ties broken by priority desc)."""
     acc = sorted(accents) if accents else []
     # Merge MIDI + audio accents for richer snap
@@ -333,6 +375,7 @@ def detect_events(sections: list[Section],
     ev += detect_downtime(inst_onsets, time_sig_map, tpb)
     ev += detect_rises(sections, acc, tpb)
     ev += detect_impacts(sections, acc, tpb)
+    ev += detect_energy_transitions(sections, energy_env, acc, tpb)
     ev += detect_solos(sections, inst_onsets, acc, tpb)
     ev += detect_baseline_cuts(sections, inst_onsets, acc, time_sig_map, tpb,
                                audio_onsets=audio_onsets)
