@@ -1859,7 +1859,8 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                  pace_scale: float = 1.0,
                  accents: list[int] | None = None,
                  onsets: list[int] | None = None,
-                 inst_onsets: dict[str, list[int]] | None = None) -> list[AbsEvent]:
+                 inst_onsets: dict[str, list[int]] | None = None,
+                 audio_onsets: list[int] | None = None) -> list[AbsEvent]:
     """Places camera cuts at the rate of SECTION_PACE_S (× the theme's pace_scale),
     cycling the section pool without repeating the previous cut. Injects D_BRE on BREs.
     If `accents` is given, snaps each cut to the nearest musical accent (±1 beat) —
@@ -1871,6 +1872,26 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     from .cut_events import detect_events
     out: list[AbsEvent] = []
     accents = sorted(accents) if accents else []
+    # Merge MIDI accents + audio flux accents for richer snap targets
+    if audio_onsets:
+        audio_acc = sorted(audio_onsets)
+        # Merge sorted lists (O(n+m))
+        merged = []
+        i = j = 0
+        while i < len(accents) and j < len(audio_acc):
+            if accents[i] < audio_acc[j]:
+                merged.append(accents[i])
+                i += 1
+            elif audio_acc[j] < accents[i]:
+                merged.append(audio_acc[j])
+                j += 1
+            else:
+                merged.append(accents[i])
+                i += 1
+                j += 1
+        merged.extend(accents[i:])
+        merged.extend(audio_acc[j:])
+        accents = merged
     onsets = sorted(onsets) if onsets else []
     min_gap = tpb // 2               # never two cuts less than 1/8 apart
     max_floor = tpb * 6              # but never slower than 1 cut / 6 beats
@@ -2550,7 +2571,7 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     # EVENTS by the processor, not appended here.
     out += build_camera(sections, tempo_map, time_sig_map, tpb, bre_spans,
                         pace_scale=th["pace"], accents=accents, onsets=onsets,
-                        inst_onsets=inst_onsets)
+                        inst_onsets=inst_onsets, audio_onsets=audio_onsets)
     if inst_onsets:
         out += build_spotlights(sections, inst_onsets, tpb)
         # Sing-along only with REAL vocals (chart/lyrics), never with the audio proxy.

@@ -309,9 +309,24 @@ def detect_events(sections: list[Section],
                   inst_onsets: dict[str, list[int]] | None,
                   accents: list[int] | None,
                   bre_spans: list[tuple[int, int]] | None,
-                  time_sig_map: list, tpb: int) -> list[CutEvent]:
+                  time_sig_map: list, tpb: int,
+                  audio_onsets: list[int] | None = None) -> list[CutEvent]:
     """Full event timeline. Sorted by tick (ties broken by priority desc)."""
     acc = sorted(accents) if accents else []
+    # Merge MIDI + audio accents for richer snap
+    if audio_onsets:
+        audio = sorted(audio_onsets)
+        merged = []
+        i = j = 0
+        while i < len(acc) and j < len(audio):
+            if acc[i] < audio[j]:
+                merged.append(acc[i]); i += 1
+            elif audio[j] < acc[i]:
+                merged.append(audio[j]); j += 1
+            else:
+                merged.append(acc[i]); i += 1; j += 1
+        merged.extend(acc[i:]); merged.extend(audio[j:])
+        acc = merged
     ev: list[CutEvent] = []
     ev += detect_bre(bre_spans)
     ev += detect_stagedive(sections, inst_onsets, acc, time_sig_map, tpb)
@@ -319,7 +334,8 @@ def detect_events(sections: list[Section],
     ev += detect_rises(sections, acc, tpb)
     ev += detect_impacts(sections, acc, tpb)
     ev += detect_solos(sections, inst_onsets, acc, tpb)
-    ev += detect_baseline_cuts(sections, inst_onsets, acc, time_sig_map, tpb)
+    ev += detect_baseline_cuts(sections, inst_onsets, acc, time_sig_map, tpb,
+                               audio_onsets=audio_onsets)
     ev.sort(key=lambda e: (e.tick, -e.priority))
     return ev
 
@@ -327,7 +343,8 @@ def detect_events(sections: list[Section],
 def detect_baseline_cuts(sections: list[Section],
                          inst_onsets: dict[str, list[int]] | None,
                          accents: list[int] | None,
-                         time_sig_map: list, tpb: int) -> list[CutEvent]:
+                         time_sig_map: list, tpb: int,
+                         audio_onsets: list[int] | None = None) -> list[CutEvent]:
     """One structural directed cut per qualifying section (mid/high energy).
 
     3 categories:
@@ -344,6 +361,20 @@ def detect_baseline_cuts(sections: list[Section],
     totals = {k: len(v) for k, v in inst_onsets.items()
               if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
     acc = sorted(accents) if accents else []
+    # Merge MIDI + audio accents for richer snap
+    if audio_onsets:
+        audio = sorted(audio_onsets)
+        merged = []
+        i = j = 0
+        while i < len(acc) and j < len(audio):
+            if acc[i] < audio[j]:
+                merged.append(acc[i]); i += 1
+            elif audio[j] < acc[i]:
+                merged.append(audio[j]); j += 1
+            else:
+                merged.append(acc[i]); i += 1; j += 1
+        merged.extend(acc[i:]); merged.extend(audio[j:])
+        acc = merged
     for s in sections:
         if _RANK[_camera_energy(s)] < 1:  # skip calm sections
             continue
