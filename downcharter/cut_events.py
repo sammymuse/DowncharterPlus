@@ -36,10 +36,11 @@ class CutEvent:
 
 
 # Priority ladder (higher wins on collision). BRE/stagedive are unique moments;
-# rises/impact entries anchor structure; the rest are texture.
+# section_entry/close anchor boundaries; solos/duos/clusters fill featured moments.
 PRIO = {
-    "bre": 100, "stagedive": 90, "rise": 80, "solo": 70, "energy_rise": 65,
-    "impact": 60, "vocal_peak": 50, "duo": 45, "downtime": 40, "baseline": 30,
+    "bre": 100, "stagedive": 90, "section_entry": 85, "solo": 80,
+    "section_close": 75, "vocal_peak": 70, "duo_cluster": 65,
+    "impact": 60, "downtime": 55, "energy_rise": 50, "baseline": 30,
 }
 
 _MELODIC = ("guitar", "bass", "keys")
@@ -106,27 +107,6 @@ def _phrases(vocal: list[int], time_sig_map: list, tpb: int) -> list[tuple[int, 
 
 
 # ── Individual detectors ─────────────────────────────────────────────────────
-
-def detect_rises(sections: list[Section], accents: list[int], tpb: int) -> list[CutEvent]:
-    """Upward energy transition into a 'high' section → dircut_at_start (full-band kick)."""
-    out, prev = [], "calm"
-    for s in sections:
-        e = _camera_energy(s)
-        if e == "high" and _RANK[e] > _RANK[prev]:
-            # Land ON the climb, not the section downbeat: if the section opens calm and
-            # only reaches 'high' later, anchor at that first high sub-span so the
-            # band-wide kick hits the actual energy rise (not a still-calm intro).
-            hi = s.start
-            for a, _b, t in (s.energy_spans or []):
-                if t == "high":
-                    hi = a
-                    break
-            out.append(CutEvent(_nearest_accent(hi, accents, tpb), "rise",
-                                ["D_All_Yeah", "D_All_LT", "D_All_Cam"], PRIO["rise"],
-                                dramatic=True, note=f"rise→high @{s.kind}"))
-        prev = e
-    return out
-
 
 def detect_impacts(sections: list[Section], accents: list[int], tpb: int) -> list[CutEvent]:
     """Entry of an impact section (intro/chorus/drop/breakdown/outro) → full-band pan.
@@ -356,68 +336,136 @@ def detect_stagedive(sections: list[Section], inst_onsets: dict[str, list[int]] 
     return out
 
 
-def detect_duos(sections: list[Section],
-                inst_onsets: dict[str, list[int]] | None,
-                accents: list[int], tpb: int
-                ) -> tuple[list[CutEvent], set[int]]:
-    """Co-lead section → duo shot showing both musicians interacting.
+# ══════════════════════════════════════════════════════════════════════════
+#  NEW DETECTORS (data-driven, 100-song analysis)
+# ══════════════════════════════════════════════════════════════════════════
 
-    Finds the best duo pair by checking ALL instrument pairs, not just the
-    top 2 leaders. This catches vocal+keys duos even when guitar overshadows
-    vocal in onset count. Official data: ~19% of directed cuts are duos.
+# Section-kind → entry cut type (from 100-song data: section kind determines type,
+# not instrument leader, because 75-85% of instruments play during any cut).
+_SECTION_ENTRY_CUTS: dict[str, list[str]] = {
+    "verse":      ["D_Vox_Cam_PT", "D_Vox_CLS"],
+    "prechorus":  ["D_Vox_Cam_PT", "D_Vox_CLS"],
+    "chorus":     ["D_All_Cam", "D_Vox_Cam_PT"],
+    "solo":       ["D_Gtr_Cam_PR", "D_Gtr_CLS"],
+    "build":      ["D_All_LT", "D_All_Cam"],
+    "breakdown":  ["D_Gtr_CLS", "D_Drums_LT"],
+    "drop":       ["D_All_LT", "D_All_Cam"],
+    "outro":      ["D_All_Cam", "D_All_Yeah"],
+    "intro":      ["D_All_Cam", "D_Drums_LT"],
+    "bridge":     ["D_Vox_Cam_PT", "D_Keys_Cam"],
+    "postchorus": ["D_All_Cam", "D_Vox_Cam_PT"],
+    "riff":       ["D_Gtr_CLS", "D_Bass_CLS"],
+    "default":    ["D_Vox_Cam_PT"],
+}
 
-    Returns (events, covered_section_starts) so detect_baseline_cuts can
-    skip sections already handled by a duo."""
-    out: list[CutEvent] = []
-    covered: set[int] = set()
+# Section-kind → close cut type (last quartile, b16+) — 27% of cuts are here.
+_SECTION_CLOSE_CUTS: dict[str, list[str]] = {
+    "verse":      ["D_Vox_CLS", "D_Vox_Cam_PT"],
+    "prechorus":  ["D_All_Cam", "D_Vox_CLS"],
+    "chorus":     ["D_All_LT", "D_All_Cam"],
+    "solo":       ["D_Gtr_CLS", "D_Drums_LT"],
+    "build":      ["D_Crowd_Gtr", "D_All_Cam"],
+    "breakdown":  ["D_Gtr_CLS", "D_Drums_LT"],
+    "drop":       ["D_All_LT", "D_All_Cam"],
+    "outro":      ["D_All_Yeah", "D_All_Cam"],
+    "bridge":     ["D_Vox_CLS", "D_Keys_Cam"],
+    "postchorus": ["D_All_Cam", "D_Vox_CLS"],
+    "riff":       ["D_Gtr_CLS", "D_Bass_CLS"],
+    "default":    ["D_Vox_CLS"],
+}
+
+
+
+
+def detect_section_entry(sections: list[Section], accents: list[int],
+                         tpb: int) -> list[CutEvent]:
+    """Entry cut at EVERY mid/high section boundary.
+
+    Data: 30.7% of official directed cuts are at b0-2; 31.8% within 1 beat
+    of a boundary. Section kind determines the cut type, not the leader
+    instrument (75-85% of instruments are playing at any cut)."""
+    out = []
+    for s in sections:
+        if _RANK[_entry_tier(s)] < 1:
+            continue
+        tick = _nearest_accent(s.start, accents, tpb)
+        cuts = _SECTION_ENTRY_CUTS.get(s.kind, _SECTION_ENTRY_CUTS["default"])
+        out.append(CutEvent(tick, "section_entry", cuts, PRIO["section_entry"],
+                           note=f"entry @{s.kind}"))
+    return out
+
+
+def detect_section_close(sections: list[Section], accents: list[int],
+                         tpb: int) -> list[CutEvent]:
+    """Close cut in the last quartile (b16+) for sections ≥16 beats.
+
+    Data: 27% of official directed cuts are in b16+ (last quartile).
+    These mark climax/resolution points, not transitional entries."""
+    out = []
+    for s in sections:
+        if _RANK[_entry_tier(s)] < 1:
+            continue
+        length = s.end - s.start
+        if length < tpb * 16:  # need at least 16 beats to have a close quartile
+            continue
+        close_tick = s.start + length * 3 // 4
+        tick = _nearest_accent(close_tick, accents, tpb)
+        cuts = _SECTION_CLOSE_CUTS.get(s.kind, _SECTION_CLOSE_CUTS["default"])
+        out.append(CutEvent(tick, "section_close", cuts, PRIO["section_close"],
+                           dramatic=True, note=f"close @{s.kind}"))
+    return out
+
+
+def detect_duo_cluster(sections: list[Section],
+                       inst_onsets: dict[str, list[int]] | None,
+                       accents: list[int], tpb: int) -> list[CutEvent]:
+    """Generate DUO clusters (triple duos + instrument pairs) at section entries.
+
+    Data: duo_gb + duo_kb + duo_kg fire simultaneously 79-80x across 100 songs.
+    bass_cls + guitar_cls is the #1 single-instrument pair (55x).
+
+    Strategy: for sections with 3+ active instruments, generate ALL possible
+    duos from the top 3 leaders. For sections with 2, generate that single duo."""
+    out = []
     if not inst_onsets:
-        return out, covered
+        return out
     totals = {k: len(v) for k, v in inst_onsets.items()
               if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
     real_vox = bool(inst_onsets.get("_vocal_real"))
     for s in sections:
-        if _RANK[_camera_energy(s)] < 1:          # only mid/high
+        if _RANK[_entry_tier(s)] < 1:
             continue
         if s.end - s.start < tpb * 4:
             continue
         leaders = _section_leaders(inst_onsets, s.start, s.end, totals)
         if len(leaders) < 2:
             continue
-        lead, lead_score = leaders[0]
-        if lead_score < 0.02:
-            continue
-        # Find the BEST duo pair: scan all pairs with score ≥ 40% of lead
-        best_duo: tuple[str, str, str] | None = None  # (a, b, D_xxx)
-        best_combined = 0.0
+        lead_score = leaders[0][1]
         threshold = lead_score * 0.40
-        for i, (a, sa) in enumerate(leaders):
-            if sa < threshold:
-                continue
-            for b, sb in leaders[i + 1:]:
-                if sb < threshold:
-                    continue
+        eligible = [(a, sa) for a, sa in leaders if sa >= threshold]
+        eligible.sort(key=lambda x: -x[1])
+        if len(eligible) < 2:
+            continue
+        top_names = [a for a, _ in eligible[:3]]
+        base_tick = _nearest_accent(s.start, accents, tpb)
+        # Generate all pairs among top 3
+        for i, a in enumerate(top_names):
+            for b in top_names[i + 1:]:
                 duo = _FEATURE_DUO.get(frozenset({a, b}))
                 if duo is None:
                     continue
                 if "vocal" in (a, b) and not real_vox:
                     continue
-                combined = sa + sb
-                if combined > best_combined:
-                    best_combined = combined
-                    best_duo = (a, b, duo)
-        if best_duo is None:
-            continue
-        a, b, duo = best_duo
-        mid = (s.start + s.end) // 2
-        # Place on the busier instrument's onset
-        ons = inst_onsets.get(a) or []
-        tick = (_busiest_onset(ons, s.start, s.end, tpb, mid)
-                if ons else mid)
-        tick = _nearest_accent(tick, accents, tpb)
-        out.append(CutEvent(tick, "duo", [duo], PRIO["duo"],
-                            note=f"duo {a}+{b} @{s.kind}"))
-        covered.add(s.start)
-    return out, covered
+                out.append(CutEvent(base_tick, "duo_cluster", [duo],
+                                   PRIO["duo_cluster"],
+                                   note=f"duo {a}+{b} @{s.kind}"))
+        # Companion: bass+guitar cls pair (55x in official data)
+        if "bass" in top_names and "guitar" in top_names:
+            out.append(CutEvent(base_tick, "duo_cluster",
+                               ["D_Bass_CLS", "D_Gtr_CLS"],
+                               PRIO["duo_cluster"] - 1,
+                               note=f"bass+gtr cls @{s.kind}"))
+    return out
 
 
 def detect_vocal_peaks(inst_onsets: dict[str, list[int]] | None,
@@ -456,7 +504,17 @@ def detect_events(sections: list[Section],
                   audio_onsets: list[int] | None = None,
                   energy_env: list[tuple[int, str]] | None = None,
                   band_activity: dict[str, list[int]] | None = None) -> list[CutEvent]:
-    """Full event timeline. Sorted by tick (ties broken by priority desc)."""
+    """Full event timeline with data-driven detectors.
+
+    Pipeline order (by priority):
+    1. Unique events: bre, stagedive
+    2. Boundary markers: section_entry, section_close
+    3. Featured moments: solos, vocal_peaks, duo_cluster
+    4. Dramatic impacts: impacts, energy_transitions
+    5. Texture: downtime
+
+    Density is enforced per-section-kind via _SECTION_BUDGET.
+    """
     acc = sorted(accents) if accents else []
     # Merge MIDI + audio accents for richer snap
     if audio_onsets:
@@ -473,131 +531,60 @@ def detect_events(sections: list[Section],
         merged.extend(acc[i:]); merged.extend(audio[j:])
         acc = merged
     ev: list[CutEvent] = []
+    # Phase 1: Unique / rare events
     ev += detect_bre(bre_spans)
     ev += detect_stagedive(sections, inst_onsets, acc, time_sig_map, tpb)
-    ev += detect_downtime(inst_onsets, time_sig_map, tpb)
+    # Phase 2: Boundary markers (entry + close per section)
+    ev += detect_section_entry(sections, acc, tpb)
+    ev += detect_section_close(sections, acc, tpb)
+    # Phase 3: Featured moments
+    ev += detect_solos(sections, inst_onsets, acc, tpb)
     ev += detect_vocal_peaks(inst_onsets, acc, time_sig_map, tpb)
-    ev += detect_rises(sections, acc, tpb)
+    ev += detect_duo_cluster(sections, inst_onsets, acc, tpb)
+    # Phase 4: Dramatic impacts
     ev += detect_impacts(sections, acc, tpb)
     ev += detect_energy_transitions(sections, energy_env, acc, tpb)
-    ev += detect_solos(sections, inst_onsets, acc, tpb)
-    # detect_duos runs BEFORE baseline; baseline skips sections where duo fired
-    # to avoid double-counting (a section gets either a duo or a closeup, not both).
-    duo_events, duo_covered = detect_duos(sections, inst_onsets, acc, tpb)
-    ev += duo_events
-    ev += detect_baseline_cuts(sections, inst_onsets, acc, time_sig_map, tpb,
-                                skip_sections=duo_covered,
-                                audio_onsets=audio_onsets,
-                                band_activity=band_activity)
+    # Phase 5: Texture
+    ev += detect_downtime(inst_onsets, time_sig_map, tpb)
+    # Density: max 2 cluster-positions per section (each cluster = 1 tick bucket).
+    # Multiple events at the same tick are OK (clusters), but we cap the number
+    # of distinct tick positions per section to match the official 1.31/section.
+    ev = _cluster_limit(ev, sections, tpb)
     ev.sort(key=lambda e: (e.tick, -e.priority))
     return ev
 
 
-def detect_baseline_cuts(sections: list[Section],
-                         inst_onsets: dict[str, list[int]] | None,
-                         accents: list[int] | None,
-                         time_sig_map: list, tpb: int,
-                         skip_sections: set[int] | None = None,
-                         audio_onsets: list[int] | None = None,
-                         band_activity: dict[str, list[int]] | None = None
-                         ) -> list[CutEvent]:
-    """One structural directed cut per qualifying section (mid/high energy).
+def _cluster_limit(events: list[CutEvent],
+                   sections: list[Section],
+                   tpb: int) -> list[CutEvent]:
+    """Keep at most 2 distinct tick positions per section, max 2 events per tick.
 
-    Skips sections whose .start is in skip_sections (already covered by
-    a higher-priority event like a duo).
-
-    3 categories:
-    1. SOLO → instrument close-up (D_Gtr_CLS, D_Bass_CLS, D_Keys_Cam)
-    2. DROP/BUILD → full-band cut (D_All_LT, D_All_Cam, D_Drums_LT)
-    3. All other mid/high sections → vocal cut (D_Vox_Cam_PT, D_Vocals)
-
-    Placed at the busiest onset of the lead instrument in the section,
-    or midsection if no onsets. Priority 30 (below special events).
-    """
-    out = []
-    if not inst_onsets or not sections:
-        return out
-    skip = skip_sections or set()
-    totals = {k: len(v) for k, v in inst_onsets.items()
-              if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
-    acc = sorted(accents) if accents else []
-    # Merge MIDI + audio accents for richer snap
-    if audio_onsets:
-        audio = sorted(audio_onsets)
-        merged = []
-        i = j = 0
-        while i < len(acc) and j < len(audio):
-            if acc[i] < audio[j]:
-                merged.append(acc[i]); i += 1
-            elif audio[j] < acc[i]:
-                merged.append(audio[j]); j += 1
-            else:
-                merged.append(acc[i]); i += 1; j += 1
-        merged.extend(acc[i:]); merged.extend(audio[j:])
-        acc = merged
-
-    # Pre-compute audio band activity lookup for identity refinement
-    # band_activity = {"bass": [tick, ...], "drums": [...], "lead": [...]}
-    # 'lead' ≈ guitar/vocals (300-3000Hz)
-    def _active_band_at(tick: int) -> str | None:
-        """Which frequency band is most active near `tick` (±1 beat)."""
-        if not band_activity:
-            return None
-        import bisect
-        best_band, best_cnt = None, 0
-        for band, ticks in band_activity.items():
-            if not ticks:
-                continue
-            i = bisect.bisect_left(ticks, tick)
-            cnt = 0
-            for ci in (i - 1, i):
-                if 0 <= ci < len(ticks) and abs(ticks[ci] - tick) <= tpb:
-                    cnt += 1
-            if cnt > best_cnt:
-                best_band, best_cnt = band, cnt
-        return best_band
-
+    Official data: cuts come in clusters (50.6% ≤1 beat gap, avg 2-3 per cluster)
+    with large gaps (33.4% >8 beats)."""
+    kept = [True] * len(events)
     for s in sections:
-        if _RANK[_camera_energy(s)] < 1:  # skip calm sections
+        # Gather indices + group by tick
+        buckets: dict[int, list[int]] = {}
+        for i, e in enumerate(events):
+            if s.start <= e.tick < s.end:
+                buckets.setdefault(e.tick, []).append(i)
+        if not buckets:
             continue
-        if s.start in skip:               # already covered by a duo event
-            continue
-        if s.end - s.start < tpb * 4:
-            continue
-        leaders = _section_leaders(inst_onsets, s.start, s.end, totals)
-        if not leaders:
-            continue
-        lead, _ = leaders[0]
-        mid = (s.start + s.end) // 2
-        # Determine cut type by section kind
-        if s.kind == "solo":
-            cuts = _FEATURE_CLOSEUP.get(_solo_instrument(s.name), ["D_Gtr_CLS"])
-        elif s.kind in ("drop", "build"):
-            cuts = ["D_All_LT", "D_All_Cam", "D_Drums_LT"]
-        else:
-            # Most sections: film the leader
-            cuts = _FEATURE_CLOSEUP.get(lead, ["D_Vox_Cam_PT"])
-        # Position at busiest onset of lead
-        lead_ons = inst_onsets.get(lead) or []
-        tick = (_busiest_onset(lead_ons, s.start, s.end, tpb, mid)
-                if lead_ons else mid)
-        tick = _nearest_accent(tick, acc, tpb) if acc else tick
-        # Audio band activity can ADD a secondary cut option
-        audio_band = _active_band_at(tick)
-        final_cuts = list(cuts)
-        if audio_band is not None:
-            # Map audio band to appropriate cut
-            band_cut = {
-                "bass": "D_Bass_CLS",
-                "drums": "D_Drums_LT",
-                "lead": "D_Vox_Cam_PT",  # lead ≈ vocal/guitar
-            }.get(audio_band)
-            if band_cut and band_cut not in final_cuts:
-                final_cuts.append(band_cut)
-        out.append(CutEvent(tick, "baseline", final_cuts, 30,
-                            note=f"structural {lead}@{s.kind}" +
-                            (f" audio={audio_band}" if audio_band else "")))
-    return out
+        # Within each tick, keep top 2 by priority
+        for tick, idxs in buckets.items():
+            idxs.sort(key=lambda i: -events[i].priority)
+            for i in idxs[2:]:
+                kept[i] = False
+        # If more than 2 distinct ticks, keep top 2 by summed priority
+        if len(buckets) > 2:
+            sorted_ticks = sorted(buckets.keys(),
+                                  key=lambda t: sum(events[i].priority for i in buckets[t]),
+                                  reverse=True)
+            discard_ticks = set(sorted_ticks[2:])
+            for tick in discard_ticks:
+                for i in buckets[tick]:
+                    kept[i] = False
+    return [e for i, e in enumerate(events) if kept[i]]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
