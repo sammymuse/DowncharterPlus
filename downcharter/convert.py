@@ -417,6 +417,20 @@ _ANIM_NOTE = {
     (_CRASH2, _LH, True):  45, (_CRASH2, _RH, True):  39,
     (_RIDE, _LH, False): 43,   (_RIDE, _RH, False): 42,
 }
+# Confidence of each default hand (%, derived from 101 official RB3 charts).
+# Used by anti-crossover: pads with ≥ 90 % confidence keep their default
+# regardless of natural direction; moderate-confidence pads may flip.
+_DEFAULT_CONFIDENCE = {
+    _SNARE: 84,
+    _HIHAT: 88,
+    _CRASH1: 81,
+    _CRASH2: 100,
+    _RIDE: 97,
+    _FLOOR: 93,
+    _TOM2: 67,
+}
+# Pads where data confidence is so high that anti-crossover never overrides.
+_HIGH_CONFIDENCE = {p for p, c in _DEFAULT_CONFIDENCE.items() if c >= 90}
 # Pads that have soft-hit animation variants.
 _SOFT_CAPABLE = {_SNARE, _CRASH1, _CRASH2}
 _ANIM_KICK = 24
@@ -426,11 +440,36 @@ def _flip(hand: str) -> str:
     return _RH if hand == _LH else _LH
 
 
-def _auto_sticking(phrase: list[tuple[int, int]], is_dense: bool = False) -> list[str]:
-    """Assign LH/RH to a phrase of single hits using data-driven defaults
-    derived from 101 official Rock Band 3 drum charts.
+def _normal_direction(prev_pad: int, pad: int) -> str | None:
+    """Natural hand when moving from *prev_pad* to *pad* on the kit.
+    Rightward movement → RH; leftward → LH.
+    Neutral transitions where crossovers are standard return None
+    (hihat↔snare, snare↔tom1 — these never trigger anti-crossover)."""
+    if (prev_pad, pad) in ((_HIHAT, _SNARE), (_SNARE, _HIHAT),
+                            (_SNARE, _TOM1), (_TOM1, _SNARE)):
+        return None
+    if prev_pad < pad:
+        return _RH
+    if prev_pad > pad:
+        return _LH
+    return None
 
-    Each element is (pad, velocity). Rules:
+
+def _auto_sticking(
+    phrase: list[tuple[int, int]],
+    is_dense: bool = False,
+    last_lh_pad: int = -1,
+    last_rh_pad: int = -1,
+) -> tuple[list[str], int, int]:
+    """Assign LH/RH to a phrase of single hits using data-driven defaults
+    derived from 101 official Rock Band 3 drum charts, with directional
+    anti-crossover as a secondary correction.
+
+    *last_lh_pad* / *last_rh_pad* are the most recent pad assigned to each
+    hand from the PRIOR phrase (or -1 if unknown).  Returns (hands, updated
+    last_lh_pad, updated last_rh_pad).
+
+    Primary rules (data-driven):
     1. First note: use per-pad default hand. Accent (vel >= 120) on snare/crash
        uses RH.
     2. Different pad from previous: use default hand for the new pad (balanced
@@ -439,47 +478,76 @@ def _auto_sticking(phrase: list[tuple[int, int]], is_dense: bool = False) -> lis
        - Snare: always flip (alternate for rolls).
        - Other pads (not is_dense): stay consistent (use default hand).
        - Other pads (is_dense, avg gap <= 16th note): flip (dense fill alternation).
+
+    Secondary correction (anti-crossover):
+    - After assigning via the rules above, check whether the hand moves against
+      the natural kit direction (rightward → RH, leftward → LH).
+    - Flip only for pads with moderate data confidence (< 90 %).
+    - Never flip crash2/ride/floor (≥ 90 % confidence).
+    - Never flip accented notes (vel >= 120 on snare/crash).
     """
     n = len(phrase)
     if n == 0:
-        return []
-    if n == 1:
-        pad, vel = phrase[0]
-        if vel >= 120 and pad in (_SNARE, _CRASH1, _CRASH2):
-            return [_RH]
-        return [_DEFAULT_HAND.get(pad, _RH)]
+        return [], last_lh_pad, last_rh_pad
 
     out: list[str] = []
     prev_hand: str | None = None
     prev_pad: int | None = None
 
     for i, (pad, vel) in enumerate(phrase):
+        hand: str | None = None
+
         if i == 0:
             # First note: use default hand. Accent on snare/crash → RH.
             if vel >= 120 and pad in (_SNARE, _CRASH1, _CRASH2):
                 hand = _RH
             else:
                 hand = _DEFAULT_HAND.get(pad, _RH)
+
+            # Anti-crossover from previous phrase context: check if the first
+            # note would place a hand on the "wrong" side of the other hand.
+            if hand == _LH and last_rh_pad >= 0 and pad > last_rh_pad:
+                # LH going to the right of where RH was → crossover
+                if pad not in _HIGH_CONFIDENCE:
+                    hand = _RH
+            elif hand == _RH and last_lh_pad >= 0 and pad < last_lh_pad:
+                # RH going to the left of where LH was → crossover
+                if pad not in _HIGH_CONFIDENCE:
+                    hand = _LH
+
         elif pad == prev_pad:
             # Same pad as previous.
             if pad == _SNARE:
-                # Snare always alternates.
                 hand = _flip(prev_hand)
             elif is_dense:
-                # Dense fills alternate on all pads.
                 hand = _flip(prev_hand)
             else:
-                # Groove: stay consistent with default hand.
                 hand = _DEFAULT_HAND.get(pad, prev_hand)
+
         else:
             # Different pad: use default hand for the new pad.
             hand = _DEFAULT_HAND.get(pad, _flip(prev_hand))
+
+            # Anti-crossover: natural direction from previous to this pad.
+            natural = _normal_direction(prev_pad, pad)
+            if natural is not None and hand != natural:
+                # Default conflicts with natural direction.
+                alt = _flip(hand)
+                if alt == natural and pad not in _HIGH_CONFIDENCE:
+                    if not (vel >= 120 and pad in (_SNARE, _CRASH1, _CRASH2)):
+                        hand = alt
 
         out.append(hand)
         prev_hand = hand
         prev_pad = pad
 
-    return out
+        # Track last pad per hand for the caller.
+        if hand == _LH:
+            last_lh_pad = pad
+        else:
+            last_rh_pad = pad
+
+    return out, last_lh_pad, last_rh_pad
 
 
 def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
@@ -603,7 +671,12 @@ def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
         # buffer: (tick, pad, velocity)
         buffer: list[tuple[int, int, int]] = []
 
+        # Track last pad per hand for anti-crossover across phrase boundaries.
+        last_lh_pad: int = -1
+        last_rh_pad: int = -1
+
         def _flush() -> None:
+            nonlocal last_lh_pad, last_rh_pad
             if not buffer:
                 return
             phrase = [(p, v) for _, p, v in buffer]
@@ -616,7 +689,10 @@ def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
                 is_dense = sum(gaps) / len(gaps) <= tpb // 4
             else:
                 is_dense = False
-            hands = _auto_sticking(phrase, is_dense=is_dense)
+            hands, last_lh_pad, last_rh_pad = _auto_sticking(
+                phrase, is_dense=is_dense,
+                last_lh_pad=last_lh_pad, last_rh_pad=last_rh_pad,
+            )
             for (btick, pad, vel), hand in zip(buffer, hands):
                 _emit(btick, pad, hand, vel)
             buffer.clear()
@@ -628,6 +704,7 @@ def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
                 _, tick, lo, hi, vel = ev
                 _emit(tick, lo, _LH, vel)
                 _emit(tick, hi, _RH, vel)
+                last_lh_pad, last_rh_pad = lo, hi
                 prev_tick = tick
             else:
                 _, tick, pad, vel = ev
