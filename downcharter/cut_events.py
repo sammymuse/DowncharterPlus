@@ -204,26 +204,31 @@ class OnyxLevel:
 
 # Section kind → nível Onyx base
 _SECTION_ONYX = {
-    "solo":       OnyxLevel.CLOSEUP,
-    "riff":       OnyxLevel.CLOSEUP,
-    "outro":      OnyxLevel.CLOSEUP,
-    "verse":      OnyxLevel.GENERAL,
-    "prechorus":  OnyxLevel.GENERAL,
-    "postchorus": OnyxLevel.GENERAL,
-    "intro":      OnyxLevel.GENERAL,
-    "build":      OnyxLevel.GENERAL,
-    "breakdown":  OnyxLevel.FULLBAND,
-    "chorus":     OnyxLevel.FULLBAND,
-    "drop":       OnyxLevel.FULLBAND,
-    "bridge":     OnyxLevel.DUO,
-    "default":    OnyxLevel.GENERAL,
+    # Data-driven from 100 official songs (2997 cuts):
+    # VOX is #1 entry type for verse/prechorus/postchorus/intro
+    # CLOSEUP puts Vox first, then Gtr, Bass, Drums
+    "solo":       OnyxLevel.CLOSEUP,   # instrument solo → closeup of soloist
+    "riff":       OnyxLevel.CLOSEUP,   # instrumental riff → Gtr_CLS
+    "outro":      OnyxLevel.CLOSEUP,   # winding down → vocal or instrument
+    "verse":      OnyxLevel.CLOSEUP,   # was GENERAL → VOX missed (13× drums_lt confusion)
+    "prechorus":  OnyxLevel.CLOSEUP,   # was GENERAL → VOX building energy
+    "postchorus": OnyxLevel.CLOSEUP,   # was GENERAL → VOX after climax
+    "intro":      OnyxLevel.CLOSEUP,   # was GENERAL → featured instrument
+    "build":      OnyxLevel.CLOSEUP,   # was GENERAL → instrumental Gtr_CLS
+    "bridge":     OnyxLevel.DUO,       # breakdown of instruments → duo pairs
+    "breakdown":  OnyxLevel.FULLBAND,  # climax → full band shots
+    "chorus":     OnyxLevel.FULLBAND,  # full band energy → ALL shots
+    "drop":       OnyxLevel.FULLBAND,  # EDM drop → full impact
+    "default":    OnyxLevel.GENERAL,   # fallback → drums or keys
 }
 
 # Candidatos por nível (ordem: mais→menos preferido)
 _ONYX_CUTS = {
     OnyxLevel.CLOSEUP: [
-        "D_Vox_CLS", "D_Gtr_CLS", "D_Bass_CLS", "D_Drums_CLS",
-        "D_Gtr_Cam_PT", "D_Bass_Cam", "D_Vox_Cam_PT",
+        # D_Vox_Cam_PT first: it's the single most common directed cut (10.3%)
+        "D_Vox_Cam_PT", "D_Vocals", "D_Vox_Cam_PR",
+        "D_Gtr_CLS", "D_Bass_CLS", "D_Drums_CLS",
+        "D_Vox_CLS", "D_Gtr_Cam_PT", "D_Bass_Cam",
     ],
     OnyxLevel.DUO: [
         "D_Duo_GB", "D_Duo_KG", "D_Duo_KB", "D_Duo_KV", "D_Duo_Gtr", "D_Duo_Bass",
@@ -246,12 +251,14 @@ _DIRECTED_INSTR_CUT = {
     "D_Drums_Point": "drums", "D_Drums_KD": "drums",
     "D_Keys_Cam": "keys",
     "D_Vox_CLS": "vocal", "D_Vox_Cam_PT": "vocal",
+    "D_Vocals": "vocal", "D_Vox_Cam_PR": "vocal",
 }
 
 
 def _instrument_active(inst: str, inst_onsets: dict, tick: int, tpb: int) -> bool:
-    """True if instrument has an onset within ±2 beats of tick."""
-    win = tpb * 2
+    """True if instrument has an onset within ±2 beats of tick (vocal: ±4)."""
+    # Vocal onsets are sparser (sustained notes) — use wider window
+    win = tpb * 4 if inst == "vocal" else tpb * 2
     key = inst if inst != "vocal" else "_vocal_real"
     ons = inst_onsets.get(key) if inst_onsets else None
     if not ons:
@@ -327,7 +334,20 @@ def detect_events(sections: list,
 
         # Slot 1: Entry (no início da secção, snapped ao accent)
         entry_tick = _nearest_accent(s.start, acc, tpb) if acc else s.start
-        entry_cut = _choose_onyx_cut(level, kind, inst_onsets, entry_tick, tpb)
+        # Try sliding forward to find a position where a closeup-level instrument is active
+        # (vocals often start a few beats after the section marker)
+        for offset in [0, tpb, int(tpb * 1.5), tpb * 2]:
+            test = entry_tick + offset if offset else entry_tick
+            if test > s.start + tpb * 4:  # don't slide past 4 beats
+                break
+            entry_cut = _choose_onyx_cut(level, kind, inst_onsets, test, tpb)
+            # If we found a specific cut (not fullband), keep this position
+            if entry_cut not in ("D_All", "D_All_Cam", "D_All_LT", "D_All_Yeah"):
+                entry_tick = test
+                break
+        else:
+            # Fallback: no specific cut found at any offset, use original position
+            entry_cut = _choose_onyx_cut(level, kind, inst_onsets, entry_tick, tpb)
         ev.append(CutEvent(entry_tick, "section_entry", [entry_cut],
                            PRIO["section_entry"],
                            note=f"onyx_{kind}_entry_{level}"))

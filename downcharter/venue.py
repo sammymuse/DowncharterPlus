@@ -1858,7 +1858,9 @@ def _guard_directed(cut: str, tick: int, tpb: int,
     if inst_onsets is None:
         return cut
     inst = _DIRECTED_INSTR.get(cut)
-    if inst is not None and not _playing_near(inst_onsets.get(inst), tick, tpb * 2):
+    # Wider window for vocals: sustained notes have fewer onsets in MIDI
+    win = tpb * 4 if inst == "vocal" else tpb * 2
+    if inst is not None and not _playing_near(inst_onsets.get(inst), tick, win):
         # ABSENT instrument (no chart at all) → there's no character to film, not even
         # idle: falls to framing (None). Only in a momentary PAUSE (it has notes
         # somewhere, but not here) does the _NP variant make sense — the character
