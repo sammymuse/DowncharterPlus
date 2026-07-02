@@ -2047,67 +2047,36 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             idx += 1
             t += step
 
-    # ── PASS 2: directed cuts from MUSICAL EVENTS (precise hit ticks) ─────────────
-    # Each event owns candidate cuts (most→least specific); the guard adapts them to
-    # context (_NP if idle, None if it makes no sense). Full-band cuts are throttled to
-    # `fullband_gap`; one stage dive per song; anti-recency on the rest.
+    # ── PASS 2: directed cuts from ONYX LEVELS (simplified) ────────────────────
     events = detect_events(sections, inst_onsets, accents, bre_spans, time_sig_map, tpb,
                            audio_onsets=audio_onsets, energy_env=energy_env,
                            band_activity=band_activity)
     events.sort(key=lambda e: (e.tick, -e.priority))
     accepted: list[tuple[int, str]] = []
-    recent_dir: deque = deque(maxlen=4)
     last_fullband = -10 ** 9
     did_stagedive = False
-    import random
-    # VOX cuts: the single strongest type (25-30% of all official cuts). Anti-recency
-    # should NOT block them — official data is genuinely repetitive on VOX. (H7b)
-    _VOX_CUTS = frozenset({"D_Vox_Cam_PT", "D_Vocals", "D_Vox_CLS", "D_Vox_Cam_PR"})
+
     for e in events:
         chosen = None
-        for cand in e.cuts:                          # 1st candidate that passes the guard
+        for cand in e.cuts:
             g = _guard_directed(cand, e.tick, tpb, inst_onsets)
-            if g is None:
-                continue
-            is_vox = g in _VOX_CUTS
-            # Self-repeat: 30% for VOX, 42% for other types.
-            # (Architect H7b originally set VOX to 65%, but our evaluation at 65%
-            # contributed to 1.38× volume — too many VOX repeats inflating count
-            # without improving identity. 30% keeps natural repetition while
-            # reducing the volume bloat. Phase 1 volume reduction.)
-            repeat_prob = 0.30 if is_vox else 0.42
-            if accepted and g == accepted[-1][1] and random.random() < repeat_prob:
-                chosen = g
-                break
-            # VOX cuts bypass the recent_dir anti-recency block (H7b)
-            if g in recent_dir and not is_vox and chosen is None:
-                chosen = g           # fallback (non-vox repeat: keep as fallback)
-                continue
-            if g not in recent_dir or is_vox:
+            if g is not None:
                 chosen = g
                 break
         if chosen is None:
             continue
-        is_fullband = chosen in ("D_All", "D_All_Cam", "D_All_LT", "D_All_Yeah")
+        is_fullband = chosen in ("D_All", "D_All_Cam", "D_All_LT", "D_All_Yeah",
+                                 "D_BRE_Jump", "D_BRE",
+                                 "D_Stagedive", "D_Crowdsurf")
         if is_fullband and e.tick - last_fullband < fullband_gap:
-            continue                                 # space out full-band (sparingly)
+            continue
         if chosen in ("D_Stagedive", "D_Crowdsurf"):
             if did_stagedive:
-                continue                             # at most one per song
+                continue
             did_stagedive = True
         accepted.append((e.tick, chosen))
-        # VOX cuts don't go into recent_dir — they should never be "blocked" (H7b)
-        if chosen not in _VOX_CUTS:
-            recent_dir.append(chosen)
         if is_fullband:
             last_fullband = e.tick
-
-    # ── Add companion shots at the same tick as primary directed cuts ──────
-    # Official venues frequently fire MULTIPLE directed cuts at the same tick
-    # (e.g. directed_drums_lt + directed_guitar_cls). Add companions using
-    # co-occurrence pairs learned from 100 official songs.
-    from .cut_events import add_companion_shots
-    companions = add_companion_shots(accepted)
 
     # ── MERGE: directed wins near a framing slot; drop the filler within min_gap ──
     import bisect
@@ -2122,7 +2091,6 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
 
     merged = [(tk, c) for tk, c in slots if not _near_directed(tk)]
     merged += list(accepted)
-    merged += companions
     merged.sort(key=lambda x: x[0])
 
     prev_tick = -10 ** 9
@@ -2131,7 +2099,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
         if cut == prev_cut:
             continue
         if tk - prev_tick < min_gap:
-            if tk != prev_tick:          # allow same-tick different-category companions
+            if tk != prev_tick:
                 continue
         ev = _cut_event(tk, cut)
         if ev is not None:
