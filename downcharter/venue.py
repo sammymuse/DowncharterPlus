@@ -1604,8 +1604,14 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
         if design is not None:
             group = design.group_at(si)
             if group.pp_hold is None:
-                group.pp_hold = (rng.choice(palette[:3]) if rng is not None
-                                 and len(palette) >= 3 else palette[0])
+                # pp_hold is held for many beats (6 bars default), so only
+                # HOLD/SHORT filters — never BURST (too aggressive to freeze).
+                hold_pool = [p for p in palette
+                             if _PP_FILTER_ROLE.get(p) in ("hold", "short")]
+                if not hold_pool:
+                    hold_pool = palette  # fallback (all-burst palette)
+                group.pp_hold = (rng.choice(hold_pool[:3]) if rng is not None
+                                 and len(hold_pool) >= 3 else hold_pool[0])
                 if group.pp_hold not in design.dominant_pp:
                     design.dominant_pp.append(group.pp_hold)
             pp_hold = group.pp_hold
