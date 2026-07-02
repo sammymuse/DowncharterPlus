@@ -452,6 +452,58 @@ def _auto_sticking(pads: list[int]) -> list[str]:
     return out
 
 
+def _is_fill_buffer(pads: list[int], ticks: list[int],
+                    tempo_map: list, tpb: int) -> bool:
+    """A buffer is a fill if it moves across ≥3 distinct pads and spans ≤ 1
+    measure — the same criteria used by ``drums.detect_fills`` for difficulty
+    reduction.  Pure function, no side effects."""
+    if len(set(pads)) < 3:
+        return False
+    span_ticks = ticks[-1] - ticks[0]
+    if span_ticks > 4 * tpb:            # > 1 measure in 4/4
+        return False
+    span_ms = tick_to_ms(ticks[-1], tempo_map, tpb) - tick_to_ms(ticks[0], tempo_map, tpb)
+    measure_ms = (tick_to_ms(ticks[0] + 4 * tpb, tempo_map, tpb)
+                  - tick_to_ms(ticks[0], tempo_map, tpb))
+    return span_ms <= measure_ms
+
+
+def _fill_sticking(pads: list[int]) -> list[str]:
+    """Sticking for a fill phrase: strict alternation (no double strokes, RLRL),
+    starting with the dominant hand (RH) when that doesn't cause crossovers.
+
+    The hand assigned to each hit is checked against the natural kit direction
+    (``_normal_direction``).  If starting on RH causes ANY crossover, we fall
+    back to LH.  If both cross over, the hand with fewer crossovers wins (RH
+    breaks ties — dominant hand priority).
+    """
+    if not pads:
+        return []
+
+    def _simulate(start: str) -> tuple[list[str], int]:
+        hands: list[str] = []
+        hand = start
+        n_x = 0
+        for i, x in enumerate(pads):
+            hands.append(hand)
+            if i + 1 < len(pads):
+                nd = _normal_direction(x, pads[i + 1])
+                nxt = _flip(hand)
+                if nd is not None and nd != nxt:
+                    n_x += 1
+            hand = _flip(hand)
+        return hands, n_x
+
+    rh_h, rh_x = _simulate(_RH)
+    lh_h, lh_x = _simulate(_LH)
+
+    if rh_x == lh_x:
+        return rh_h           # tie → RH dominant
+    if rh_x < lh_x:
+        return rh_h
+    return lh_h
+
+
 def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
     """Return a NEW MidiFile with drummer limb-animation notes (24-51) synthesised
     on PART DRUMS from its Expert gems, with left/right-hand sticking. No-op for a
@@ -560,7 +612,12 @@ def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
         def _flush() -> None:
             if not buffer:
                 return
-            hands = _auto_sticking([p for _, p in buffer])
+            pads = [p for _, p in buffer]
+            ticks = [t for t, _ in buffer]
+            if _is_fill_buffer(pads, ticks, tempo_map, tpb):
+                hands = _fill_sticking(pads)
+            else:
+                hands = _auto_sticking(pads)
             for (btick, pad), hand in zip(buffer, hands):
                 _emit(btick, pad, hand)
             buffer.clear()
