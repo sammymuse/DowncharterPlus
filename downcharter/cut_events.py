@@ -381,15 +381,19 @@ _SECTION_CLOSE_CUTS: dict[str, list[str]] = {
 
 def detect_section_entry(sections: list[Section], accents: list[int],
                          tpb: int) -> list[CutEvent]:
-    """Entry cut at EVERY mid/high section boundary.
+    """Entry cut at EVERY section boundary (including calm).
 
     Data: 30.7% of official directed cuts are at b0-2; 31.8% within 1 beat
     of a boundary. Section kind determines the cut type, not the leader
-    instrument (75-85% of instruments are playing at any cut)."""
+    instrument (75-85% of instruments are playing at any cut).
+
+    CHANGE (H1): Removed energy gate. Official data shows 37.6% of all cuts
+    land in calm sections (verse, intro, outro, bridge). Gatekeeping was
+    eliminating 287+ cuts per 100 songs. The cut type tables already have
+    correct entries for calm kinds; density is controlled by _SECTION_BUDGET."""
     out = []
     for s in sections:
-        if _RANK[_entry_tier(s)] < 1:
-            continue
+        # (removed: if _RANK[_entry_tier(s)] < 1: continue)
         tick = _nearest_accent(s.start, accents, tpb)
         cuts = _SECTION_ENTRY_CUTS.get(s.kind, _SECTION_ENTRY_CUTS["default"])
         out.append(CutEvent(tick, "section_entry", cuts, PRIO["section_entry"],
@@ -559,10 +563,13 @@ def detect_events(sections: list[Section],
 # Budget (distinct tick positions) per section kind, from 100-song density data.
 # Official: solo 2.23/s, chorus 2.00/s, verse 1.28/s, prechorus 0.86/s, etc.
 # Rounded down to int. Budget 2 = entry + close; budget 1 = entry only.
+# ADJUSTED (H5): verse 1→2 (20.3% of all cuts), outro 1→2 (6.8% of all cuts).
+# These are the 2nd and 3rd densest kinds after chorus; were underdimensioned.
 _SECTION_BUDGET: dict[str, int] = {
     "solo": 2, "chorus": 2, "breakdown": 2,
-    "verse": 1, "prechorus": 1, "build": 1, "intro": 1,
-    "outro": 1, "bridge": 1, "postchorus": 1, "riff": 1, "drop": 1,
+    "verse": 2, "outro": 2,  # ← adjusted from 1 to match official density
+    "prechorus": 1, "build": 1, "intro": 1,
+    "bridge": 1, "postchorus": 1, "riff": 1, "drop": 1,
 }
 
 
