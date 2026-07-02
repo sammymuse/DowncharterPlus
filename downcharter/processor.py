@@ -1207,6 +1207,7 @@ def process_folder(
     do_hide_bg: bool = False,
     do_talkies: bool = False,
     do_drum_anim: bool = True,
+    cancel: object | None = None,
 ) -> None:
     # Hide in-game background images (background.png/jpg → .bak) — Venue sub-option.
     if do_hide_bg:
@@ -1233,6 +1234,9 @@ def process_folder(
     error_log: list[str] = []      # "song: <exception + traceback>"
     conv_set = set(converted)
     for path in midis:
+        if cancel is not None and cancel.is_set():
+            log_fn("\n  ⚡ Cancelled by user.\n", "warn")
+            break
         base = os.path.splitext(path)[0]
         backup = base + ".bak.mid"
         from_chart = os.path.abspath(path) in conv_set
@@ -1342,7 +1346,8 @@ def _write_session_log(folder: str, modified: int, skipped_total: int,
         return None
 
 
-def revert_folder(folder: str, log_fn) -> None:
+def revert_folder(folder: str, log_fn,
+                  cancel: object | None = None) -> None:
     reverted = 0
     for root, _, files in os.walk(folder):
         for f in files:

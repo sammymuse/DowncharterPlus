@@ -276,6 +276,7 @@ class App(tk.Tk):
         self._conv_folder = cfg.get("conv_folder", "") or ""
         self._conv_out = cfg.get("conv_out", "") or ""
         self._conv_pedal  = tk.StringVar(value=cfg.get("conv_pedal", "2x"))  # 1x | 2x | both
+        self._cancel = threading.Event()
         # Persist whenever a toggle/slider changes
         for var in (self._threshold_ms, self._do_expert_plus, self._do_hard,
                     self._do_medium, self._do_easy, self._do_venue, self._do_drum_anim,
@@ -412,6 +413,10 @@ class App(tk.Tk):
                                      self._run_revert, danger=True, width=120, height=40)
         self._btn_rev.pack(side="left", padx=(10, 0))
         self._btn_rev.set_enabled(False)
+        self._btn_cancel = StyledButton(btn_row, "✕  CANCEL",
+                                        self._cancel_op, danger=True, width=120, height=40)
+        self._btn_cancel.pack(side="right")
+        self._btn_cancel.set_enabled(False)
 
         # ── Convert tab ──
         conv = tk.Frame(container, bg=BG, padx=22, pady=16)
@@ -559,26 +564,48 @@ class App(tk.Tk):
         if lipsync: self._log("  Talkies: yes (talky vocals charted from lyrics)\n")
         self._log("\n")
         self._btn_conv.set_enabled(False); self._btn_rev.set_enabled(False)
+        self._cancel.clear()
+        self._btn_cancel.set_enabled(True)
 
         def task():
             process_folder(self._folder, diffs, xp, ms, self._log, venue, lipsync_trk,
                            do_hide_bg=hide_bg, do_talkies=lipsync,
-                           do_drum_anim=drum_anim)
+                           do_drum_anim=drum_anim,
+                           cancel=self._cancel)
             self.after(0, lambda: self._btn_conv.set_enabled(True))
             self.after(0, lambda: self._btn_rev.set_enabled(True))
+            self.after(0, lambda: self._btn_cancel.set_enabled(False))
+            self.after(0, self._cancel.clear)
             self._log("\n")
 
         threading.Thread(target=task, daemon=True).start()
+
+    def _cancel_op(self):
+        """Cancel the current process or revert operation."""
+        self._cancel.set()
+        self._btn_cancel.set_enabled(False)
+        self._log("\n  ⚡ Cancelling… (will stop after the current song)\n", "warn")
+
+    def _cancel_conv(self):
+        """Cancel the current convert operation."""
+        self._cancel.set()
+        for b in self._conv_btns:
+            b.set_enabled(False)
+        self._log("\n  ⚡ Cancelling… (will stop after the current song)\n", "warn")
 
     def _run_revert(self):
         if not self._folder: return
         self._log("── REVERT ───────────────────────────────\n", "head")
         self._btn_conv.set_enabled(False); self._btn_rev.set_enabled(False)
+        self._cancel.clear()
+        self._btn_cancel.set_enabled(True)
 
         def task():
-            revert_folder(self._folder, self._log)
+            revert_folder(self._folder, self._log, cancel=self._cancel)
             self.after(0, lambda: self._btn_conv.set_enabled(True))
             self.after(0, lambda: self._btn_rev.set_enabled(True))
+            self.after(0, lambda: self._btn_cancel.set_enabled(False))
+            self.after(0, self._cancel.clear)
             self._log("\n")
 
         threading.Thread(target=task, daemon=True).start()
@@ -665,6 +692,11 @@ class App(tk.Tk):
         self._btn_sng.pack(anchor="w", pady=(0, 14))
 
         self._conv_btns = (self._btn_ps3, self._btn_con, self._btn_sng)
+        self._btn_cancel_conv = StyledButton(body, "✕  CANCEL CONVERT",
+                                              self._cancel_conv, danger=True,
+                                              width=200, height=40)
+        self._btn_cancel_conv.set_enabled(False)
+        self._btn_cancel_conv.pack(anchor="w", pady=(6, 0))
         for b in self._conv_btns:
             b.set_enabled(bool(self._conv_folder and
                                os.path.isdir(self._conv_folder)))
@@ -707,11 +739,13 @@ class App(tk.Tk):
         out_base = self._conv_out or None
         fmt_label = {"ps3": "PS3 folder", "xbox": "Xbox CON",
                      "sng": "SNG"}.get(fmt, fmt)
+        self._cancel.clear()
         self._log(f"── CONVERT ({fmt_label}) ─────────────────────\n", "head")
         self._log(f"  Source: {self._conv_folder}\n")
         self._log(f"  Output: {out_base or '(beside source)'}\n")
         for b in self._conv_btns:
             b.set_enabled(False)
+        self._btn_cancel_conv.set_enabled(True)
 
         def task():
             try:
@@ -721,38 +755,32 @@ class App(tk.Tk):
                 song_dirs = sorted({os.path.dirname(m)
                                     for m in find_midis(self._conv_folder)})
                 if not song_dirs:
-                    # No .mid found (e.g. a lone .chart, or the builder will report
-                    # what's missing); fall back to the folder as one song.
                     song_dirs = [self._conv_folder]
                 self._log(f"  Songs: {len(song_dirs)}\n\n")
 
                 def _label(sd):
                     return os.path.basename(sd.rstrip("/\\")) or sd
 
-                if fmt == "sng":
-                    # Verbatim repackage — no pedal variants / validation / milo.
-                    from downcharter.sng import build_sng_song
-                    for sd in song_dirs:
+                for sd in song_dirs:
+                    if self._cancel.is_set():
+                        self._log("  ⚡ Cancelled by user.\n", "warn")
+                        break
+
+                    if fmt == "sng":
+                        from downcharter.sng import build_sng_song
                         self._log(f"  ▸ SNG: {_label(sd)}\n", "head")
                         try:
                             build_sng_song(sd, self._log, out_base=out_base)
                         except Exception as e:
                             self._log(f"  ✗ {_label(sd)}: {e}\n", "err")
-                    return
+                        continue
 
-                from downcharter.ps3build import source_has_double_kicks
-                if fmt == "ps3":
-                    from downcharter.ps3build import build_ps3_song
-                    builder = build_ps3_song
-                else:  # xbox
-                    from downcharter.stfs import build_con_song
-                    builder = build_con_song
-                for sd in song_dirs:
+                    from downcharter.ps3build import source_has_double_kicks
+                    builder = (build_ps3_song if fmt == "ps3"
+                               else build_con_song)
                     self._log(f"  ▸ {_label(sd)}\n", "head")
                     try:
                         if pedal == "both":
-                            # Only emit a 2x build for songs that actually have
-                            # doubles; otherwise it is identical to the plain 1x.
                             if source_has_double_kicks(sd):
                                 modes = ["1x", "2x"]
                             else:
@@ -761,6 +789,8 @@ class App(tk.Tk):
                         else:
                             modes = [pedal]
                         for mode in modes:
+                            if self._cancel.is_set():
+                                break
                             self._log(f"    {fmt_label} ({mode})\n", "info")
                             builder(sd, mode, self._log, out_base=out_base)
                     except Exception as e:
@@ -772,11 +802,13 @@ class App(tk.Tk):
                 self._log(f"  ✗ {e}\n", "err")
                 self._log(traceback.format_exc(), "err")
             finally:
-                # Always re-enable so the user can convert again (even the SNG
-                # path, which returns early on success).
                 self.after(0, lambda: [b.set_enabled(True) for b in self._conv_btns])
+                self.after(0, lambda: self._btn_cancel_conv.set_enabled(False))
+                self.after(0, self._cancel.clear)
                 self._log("\n")
 
+        from downcharter.ps3build import build_ps3_song
+        from downcharter.stfs import build_con_song
         threading.Thread(target=task, daemon=True).start()
 
     # ── song.ini creator ───────────────────────────────────────────────────
