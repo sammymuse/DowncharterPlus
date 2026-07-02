@@ -426,145 +426,59 @@ def _flip(hand: str) -> str:
     return _RH if hand == _LH else _LH
 
 
-def _normal_direction(x: int, y: int):
-    """Natural hand when moving from pad x to pad y (None = no preference).
-    Hihat↔snare and snare↔tom1 are centred, so neither implies a direction."""
-    if (x, y) in ((_HIHAT, _SNARE), (_SNARE, _HIHAT), (_SNARE, _TOM1), (_TOM1, _SNARE)):
-        return None
-    if x < y:
-        return _RH
-    if x > y:
-        return _LH
-    return None
-
-
-def _simulate_sticking_fwd(
-    pads: list[tuple[int, int]], start_hand: str,
-) -> list[str]:
-    """Simulate the greedy sticking for a (pad, vel) phrase, starting with a
-    given hand at the first note.  Returns a hand for each note in order."""
-    hands: list[str] = []
-    cur_hand = start_hand
-    for i, (pad, vel) in enumerate(pads):
-        if i == 0:
-            hands.append(cur_hand)
-            continue
-        prev_pad = pads[i - 1][0]
-        if pad == prev_pad:
-            # Same pad: one-step lookahead for the double-stroke rule.
-            nxt = [p for p, _ in pads[i + 1: i + 2]]
-            if nxt and _flip(cur_hand) == _normal_direction(pad, nxt[0]):
-                cur_hand = cur_hand       # double stroke
-            else:
-                cur_hand = _flip(cur_hand)  # alternate
-        else:
-            cur_hand = _flip(cur_hand)    # moving pads always switches hands
-        hands.append(cur_hand)
-    return hands
-
-
-def _score_sticking(hands: list[str], pads: list[int]) -> int:
-    """Score a hand sequence: +1 per natural (non-crossing) transition,
-    +1 per double stroke that avoids a crossover. Higher = better."""
-    score = 0
-    for i in range(len(hands) - 1):
-        d = _normal_direction(pads[i], pads[i + 1])
-        if d is None or hands[i + 1] == d:
-            score += 1      # neutral or natural direction
-        # bonus: the dominant-hand (RH) lands on accent positions
-        if hands[i] == _RH and (i == 0 or pads[i] != pads[i - 1]):
-            score += 1      # fresh RH placement is generally good
-    return score
-
-
 def _auto_sticking(phrase: list[tuple[int, int]], is_dense: bool = False) -> list[str]:
-    """Assign LH/RH to a phrase of single hits.
+    """Assign LH/RH to a phrase of single hits using data-driven defaults
+    derived from 101 official Rock Band 3 drum charts.
 
-    Each element is (pad, velocity).  The algorithm uses full-phrase lookahead
-    to choose the best starting hand and double-stroke placement, preferring
-    the path with fewer crossovers.  Accents (vel 127) bias toward the
-    dominant hand (RH) on snare/crash.
-
-    When *is_dense* is True (avg gap ≤ 16th note), all pads alternate during
-    rolls (fill detection).  At groove speeds, only snare forces RLRL."""
-    pads = [p for p, _ in phrase]
-    vels = [v for _, v in phrase]
+    Each element is (pad, velocity). Rules:
+    1. First note: use per-pad default hand. Accent (vel >= 120) on snare/crash
+       uses RH.
+    2. Different pad from previous: use default hand for the new pad (balanced
+       pads like TOM1 flip the previous hand).
+    3. Same pad as previous:
+       - Snare: always flip (alternate for rolls).
+       - Other pads (not is_dense): stay consistent (use default hand).
+       - Other pads (is_dense, avg gap <= 16th note): flip (dense fill alternation).
+    """
     n = len(phrase)
     if n == 0:
         return []
     if n == 1:
-        # Single note: dominant hand for accent on snare/crash, else RH.
-        if vels[0] >= 120 and pads[0] in (_SNARE, _CRASH1, _CRASH2):
+        pad, vel = phrase[0]
+        if vel >= 120 and pad in (_SNARE, _CRASH1, _CRASH2):
             return [_RH]
-        return [_RH]
+        return [_DEFAULT_HAND.get(pad, _RH)]
 
     out: list[str] = []
-    prev: tuple[str, int] | None = None
+    prev_hand: str | None = None
+    prev_pad: int | None = None
 
-    for i, (x, vel) in enumerate(phrase):
-        rest = phrase[i + 1:]
-        rest_pads = [p for p, _ in rest]
-
-        if prev is None:
-            # ---- first note: pick starting hand via full-phrase simulation ----
-            # Try both RH and LH starts; pick the one with better overall flow.
-            seq_rh = _simulate_sticking_fwd(phrase[i:], _RH)
-            seq_lh = _simulate_sticking_fwd(phrase[i:], _LH)
-            pads_i = pads[i:]
-            score_rh = _score_sticking(seq_rh, pads_i)
-            score_lh = _score_sticking(seq_lh, pads_i)
-
-            # Accent bias: if first note is an accent on snare/crash, tilt RH.
-            accent_bonus = 2 if (vel >= 120 and x in (_SNARE, _CRASH1, _CRASH2)) else 0
-            hand = _RH if (score_rh + accent_bonus) >= score_lh else _LH
-        else:
-            prev_hand, prev_pad = prev
-            if x == prev_pad:
-                # ---- same pad: scoring-based double-stroke decision ----
-                alt_hand = _flip(prev_hand)
-
-                # Roll detection: snare always alternates (single-stroke rolls).
-                # Other pads alternate only in dense fills (avg gap ≤ 16th note).
-                _IS_ROLL_PAD = {_SNARE}
-                same_remaining = len(rest) > 0 and all(p == x for p, _ in rest)
-                in_roll = ((x in _IS_ROLL_PAD or is_dense) and (
-                    same_remaining or (i >= 2 and pads[i - 2] == x)))
-                if in_roll:
-                    hand = alt_hand
-                else:
-                    # Simulate the remaining phrase starting with each option.
-                    seq_double = _simulate_sticking_fwd(
-                        [(x, vel)] + rest, prev_hand)
-                    seq_alt = _simulate_sticking_fwd(
-                        [(x, vel)] + rest, alt_hand)
-
-                    pads_remaining = [x] + rest_pads
-                    score_double = _score_sticking(seq_double, pads_remaining)
-                    score_alt = _score_sticking(seq_alt, pads_remaining)
-
-                    # Accent bias on the current note tilts toward RH.
-                    accent_bias = 1 if (vel >= 120
-                                         and x in (_SNARE, _CRASH1, _CRASH2)
-                                         and alt_hand == _RH) else 0
-
-                    # Tiebreaker: prefer alternating when the scores are equal.
-                    # Only for roll pads or dense fills — non-roll pads at
-                    # groove speeds stay consistent with the dominant hand.
-                    tiebreak_alt = ((x in _IS_ROLL_PAD or is_dense)
-                                    and score_double == score_alt
-                                    and not accent_bias
-                                    and ((len(rest) <= 1 and len(out) < 2)
-                                         or len(rest) == 0))
-                    if tiebreak_alt:
-                        hand = alt_hand
-                    elif score_double >= (score_alt + accent_bias):
-                        hand = prev_hand   # keep (double stroke)
-                    else:
-                        hand = alt_hand    # alternate
+    for i, (pad, vel) in enumerate(phrase):
+        if i == 0:
+            # First note: use default hand. Accent on snare/crash → RH.
+            if vel >= 120 and pad in (_SNARE, _CRASH1, _CRASH2):
+                hand = _RH
             else:
-                hand = _flip(prev_hand)   # moving pads always switches hands
+                hand = _DEFAULT_HAND.get(pad, _RH)
+        elif pad == prev_pad:
+            # Same pad as previous.
+            if pad == _SNARE:
+                # Snare always alternates.
+                hand = _flip(prev_hand)
+            elif is_dense:
+                # Dense fills alternate on all pads.
+                hand = _flip(prev_hand)
+            else:
+                # Groove: stay consistent with default hand.
+                hand = _DEFAULT_HAND.get(pad, prev_hand)
+        else:
+            # Different pad: use default hand for the new pad.
+            hand = _DEFAULT_HAND.get(pad, _flip(prev_hand))
+
         out.append(hand)
-        prev = (hand, x)
+        prev_hand = hand
+        prev_pad = pad
+
     return out
 
 
