@@ -124,6 +124,55 @@ def _phrases(vocal: list[int], time_sig_map: list, tpb: int) -> list[tuple[int, 
 
 # ── Individual detectors ─────────────────────────────────────────────────────
 
+def _vocal_silent(tick: int, inst_onsets: dict[str, list[int]] | None,
+                  window: int) -> bool:
+    """True se NÃO há onset vocal num raio de ±window ticks."""
+    if not inst_onsets:
+        return True
+    vocal = sorted(inst_onsets.get("_vocal_real") or [])
+    if not vocal:
+        return True
+    import bisect
+    lo = bisect.bisect_left(vocal, tick - window)
+    hi = bisect.bisect_left(vocal, tick + window)
+    return lo == hi
+
+
+def _unison_count(tick: int, inst_onsets: dict[str, list[int]] | None,
+                  window: int) -> int:
+    """Quantos instrumentos (de 5) têm onset em ±window ticks."""
+    if not inst_onsets:
+        return 0
+    count = 0
+    for inst in ("guitar", "bass", "keys", "drums", "vocal"):
+        ons = sorted(inst_onsets.get(inst) or [])
+        if not ons:
+            continue
+        import bisect
+        lo = bisect.bisect_left(ons, tick - window)
+        hi = bisect.bisect_left(ons, tick + window)
+        if lo < hi:
+            count += 1
+    return count
+
+
+def _section_quarter(tick: int, section: "Section") -> str:
+    """Retorna 'first', 'second', 'third' ou 'fourth' quartil."""
+    length = section.end - section.start
+    if length <= 0:
+        return "unknown"
+    pos = tick - section.start
+    q = pos / length
+    if q < 0.25:
+        return "first"
+    elif q < 0.50:
+        return "second"
+    elif q < 0.75:
+        return "third"
+    else:
+        return "fourth"
+
+
 def detect_impacts(sections: list[Section], accents: list[int], tpb: int) -> list[CutEvent]:
     """Entry of an impact section (intro/chorus/drop/breakdown/outro) → full-band pan.
 
@@ -971,6 +1020,239 @@ def detect_vocal_peaks(inst_onsets: dict[str, list[int]] | None,
     return out
 
 
+def detect_vocal_moments(sections: list[Section],
+                          inst_onsets: dict[str, list[int]] | None,
+                          accents: list[int],
+                          tpb: int) -> list[CutEvent]:
+    """Vocal onset em verse/chorus + mid/high energy → vocal close-up.
+
+    Estudo (100 songs, N=134 D_Vocals_CLS): 69% vocal playing, 34% onset at tick,
+    52% high energy, 34% chorus, 24% verse. Trigger: vocal onset + verse/chorus +
+    mid/high energy. Timing: no onset (não no fim — vocal_peaks cobre o fim).
+    Priority 68: ganha de duo_cluster(65), perde para vocal_peak(70).
+    """
+    out = []
+    if not inst_onsets:
+        return out
+    vocal = sorted(inst_onsets.get("_vocal_real") or [])
+    if len(vocal) < 3:
+        return out
+
+    last_emit: dict[int, int] = {}
+
+    for si, s in enumerate(sections):
+        if s.kind not in ("verse", "chorus", "prechorus", "bridge"):
+            continue
+        # Requer energia mid/high
+        energy = _camera_energy(s)
+        if _RANK.get(energy, 0) < 1:
+            continue
+
+        last_tick = last_emit.get(si, -10**9)
+        section_mid = s.start + (s.end - s.start) // 2
+
+        import bisect
+        start_idx = bisect.bisect_left(vocal, s.start)
+        end_idx = bisect.bisect_left(vocal, s.end)
+
+        for idx in range(start_idx, end_idx):
+            tick = vocal[idx]
+            # Throttle: max 1 por 8 beats
+            if tick - last_tick < tpb * 8:
+                continue
+            # Não disparar no fim da secção (vocal_peaks cobre isso)
+            if s.end - tick < tpb * 4:
+                continue
+            # Preferir mid-section em diante
+            if tick < section_mid - tpb * 8:
+                continue
+            # Só se vocal está realmente a cantar (onset no tick + outro perto)
+            # Verificar que há pelo menos 2 onsets nos ±4 beats
+            nearby = bisect.bisect_left(vocal, tick + tpb * 4) - bisect.bisect_left(vocal, tick - tpb * 4)
+            if nearby < 2:
+                continue
+
+            snapped = _nearest_accent(tick, accents, tpb)
+            out.append(CutEvent(snapped, "vocal_moment",
+                                ["D_Vocals_CLS", "D_Vox_Cam_PT", "D_Vox_CLS"],
+                                68,
+                                note=f"vocal onset @{s.kind}"))
+            last_emit[si] = tick
+            break  # max 1 por secção
+
+    return out
+
+
+def detect_instrumental_spotlight(sections: list[Section],
+                                   inst_onsets: dict[str, list[int]] | None,
+                                   accents: list[int],
+                                   tpb: int) -> list[CutEvent]:
+    """Instrument onset + vocal silent + mid energy → instrumental close-up.
+
+    Estudo (100 songs, N=233 D_Gtr_CLS): 98% guitar playing, 84% onset at tick,
+    80% vocal silent. Trigger: instrument onset em secção instrumental + mid energy.
+    Target: riffs/breakdowns/intros/outros/builds sem vocal.
+    Priority 60: compete com impact(60) e perde para section_entry(85).
+    """
+    out = []
+    if not inst_onsets:
+        return out
+
+    _INSTR_SECTIONS = {"riff", "breakdown", "intro", "outro", "build"}
+
+    for si, s in enumerate(sections):
+        if s.kind not in _INSTR_SECTIONS:
+            continue
+        energy = _camera_energy(s)
+        if _RANK.get(energy, 0) < 1:  # skip calm
+            continue
+
+        length = s.end - s.start
+        if length < tpb * 8:  # min 2 measures
+            continue
+
+        # Encontrar onset no meio da secção onde vocal está silent
+        import bisect
+        vocal = inst_onsets.get("_vocal_real") or []
+        mid = s.start + length // 2
+
+        for inst in ("guitar", "bass", "keys"):
+            ons = sorted(inst_onsets.get(inst) or [])
+            if not ons:
+                continue
+            start_idx = bisect.bisect_left(ons, s.start)
+            end_idx = bisect.bisect_left(ons, s.end)
+            if end_idx - start_idx < 2:
+                continue
+
+            # Onset mais próximo do meio da secção
+            best_tick = _onset_near(ons, mid)
+
+            # Verificar vocal silent ±2 beats
+            if not _vocal_silent(best_tick, inst_onsets, tpb * 2):
+                continue
+
+            snapped = _nearest_accent(best_tick, accents, tpb)
+            cuts = _FEATURE_CLOSEUP.get(inst, [f"D_{inst.title()}_CLS"])
+            out.append(CutEvent(snapped, "instrumental_spotlight",
+                                cuts, 60,
+                                note=f"{inst} spotlight @{s.kind}"))
+            break  # max 1 por secção
+
+    return out
+
+
+def detect_drum_moments(sections: list[Section],
+                         inst_onsets: dict[str, list[int]] | None,
+                         accents: list[int],
+                         tpb: int) -> list[CutEvent]:
+    """Drum onset + last_quarter + unison≥3 → drums feature.
+
+    Estudo (100 songs, N=244 D_Drums_LT): 88% drums playing, 76% onset at tick,
+    57% last quarter. Trigger: drum onset no último quartil da secção + banda cheia.
+    Priority 62: ganha de impact(60), perde para section_close(75).
+    """
+    out = []
+    if not inst_onsets:
+        return out
+
+    for si, s in enumerate(sections):
+        if s.kind in ("solo", "breakdown", "prechorus"):
+            continue
+        if _RANK.get(_camera_energy(s), 0) < 1:  # skip calm
+            continue
+
+        length = s.end - s.start
+        if length < tpb * 16:  # min 4 measures
+            continue
+
+        # Último quartil
+        last_q_start = s.start + length * 3 // 4
+
+        drums = sorted(inst_onsets.get("drums") or [])
+        if not drums:
+            continue
+
+        import bisect
+        start_idx = bisect.bisect_left(drums, last_q_start)
+        if start_idx >= len(drums):
+            continue
+
+        # Encontrar o onset mais ativo (denso) no último quartil
+        prefer_tick = drums[start_idx]
+        busiest = _busiest_onset(drums, last_q_start, s.end, tpb, prefer_tick)
+
+        # Verificar uníssono (≥3 instrumentos a tocar)
+        if _unison_count(busiest, inst_onsets, tpb) < 3:
+            if _unison_count(busiest, inst_onsets, tpb * 2) < 3:
+                continue
+
+        snapped = _nearest_accent(busiest, accents, tpb)
+        out.append(CutEvent(snapped, "drum_moment",
+                            ["D_Drums_LT", "D_Drums_KD", "D_Drums_Point"],
+                            62,
+                            note=f"drums climax @{s.kind}"))
+
+    return out
+
+
+def detect_crowd_moments(sections: list[Section],
+                          inst_onsets: dict[str, list[int]] | None,
+                          accents: list[int],
+                          tpb: int) -> list[CutEvent]:
+    """Vocal silent + calm + verse → crowd/crowd-work shot.
+
+    Estudo (100 songs, N=107 D_Crowd): 62% vocal silent, 36% verse, 57% calm.
+    Trigger: vocal silent em verse calmo, mid-section.
+    Priority 55: igual a downtime, mas contexto diferente (verse calm vs instrument pause).
+    """
+    out = []
+    if not inst_onsets:
+        return out
+
+    last_emit = -10**9
+
+    for si, s in enumerate(sections):
+        if s.kind != "verse":
+            continue
+        if _RANK.get(_camera_energy(s), 0) > 0:  # só calm
+            continue
+
+        length = s.end - s.start
+        if length < tpb * 12:  # min 3 measures
+            continue
+
+        # Mid-section (second/third quarter)
+        mid_start = s.start + length // 4
+        mid_end = s.start + length * 3 // 4
+
+        # Encontrar onset de guitarra no mid-section
+        guitar = sorted(inst_onsets.get("guitar") or [])
+        if not guitar:
+            continue
+
+        import bisect
+        g_start = bisect.bisect_left(guitar, mid_start)
+        g_end = bisect.bisect_left(guitar, mid_end)
+
+        for gi in range(g_start, g_end):
+            tick = guitar[gi]
+            if tick - last_emit < tpb * 12:
+                continue
+            if not _vocal_silent(tick, inst_onsets, tpb * 2):
+                continue
+
+            snapped = _nearest_accent(tick, accents, tpb)
+            out.append(CutEvent(snapped, "crowd_moment",
+                                ["D_Crowd", "D_Crowd_Gtr", "D_Crowd_Bass"],
+                                55,
+                                note=f"crowd moment @{s.kind}"))
+            last_emit = tick
+            break  # max 1 per section
+
+    return out
+
+
 def detect_arc_moments(design: "VenueDesign | None", sections: list[Section],
                        accents: list[int], tpb: int) -> list[CutEvent]:
     """Magma rule: directed_all at the ENTRY of design.first_chorus_idx.
@@ -986,7 +1268,89 @@ def detect_arc_moments(design: "VenueDesign | None", sections: list[Section],
     out.append(CutEvent(tick, "arc_moment",
                         ["D_All", "D_All_Cam", "D_All_LT"],
                         88, dramatic=True,
-                        note=f"Magma: 1st chorus entry @{s.name}"))
+                         note=f"Magma: 1st chorus entry @{s.name}"))
+    return out
+
+
+def detect_dramatic_moments(sections: list[Section],
+                              inst_onsets: dict[str, list[int]] | None,
+                              accents: list[int],
+                              tpb: int) -> list[CutEvent]:
+    """High energy + (chorus OR vocal_silent) → full-band dramatic shot.
+
+    Estudo:
+    - D_All_Yeah (N=89): 85% first_quarter, 63% chorus, 72% high energy
+      → primeiro quartil de chorus high energy
+    - D_All_LT (N=95): 71% vocal silent, 57% mid/high energy
+      → mid-section instrumental
+
+    Priority 66: ganha de duo_cluster(65), perde para vocal_moment(68) e vocal_peak(70).
+    """
+    out = []
+    if not inst_onsets:
+        return out
+
+    last_emit = -10**9
+
+    for si, s in enumerate(sections):
+        if _RANK.get(_camera_energy(s), 0) < 2:  # só high energy
+            continue
+
+        length = s.end - s.start
+        if length < tpb * 8:
+            continue
+
+        tick = None
+        cut_choice = None
+
+        if s.kind == "chorus":
+            # D_All_Yeah: primeiro quartil
+            first_q_end = s.start + length // 4
+            # Encontrar onset de guitarra (ou qualquer) no primeiro quartil
+            all_onsets = []
+            for ons in inst_onsets.values():
+                if ons:
+                    all_onsets.extend(ons)
+            all_onsets.sort()
+            import bisect
+            q_onsets = all_onsets[bisect.bisect_left(all_onsets, s.start):
+                                  bisect.bisect_left(all_onsets, first_q_end)]
+            if q_onsets:
+                tick = _nearest_accent(q_onsets[0], accents, tpb)
+                cut_choice = "D_All_Yeah"
+            else:
+                tick = _nearest_accent(s.start, accents, tpb)
+                cut_choice = "D_All_Yeah"
+        else:
+            # D_All_LT: mid-section com vocal silent
+            mid = s.start + length // 2
+            if not _vocal_silent(mid, inst_onsets, tpb * 4):
+                continue
+            # Encontrar onset mais próximo do meio
+            all_onsets = []
+            for ons in inst_onsets.values():
+                if ons:
+                    all_onsets.extend(ons)
+            all_onsets.sort()
+            import bisect
+            mid_idx = bisect.bisect_left(all_onsets, mid)
+            if mid_idx < len(all_onsets):
+                tick = _nearest_accent(all_onsets[mid_idx], accents, tpb)
+            else:
+                tick = _nearest_accent(mid, accents, tpb)
+            cut_choice = "D_All_LT"
+
+        if tick is None:
+            continue
+        if tick - last_emit < tpb * 16:
+            continue
+
+        out.append(CutEvent(tick, "dramatic_moment",
+                            [cut_choice, "D_All_Cam", "D_All"],
+                            66, dramatic=True,
+                            note=f"dramatic @{s.kind}"))
+        last_emit = tick
+
     return out
 
 
@@ -1035,13 +1399,18 @@ def detect_events(sections: list[Section],
     # Phase 3: Featured moments
     ev += detect_solos(sections, inst_onsets, acc, tpb)
     ev += detect_vocal_peaks(inst_onsets, acc, time_sig_map, tpb)
+    ev += detect_vocal_moments(sections, inst_onsets, acc, tpb)
     ev += detect_duo_cluster(sections, inst_onsets, acc, tpb)
     # Phase 4: Dramatic impacts + arc moments
     ev += detect_impacts(sections, acc, tpb)
     ev += detect_energy_transitions(sections, energy_env, acc, tpb)
     ev += detect_arc_moments(design, sections, acc, tpb)
+    ev += detect_dramatic_moments(sections, inst_onsets, acc, tpb)
+    ev += detect_instrumental_spotlight(sections, inst_onsets, acc, tpb)
+    ev += detect_drum_moments(sections, inst_onsets, acc, tpb)
     # Phase 5: Texture
     ev += detect_downtime(inst_onsets, time_sig_map, tpb)
+    ev += detect_crowd_moments(sections, inst_onsets, acc, tpb)
     # Density: max 2 cluster-positions per section (each cluster = 1 tick bucket).
     # Multiple events at the same tick are OK (clusters), but we cap the number
     # of distinct tick positions per section to match the official 1.31/section.
