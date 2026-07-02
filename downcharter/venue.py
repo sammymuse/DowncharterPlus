@@ -1207,13 +1207,12 @@ def build_pyro(sections: list[Section], drum_onsets: list[int],
 _PP_CLUSTER_PAT = {
     "calm": [0.5, 2.0],                 # 3 changes: 1 burst + 1 short & hold
     "mid":  [0.5, 0.5, 2.0],            # 4 changes: 2 burst + 1 short & hold
-    "high": [0.5, 0.5, 2.0],            # 4 changes: 2 burst + 1 short & hold
+    "high": [0.5, 2.0],                 # 3 changes: 1 burst + 1 short & hold (was 4)
 }
 # Hold to the next anchor, in BARS — longer gaps between clusters = more holds
-# (gap ≥4 beats). Calibrated to match official density per tier:
-#   calm: ~0.50 events/bar (was 0.38, under-generating)
-#   high: ~0.67 events/bar (was 1.00, over-generating)
-_PP_HOLD_BARS = {"calm": 6, "mid": 6, "high": 6}
+# (gap ≥4 beats). High-tier songs massively over-generate (up to 6×) because
+# the cluster density doesn't match real venue production decisions.
+_PP_HOLD_BARS = {"calm": 6, "mid": 7, "high": 8}
 
 # Per-section-kind hold DISTORTION.  Some section kinds are much sparser (solo) or
 # denser (build) than the tier average in the official venues.  These coefficients
@@ -1578,6 +1577,14 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
             kind_coeff = _PP_HOLD_KINDS.get(s.kind, {}).get(tier, 1.0)
             t += max(int(hb * bar * kind_coeff), ((tt - t) // bar + 1) * bar)
     out.sort(key=lambda e: e.abs_tick)
+    # ── Density cap: don't exceed 1.3× the official average pp/beat (0.18 ev/b) ──
+    if sections:
+        song_end = max(s.end for s in sections)
+        song_beats = song_end // tpb if tpb else 1
+        target_max = int(song_beats * 0.18 * 1.3)
+        if len(out) > target_max > 0:
+            step = len(out) / target_max
+            out = [out[int(i * step)] for i in range(target_max)]
     return out
 
 
