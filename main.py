@@ -388,7 +388,7 @@ class App(tk.Tk):
                   self._do_drum_anim, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
         # LIPSYNC1 viseme track from lyrics (audio-guided keyframes). Independent of
         # the talkies toggle below — generates the mouth animation track only.
-        CheckTile(body, "Lipsync",
+        CheckTile(body, "Lipsync  (vocal stem recommended)",
                   self._do_lipsync_trk, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
         # ── Talkies ──
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
