@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import struct
 import textwrap
 
 import mido
@@ -508,6 +509,61 @@ class TestFullMIDIPipeline:
         assert stats.get("vocals_charted", 0) > 0, \
             "Expected vocals_charted > 0 in stats"
 
+    def test_lipsync_facial_keyframes(self, multi_mid, tmp_path):
+        """LIPSYNC1 contains facial keyframes (Blink, Squint, Brow_*)."""
+        dst = tmp_path / "out_facial.mid"
+        _proc.process_midi(
+            str(multi_mid), str(dst),
+            diffs_to_gen=[],
+            do_expert_plus=False, do_venue=False, do_lipsync=True,
+            do_talkies=False, do_drum_anim=False,
+        )
+        out = mido.MidiFile(str(dst))
+        ls_tr = next((t for t in out.tracks
+                      if t.name.strip().upper() == "LIPSYNC1"), None)
+        assert ls_tr is not None, "LIPSYNC1 track missing"
+
+        t = 0
+        found: set[str] = set()
+        for m in ls_tr:
+            t += m.time
+            if m.type == "text" and m.text.startswith("["):
+                vis = m.text[1:].split()[0]
+                if vis in ("Blink", "Squint", "Brow_aggressive",
+                           "Brow_down", "Brow_up"):
+                    found.add(vis)
+
+        assert "Blink" in found, f"Blink missing from LIPSYNC1: {found}"
+        assert "Squint" in found, f"Squint missing from LIPSYNC1: {found}"
+        print(f"  Facial visemes found: {found}")
+
+    def test_lipsync_no_duplicates(self, multi_mid, tmp_path):
+        """LIPSYNC1 has no duplicate (tick, viseme) events."""
+        dst = tmp_path / "out_dedup.mid"
+        _proc.process_midi(
+            str(multi_mid), str(dst),
+            diffs_to_gen=[],
+            do_expert_plus=False, do_venue=False, do_lipsync=True,
+            do_talkies=False, do_drum_anim=False,
+        )
+        out = mido.MidiFile(str(dst))
+        ls_tr = next((t for t in out.tracks
+                      if t.name.strip().upper() == "LIPSYNC1"), None)
+        assert ls_tr is not None, "LIPSYNC1 track missing"
+
+        from collections import Counter
+        pairs: list[tuple[int, str]] = []
+        tick = 0
+        for m in ls_tr:
+            tick += m.time
+            if m.type == "text" and m.text.startswith("["):
+                vis = m.text[1:].split()[0]
+                pairs.append((tick, vis))
+
+        dupes = [(t, v) for (t, v), c in Counter(pairs).items() if c > 1]
+        assert not dupes, f"Duplicate (tick, viseme) events: {dupes[:10]}"
+        print(f"  LIPSYNC1: {len(pairs)} events, 0 duplicate (tick, viseme) pairs")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  B — Audio Pipeline (synthetic stems)
@@ -599,6 +655,40 @@ class TestAudioPipeline:
         assert dur is not None, "audio_duration_seconds returned None"
         assert 1.9 <= dur <= 2.1, \
             f"Expected ~2.0 s, got {dur:.3f} s"
+
+    def test_load_vocal_from_mogg_nonexistent(self):
+        """load_vocal_from_mogg returns None for a missing file."""
+        result = _audio.load_vocal_from_mogg("/nonexistent/file.mogg")
+        assert result is None, "Expected None for nonexistent .mogg"
+
+    def test_load_vocal_from_mogg_encrypted(self, tmp_path):
+        """load_vocal_from_mogg returns None for encrypted (version != 0x0A)."""
+        fake = tmp_path / "fake.mogg"
+        # Write header with version 0 (encrypted)
+        fake.write_bytes(struct.pack("<II", 0, 64) + b"\x00" * 60)
+        result = _audio.load_vocal_from_mogg(str(fake))
+        assert result is None, "Expected None for encrypted .mogg"
+
+    def test_find_vocal_audio_stems(self, vocal_stem_path):
+        """find_vocal_audio returns separated stems when present."""
+        folder = os.path.dirname(vocal_stem_path)
+        result = _audio.find_vocal_audio(folder)
+        assert isinstance(result, list), f"Expected list, got {type(result)}"
+        assert len(result) > 0, "Expected at least one vocal stem"
+        assert all(p.endswith((".ogg", ".wav")) for p in result), \
+            f"Expected audio files, got {result}"
+
+    def test_find_vocal_audio_mogg(self, tmp_path):
+        """find_vocal_audio returns None when only a .mogg is present."""
+        (tmp_path / "song.mogg").write_bytes(struct.pack("<II", 0x0A, 64) + b"\x00" * 60)
+        result = _audio.find_vocal_audio(str(tmp_path))
+        assert result is None, \
+            f"Expected None for .mogg-only folder, got {result}"
+
+    def test_find_vocal_audio_empty(self, tmp_path):
+        """find_vocal_audio returns [] for folder with no audio."""
+        result = _audio.find_vocal_audio(str(tmp_path))
+        assert result == [], f"Expected empty list, got {result}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

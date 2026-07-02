@@ -1067,19 +1067,31 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
     if do_lipsync and spans and tempo_map is not None and song_end > 0:
         try:
             from . import lipsync as _lip
-            # Extract phrase ends (seconds) from PART VOCALS for facial animation.
+            # Extract phrase ends (seconds) and vocal notes from PART VOCALS
+            # for facial animation (eyebrows driven by pitch).
             phrase_ends_s: list[float] = []
+            vocal_notes: list[tuple[float, int]] = []
             pv = next((t for t in new_mid.tracks
                        if t.name.strip().upper() == "PART VOCALS"), None)
             if pv is not None:
                 pe_ticks = _abs_phrase_ends(list(to_abs(pv)))
                 phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
                                  for t in sorted(set(pe_ticks))]
+                abs_pv = to_abs(pv)
+                for e in abs_pv:
+                    m = e.msg
+                    n = getattr(m, "note", None)
+                    if (m.type == "note_on" and getattr(m, "velocity", 0) > 0
+                            and n is not None and 36 <= n <= 84):
+                        sec = tick_to_ms(e.abs_tick, tempo_map, tpb) / 1000.0
+                        vocal_notes.append((sec, n))
+                vocal_notes.sort(key=lambda x: x[0])
             song_len_s = tick_to_ms(song_end, tempo_map, tpb) / 1000.0
             keyframes = _lip.lipsync_keyframes_from_spans(
                 spans,
                 phrase_ends=phrase_ends_s,
                 song_len_s=song_len_s,
+                vocal_notes=vocal_notes or None,
                 facial_seed=42,  # deterministic for reproducible builds
             )
             if keyframes:

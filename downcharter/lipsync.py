@@ -594,6 +594,17 @@ _SQUINT_INTERVAL = (8.0, 15.0)
 _SQUINT_DURATION = 0.25
 _SQUINT_WEIGHT = 100
 
+# Eyebrow pitch thresholds (MIDI note numbers).
+# C5 = 72, G3 = 55, perfect fifth = 7 semitones.
+_BROW_AGGRESSIVE_PITCH = 72       # notes >= C5 → Brow_aggressive
+_BROW_DOWN_PITCH = 55             # notes <= G3 sustained → Brow_down
+_BROW_UP_JUMP = 7                 # consecutive note jump >= 7 → Brow_up
+_BROW_AGGRESSIVE_WEIGHT = 120
+_BROW_DOWN_WEIGHT = 110
+_BROW_UP_WEIGHT = 100
+_BROW_HOLD_S = 0.15               # hold the expression briefly
+_BROW_FADE_S = 0.30               # fade out duration
+
 
 def _generate_blinks(
     song_len_s: float,
@@ -651,24 +662,97 @@ def _generate_squints(
     return out
 
 
+def _generate_eyebrows(
+    vocal_notes: list[tuple[float, int]],
+    rng=None,
+) -> list[tuple[float, str, int, str]]:
+    """Eyebrow animation keyframes driven by vocal pitch.
+
+    ``vocal_notes`` is a sorted list of ``(start_s, midi_pitch)`` from the
+    PART VOCALS track.  Rules:
+
+    * **Brow_aggressive** — onsets whose pitch >= ``_BROW_AGGRESSIVE_PITCH``
+      (C5) raise the inner brows for the note's intensity.  Held for
+      ``_BROW_HOLD_S`` then fade out over ``_BROW_FADE_S``.
+    * **Brow_down** — sustained notes (pitch <= ``_BROW_DOWN_PITCH`` = G3)
+      furrow the brows.  Only triggers when the note extends beyond
+      ``_BROW_HOLD_S + _BROW_FADE_S`` so a short low note doesn't scowl.
+    * **Brow_up** — a pitch jump >= ``_BROW_UP_JUMP`` semitones between
+      consecutive vocal onsets raises the brows in surprise at the higher
+      note.  A brief flash (hold + fade = 0.45 s).
+    """
+    if rng is None:
+        import random as rng
+    out: list[tuple[float, str, int, str]] = []
+
+    # Group consecutive notes into phrases (gap > 0.5 s = phrase boundary).
+    if not vocal_notes:
+        return out
+    phrases: list[list[tuple[float, int]]] = [[vocal_notes[0]]]
+    for i in range(1, len(vocal_notes)):
+        if vocal_notes[i][0] - vocal_notes[i - 1][0] > 0.5:
+            phrases.append([])
+        phrases[-1].append(vocal_notes[i])
+
+    for phrase in phrases:
+        if len(phrase) < 1:
+            continue
+        pitches = [p for _, p in phrase]
+        t0 = phrase[0][0]
+        t1 = phrase[-1][0] + _BROW_HOLD_S + _BROW_FADE_S
+        max_p = max(pitches)
+        min_p = min(pitches)
+        dur = phrase[-1][0] - phrase[0][0]
+
+        # Brow_aggressive: any note >= C5 in this phrase.
+        if max_p >= _BROW_AGGRESSIVE_PITCH:
+            out.append((t0, "Brow_aggressive", _BROW_AGGRESSIVE_WEIGHT, "ease"))
+            out.append((t0 + _BROW_HOLD_S, "Brow_aggressive",
+                        _BROW_AGGRESSIVE_WEIGHT, "hold"))
+            out.append((t1, "Brow_aggressive", 0, "linear"))
+
+        # Brow_down: average pitch low AND sustained long enough.
+        if dur > _BROW_HOLD_S + _BROW_FADE_S and sum(pitches) / len(pitches) < _BROW_DOWN_PITCH:
+            out.append((t0, "Brow_down", _BROW_DOWN_WEIGHT, "ease"))
+            out.append((t0 + _BROW_HOLD_S, "Brow_down", _BROW_DOWN_WEIGHT, "hold"))
+            out.append((t1, "Brow_down", 0, "linear"))
+
+    # Brow_up: pitch jump between consecutive notes anywhere in the track.
+    for i in range(1, len(vocal_notes)):
+        prev_t, prev_p = vocal_notes[i - 1]
+        cur_t, cur_p = vocal_notes[i]
+        if cur_p - prev_p >= _BROW_UP_JUMP:
+            jt = cur_t  # flash at the higher note's onset
+            out.append((jt, "Brow_up", _BROW_UP_WEIGHT, "ease"))
+            out.append((jt + _BROW_HOLD_S, "Brow_up", _BROW_UP_WEIGHT, "hold"))
+            out.append((jt + _BROW_HOLD_S + _BROW_FADE_S, "Brow_up", 0, "linear"))
+
+    out.sort(key=lambda e: (e[0], e[1]))
+    return out
+
+
 def generate_facial_keyframes(
     song_len_s: float,
     phrase_ends: list[float] | None = None,
     rng_seed: int | None = None,
+    vocal_notes: list[tuple[float, int]] | None = None,
 ) -> list[tuple[float, str, int, str]]:
-    """All facial animation keyframes (Blink, Squint) for the whole song.
+    """All facial animation keyframes (Blink, Squint, Brow_*) for the whole song.
 
     Returns sparse keyframes in the same ``(time_s, viseme, weight, graph)``
     format as :func:`lipsync_keyframes_from_spans`, ready to be merged.
-    Eyebrows (Brow_aggressive, Brow_down, …) are a stub for future
-    intensity-based generation."""
+
+    When ``vocal_notes`` (list of ``(start_s, midi_pitch)``) is provided,
+    eyebrow expressions are generated based on pitch: high notes raise inner
+    brows (Brow_aggressive), low sustained notes furrow (Brow_down), and
+    large pitch jumps cause surprise (Brow_up)."""
     import random as _rng
     rng = _rng.Random(rng_seed) if rng_seed is not None else _rng
     out: list[tuple[float, str, int, str]] = []
     out.extend(_generate_blinks(song_len_s, phrase_ends, rng))
     out.extend(_generate_squints(song_len_s, rng))
-    # Eyebrows: stub — empty for now.  Future work can wire in
-    # phrase intensity → Brow_aggressive / Brow_down.
+    if vocal_notes:
+        out.extend(_generate_eyebrows(vocal_notes, rng))
     out.sort(key=lambda e: (e[0], e[1]))
     return out
 
@@ -693,6 +777,7 @@ def lipsync_keyframes_from_spans(
     phrase_ends: list[float] | None = None,
     song_len_s: float | None = None,
     facial_seed: int | None = None,
+    vocal_notes: list[tuple[float, int]] | None = None,
 ) -> list[tuple[float, str, int, str]]:
     """(time_s, viseme, weight, graph) sparse keyframes for a LIPSYNC# MIDI track.
 
@@ -702,9 +787,10 @@ def lipsync_keyframes_from_spans(
     Far fewer events and closer to how Onyx itself authors the milo. Syllable windows
     are disjoint (audio gap between gems) so each closes the mouth before the next.
 
-    When ``song_len_s`` is provided, facial animation keyframes (Blink, Squint) are
-    generated alongside the mouth shapes and merged into the output.  ``facial_seed``
-    makes the random blink/squint timing reproducible."""
+    When ``song_len_s`` is provided, facial animation keyframes are generated alongside
+    the mouth shapes and merged into the output.  ``facial_seed`` makes random blink/
+    squint timing reproducible.  ``vocal_notes`` (list of ``(start_s, midi_pitch)``)
+    drives eyebrow expressions via :func:`generate_facial_keyframes`."""
     spans = list(spans)
     shapes = _resolve_shapes(spans, lang)
     out: list[tuple[float, str, int, str]] = []
@@ -715,7 +801,8 @@ def lipsync_keyframes_from_spans(
             continue
         out.extend(_keyframes_from_points(_syllable_points_g(t, end - t, shape), gain))
     if song_len_s is not None and song_len_s > 0:
-        facial = generate_facial_keyframes(song_len_s, phrase_ends, facial_seed)
+        facial = generate_facial_keyframes(
+            song_len_s, phrase_ends, facial_seed, vocal_notes)
         out = merge_facial_into_keyframes(out, facial)
     else:
         out.sort(key=lambda e: (e[0], e[1]))
