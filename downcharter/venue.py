@@ -18,7 +18,7 @@ import re
 
 import mido
 from .midi_utils import AbsEvent, tick_to_ms, ms_to_ticks, measure_ticks_at
-from .venue_director import plan_venue, VenueDesign
+from .venue_director import plan_venue, VenueDesign, CLIMAX_PP_FACTOR
 
 # ── Vocabulary (VENUE_SPEC.md) ────────────────────────────────────────────────
 
@@ -1180,7 +1180,8 @@ _PYRO_SECTIONS = {"chorus", "drop", "build", "breakdown", "riff", "solo"}
 
 
 def build_pyro(sections: list[Section], drum_onsets: list[int],
-               tpb: int, accents: list[int] | None = None) -> list[AbsEvent]:
+               tpb: int, accents: list[int] | None = None,
+               design: "VenueDesign | None" = None) -> list[AbsEvent]:
     """[bonusfx]/[bonusfx_optional] driven by the real INTENSITY and the hits, not by
     the structure. The official venues vary hugely (0 in calm/wall-of-sound songs,
     20–40 in metal with stabs). Derived rule:
@@ -1221,6 +1222,19 @@ def build_pyro(sections: list[Section], drum_onsets: list[int],
                 n += 1
                 placed_here += 1
             t += step
+    # Pyro parity no clímax: se a secção de clímax ficou sem pyro mas a música
+    # tem pyro noutras secções, injetar 1 evento para paridade (não escalada).
+    if design is not None and design.climax_idx is not None:
+        climax_has = any(
+            ev.abs_tick >= sections[design.climax_idx].start
+            and ev.abs_tick < sections[design.climax_idx].end
+            for ev in out
+        )
+        if not climax_has and len(out) > 0:
+            s = sections[design.climax_idx]
+            anchor = design.anchors[design.climax_idx]
+            if s.start <= anchor < s.end:
+                out.append(_txt(anchor, "[bonusfx_optional]"))
     return out
 
 
@@ -1472,6 +1486,19 @@ _CAMERA_LEVELS: dict[str, int] = {
     "D_Near": 0, "D_Behind": 0, "D_Head": 0, "D_Hand": 0,
     "Front_Near": 0, "Front_Behind": 0,
     "All_Near": 0, "All_Far": 0, "All_Behind": 0,
+    # Directed cuts are special: level 0 (always allowed)
+    "D_Gtr": 0, "D_Gtr_CLS": 0, "D_Gtr_Cam_PR": 0, "D_Gtr_Cam_PT": 0,
+    "D_Bass": 0, "D_Bass_CLS": 0, "D_Bass_Cam": 0,
+    "D_Drums": 0, "D_Drums_Point": 0, "D_Drums_KD": 0, "D_Drums_LT": 0, "D_Drums_CLS": 0,
+    "D_Keys": 0, "D_Keys_Cam": 0,
+    "D_Vocals": 0, "D_Vox_CLS": 0, "D_Vox_Cam_PR": 0, "D_Vox_Cam_PT": 0,
+    "D_All": 0, "D_All_Cam": 0, "D_All_LT": 0, "D_All_Yeah": 0,
+    "D_Stagedive": 0, "D_Crowdsurf": 0,
+    "D_Crowd": 0, "D_Crowd_Gtr": 0, "D_Crowd_Bass": 0,
+    "D_BRE": 0, "D_BRE_Jump": 0,
+    "D_Duo_GB": 0, "D_Duo_KB": 0, "D_Duo_KG": 0, "D_Duo_KV": 0,
+    "D_Duo_Gtr": 0, "D_Duo_Bass": 0, "D_Duo_Drums": 0,
+    "D_Gtr_NP": 0, "D_Bass_NP": 0, "D_Drums_NP": 0, "D_Keys_NP": 0, "D_Vox_NP": 0,
 }
 
 # Post-proc TONE bias by audio timbre (Section.warmth). The pp_study over the 20
@@ -1561,7 +1588,7 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
     rng = design.rng if design is not None else None
     last: str | None = None
 
-    for s in sections:
+    for si, s in enumerate(sections):
         # Pool BY SECTION TYPE (primary); fallback to the genre palette.
         palette = SECTION_PP_POOL.get(s.kind) or _section_pps(theme, s)
         # Audio-timbre tone bias (dark->desaturated, bright->bright/contrast).
@@ -1571,6 +1598,17 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
         # Reorder by energy tier: burst filters first in high, hold first in calm.
         sect_energy = section_energy(s)
         palette = _reorder_pp_pool(palette, sect_energy)
+        # Look dominante do grupo (pp_hold): o último filtro de cada cluster é
+        # forçado a este filtro, dando coerência visual às secções repetidas.
+        pp_hold = None
+        if design is not None:
+            group = design.group_at(si)
+            if group.pp_hold is None:
+                group.pp_hold = (rng.choice(palette[:3]) if rng is not None
+                                 and len(palette) >= 3 else palette[0])
+                if group.pp_hold not in design.dominant_pp:
+                    design.dominant_pp.append(group.pp_hold)
+            pp_hold = group.pp_hold
         # Timbre gate: the pp_study shows loudness does NOT predict pp density
         # (corr≈0.04). The one cue that separates the two faces of a loud wall is
         # TIMBRE: a BRIGHT/aggressive wall (metalcore, e.g. BMTH — 836 pp) gets dense
@@ -1579,8 +1617,9 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
         # energy notch for pp purposes (high->mid->calm: smaller clusters, longer holds)
         # and gets NO strobe-wall flicker; a 'warm' (bright) section keeps its tier.
         demote = (s.warmth == "cool")
-        i = 0
         t, bar = _first_downbeat_at_or_after(s.start, time_sig_map, tpb)
+        if design is not None:
+            t = max(t, design.anchors[si]) if design.anchors[si] < s.end else t
         while t < s.end:
             beat = _beat_len_at(t, time_sig_map, tpb)
             # Local tier: audio envelope if present, else the section's mean tier.
@@ -1605,8 +1644,13 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
                     break
                 # Markov-weighted selection from the available filter pool,
                 # biased by the previous filter's transition probabilities.
-                pp = _markov_choice(last, palette, _PP_MARKOV, "clean_trails",
-                                    rng=rng)
+                # The LAST emission of each cluster is forced to the group's
+                # dominant look (pp_hold) for visual coherence.
+                if pp_hold is not None and gi == len(pattern):
+                    pp = pp_hold
+                else:
+                    pp = _markov_choice(last, palette, _PP_MARKOV, "clean_trails",
+                                        rng=rng)
                 out.append(_txt(tt, f"[{pp}.pp]"))
                 last = pp
                 if gi < len(pattern):
@@ -1614,6 +1658,8 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
 
             # ── Hold to the next downbeat anchor (whole bars), filter held across it ──
             hb = _PP_HOLD_BARS[tier]
+            if design is not None and si == design.climax_idx:
+                hb = max(1, round(hb / CLIMAX_PP_FACTOR))
             kind_coeff = _PP_HOLD_KINDS.get(s.kind, {}).get(tier, 1.0)
             t += max(int(hb * bar * kind_coeff), ((tt - t) // bar + 1) * bar)
     out.sort(key=lambda e: e.abs_tick)
@@ -2036,7 +2082,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             idx += 1
             t += max(ms_to_ticks(pace_ms0, t, tempo_map, tpb), min_gap)
 
-    for s in sections:
+    for si, s in enumerate(sections):
         energy = _camera_energy(s)
         if s.kind == "solo":
             pool = _framing_only(SOLO_CAMERA[_solo_instrument(s.name)])
@@ -2045,8 +2091,9 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
         if bad_framings:                             # don't film absent instruments
             pool = _safe_framing(pool, bad_framings)
         if s.kind != "solo":                         # solos already focus via SOLO_CAMERA
-            pool = _bias_pool(pool, _featured_instrument(
-                inst_onsets, s.start, s.end, inst_totals))
+            feat = (design.group_at(si).featured_inst if design is not None
+                    else _featured_instrument(inst_onsets, s.start, s.end, inst_totals))
+            pool = _bias_pool(pool, feat)
         pace_ms = SECTION_PACE_S.get(s.kind, 3.0) * 1000.0 * pace_scale
         # Audio nudge: a quieter-than-structural section cuts slower.
         _E = {"calm": 0, "mid": 1, "high": 2}
@@ -2089,13 +2136,32 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             idx += 1
             t += step
 
+    # Snap slot to shared anchor (sync with lighting/pp)
+    if design is not None:
+        for si, s in enumerate(sections):
+            anchor = design.anchors[si]
+            if not (s.start <= anchor < s.end):
+                continue
+            # Find nearest slot to anchor
+            nearest_idx = None
+            nearest_dist = min_gap + 1
+            for idx, (tk, cut) in enumerate(slots):
+                if s.start <= tk < s.end:
+                    d = abs(tk - anchor)
+                    if d < nearest_dist:
+                        nearest_dist = d
+                        nearest_idx = idx
+            if nearest_idx is not None and nearest_dist >= min_gap // 2:
+                # Move nearest slot to anchor tick
+                slots[nearest_idx] = (anchor, slots[nearest_idx][1])
+
     # ── PASS 2: directed cuts from MUSICAL EVENTS (precise hit ticks) ─────────────
     # Each event owns candidate cuts (most→least specific); the guard adapts them to
     # context (_NP if idle, None if it makes no sense). Full-band cuts are throttled to
     # `fullband_gap`; one stage dive per song; anti-recency on the rest.
     events = detect_events(sections, inst_onsets, accents, bre_spans, time_sig_map, tpb,
                            audio_onsets=audio_onsets, energy_env=energy_env,
-                           band_activity=band_activity)
+                           band_activity=band_activity, design=design)
     events.sort(key=lambda e: (e.tick, -e.priority))
     accepted: list[tuple[int, str]] = []
     recent_dir: deque = deque(maxlen=4)
@@ -2104,7 +2170,11 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     _rand = rng if rng is not None else random
     for e in events:
         chosen = None
-        for cand in e.cuts:                          # 1st candidate that passes the guard
+        # Level filter candidates
+        candidates = _level_filter(e.cuts, 0)  # min_level=0: only level-0 directed cuts
+        if not candidates:
+            candidates = e.cuts
+        for cand in candidates:
             g = _guard_directed(cand, e.tick, tpb, inst_onsets)
             if g is None:
                 continue
@@ -2524,7 +2594,7 @@ def instrument_extras(instrument: str, onsets: list[int],
         out.append(_txt(first, f"[map {_bass_strummap(onsets, tpb)}]"))
     if instrument in ("guitar", "bass"):
         out.append(_txt(first, "[map HandMap_Default]"))
-        for s in sections:
+    for si, s in enumerate(sections):
             if (s.kind == "solo" and _solo_instrument(s.name) == instrument
                     and _count_onsets(onsets, s.start, s.end) > 0):
                 out.append(_txt(s.start, "[map HandMap_Solo]"))
@@ -2676,7 +2746,8 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     # audio-only ones); build_pyro still gates density/placement by energy + cap.
     pyro_accents = (sorted(set(accents or []) | set(audio_onsets))
                     if audio_onsets else accents)
-    out += build_pyro(sections, drum_onsets or [], tpb, accents=pyro_accents)
+    out += build_pyro(sections, drum_onsets or [], tpb, accents=pyro_accents,
+                      design=design)
     # NOTE: crowd state events ([crowd_*]) are NOT VENUE-track events — RB3/YARG read
     # them from the EVENTS track. They are emitted via build_crowd() and injected into
     # EVENTS by the processor, not appended here.

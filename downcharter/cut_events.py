@@ -20,6 +20,10 @@ from pathlib import Path
 import json
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .venue_director import VenueDesign
 
 from .venue import (Section, section_energy, _camera_energy, _energy_tier_at,
                     find_pause_spans, measure_ticks_at, _solo_instrument)
@@ -498,6 +502,25 @@ def detect_vocal_peaks(inst_onsets: dict[str, list[int]] | None,
     return out
 
 
+def detect_arc_moments(design: "VenueDesign | None", sections: list[Section],
+                       accents: list[int], tpb: int) -> list[CutEvent]:
+    """Magma rule: directed_all at the ENTRY of design.first_chorus_idx.
+
+    Priority 88 (above section_entry=85) so it wins at that tick.
+    NOT adding anything at the last/climax chorus (fullband DESCES 0.47×).
+    """
+    out = []
+    if design is None or design.first_chorus_idx is None:
+        return out
+    s = sections[design.first_chorus_idx]
+    tick = _nearest_accent(s.start, accents, tpb)
+    out.append(CutEvent(tick, "arc_moment",
+                        ["D_All", "D_All_Cam", "D_All_LT"],
+                        88, dramatic=True,
+                        note=f"Magma: 1st chorus entry @{s.name}"))
+    return out
+
+
 def detect_events(sections: list[Section],
                   inst_onsets: dict[str, list[int]] | None,
                   accents: list[int] | None,
@@ -505,7 +528,8 @@ def detect_events(sections: list[Section],
                   time_sig_map: list, tpb: int,
                   audio_onsets: list[int] | None = None,
                   energy_env: list[tuple[int, str]] | None = None,
-                  band_activity: dict[str, list[int]] | None = None) -> list[CutEvent]:
+                  band_activity: dict[str, list[int]] | None = None,
+                  design: "VenueDesign | None" = None) -> list[CutEvent]:
     """Full event timeline with data-driven detectors.
 
     Pipeline order (by priority):
@@ -543,9 +567,10 @@ def detect_events(sections: list[Section],
     ev += detect_solos(sections, inst_onsets, acc, tpb)
     ev += detect_vocal_peaks(inst_onsets, acc, time_sig_map, tpb)
     ev += detect_duo_cluster(sections, inst_onsets, acc, tpb)
-    # Phase 4: Dramatic impacts
+    # Phase 4: Dramatic impacts + arc moments
     ev += detect_impacts(sections, acc, tpb)
     ev += detect_energy_transitions(sections, energy_env, acc, tpb)
+    ev += detect_arc_moments(design, sections, acc, tpb)
     # Phase 5: Texture
     ev += detect_downtime(inst_onsets, time_sig_map, tpb)
     # Density: max 2 cluster-positions per section (each cluster = 1 tick bucket).

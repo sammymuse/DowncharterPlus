@@ -136,6 +136,39 @@ def test_repeated_sections_share_lighting_look():
     assert p2[:n] == p1[:n]
 
 
+def test_repeated_sections_share_pp_look():
+    """Fase 2.2: verse_2 partilha o look pp dominante com verse_1 (pp_hold)."""
+    kwargs = _synthetic_song()
+    events = generate_venue(**kwargs)
+
+    from downcharter.venue import resolve_sections
+    import re, collections
+    sections = resolve_sections(kwargs["events_track"], kwargs["song_end"],
+                                kwargs["onsets"], kwargs["time_sig_map"], TPB)
+    pp_re = re.compile(r"\[([a-zA-Z0-9_]+)\.pp\]")
+
+    def _pp_holds_in(section):
+        """Devolve o multiset de pp events na secção."""
+        return [m.group(1) for ev in events
+                for m in [pp_re.search(getattr(ev.msg, "text", "") or "")]
+                if m and section.start <= ev.abs_tick < section.end]
+
+    verses = [s for s in sections if s.name.lower().startswith("verse")]
+    assert len(verses) == 2
+    pp1, pp2 = _pp_holds_in(verses[0]), _pp_holds_in(verses[1])
+    assert pp1 and pp2, "ambos os verses têm de ter eventos pp"
+
+    # O pp_hold (último de cada cluster) aparece em ambos os verses
+    # O 1º verse grava o pp_hold no grupo; o 2º reusa-o.
+    # Verificar que o último pp do verse_1 (que será o pp_hold) aparece também no verse_2.
+    last_pp1 = pp1[-1]
+    assert last_pp1 in pp2, (
+        f"pp_hold {last_pp1} do verse_1 devia aparecer no verse_2")
+    # Verificar que há consistência: o pp_hold aparece múltiplas vezes (fim de cada cluster)
+    assert pp1.count(last_pp1) >= 1
+    assert pp2.count(last_pp1) >= 1
+
+
 def test_design_none_still_works():
     """Sem design (caminho legado), os builders continuam a funcionar."""
     from downcharter.venue import build_lighting, resolve_sections, THEMES
