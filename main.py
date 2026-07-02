@@ -390,16 +390,19 @@ class App(tk.Tk):
         # the talkies toggle below — generates the mouth animation track only.
         CheckTile(body, "Lipsync",
                   self._do_lipsync_trk, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-        # Hides background images in-game by renaming background.png/jpg →
-        # background.bak.png/jpg (revert restores them).
-        CheckTile(body, "Hide in-game background",
-                  self._do_hide_bg, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-
         # ── Talkies ──
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
         self._lbl("GENERATE TALKIES  (vocal stems recommended)", body).pack(anchor="w", pady=(0, 6))
         CheckTile(body, "Generate talkies from lyrics",
                   self._do_lipsync, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+
+        # ── Extras ──
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
+        self._lbl("EXTRAS", body).pack(anchor="w", pady=(0, 6))
+        # Hides background images in-game by renaming background.png/jpg →
+        # background.bak.png/jpg (revert restores them).
+        CheckTile(body, "Hide in-game background (image only)",
+                  self._do_hide_bg, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
         # ── Buttons ──
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 12))
