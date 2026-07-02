@@ -151,42 +151,97 @@ def find_song_audio(folder: str) -> list[str]:
     return moggs[:1]
 
 
+def _find_ffmpeg():
+    """Locate ffmpeg binary. Returns path or None."""
+    import shutil
+    ff = shutil.which("ffmpeg")
+    if ff:
+        return ff
+    # Common Windows locations + user's shared build
+    for candidate in [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        os.path.expanduser(
+            r"~\Downloads\ffmpeg-master-latest-win64-gpl-shared"
+            r"\ffmpeg-master-latest-win64-gpl-shared\bin\ffmpeg.exe"),
+    ]:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def _read_all_or_blocks(src):
     """Read every frame of `src` (a path or BytesIO) to a 2D float32 array.
-    Some encoders emit .opus/.ogg files that libsndfile decodes fine by SEEK but
-    trips on ('Supported file format but file is malformed') during a SEQUENTIAL
-    read at a few bad pages. (The file is NOT corrupt — seeking past the page works.)
-    Fall back to SEEK-BASED chunked reading: read 1s at a time and, on a bad page,
-    substitute that 1s with silence and seek on. This recovers the WHOLE song
-    (vs sequential block-read, which stops dead at the first bad page) while keeping
-    the timeline aligned (silence gaps stay in place, so section→frame mapping holds).
+
+    Tries libsndfile first. If that fails (malformed OGG/OPUS pages), tries
+    ffmpeg as fallback — ffmpeg handles malformed pages gracefully without
+    inserting silence. Only falls back to the old seek-based chunked reading
+    (which substitutes silence for bad pages) as a last resort.
+
     Returns (data2d, sr)."""
     import numpy as np
     import soundfile as sf
     try:
         return sf.read(src, dtype="float32", always_2d=True)
     except Exception:
-        if hasattr(src, "seek"):
-            src.seek(0)
-        with sf.SoundFile(src) as f:
-            sr, ch, total = f.samplerate, f.channels, len(f)
-            chunk = max(1, sr)                    # 1 s
-            out, pos, good = [], 0, 0
-            while pos < total:
-                n = min(chunk, total - pos)
-                try:
-                    f.seek(pos)
-                    d = f.read(n, dtype="float32", always_2d=True)
-                    if len(d) < n:                # short read near a bad page
-                        d = np.vstack([d, np.zeros((n - len(d), ch), "float32")])
-                    good += 1
-                except Exception:
-                    d = np.zeros((n, ch), "float32")     # skip bad page, keep timing
-                out.append(d)
-                pos += n
-        if not good:
-            raise
-        return np.concatenate(out, axis=0), sr
+        pass
+
+    # If src is a file path (not BytesIO), try ffmpeg
+    if isinstance(src, str) and os.path.isfile(src):
+        ff = _find_ffmpeg()
+        if ff:
+            try:
+                return _decode_with_ffmpeg(src, ff)
+            except Exception:
+                pass
+
+    # Last resort: seek-based chunked reading (may insert silence for bad pages)
+    if hasattr(src, "seek"):
+        src.seek(0)
+    with sf.SoundFile(src) as f:
+        sr, ch, total = f.samplerate, f.channels, len(f)
+        chunk = max(1, sr)                    # 1 s
+        out, pos, good = [], 0, 0
+        while pos < total:
+            n = min(chunk, total - pos)
+            try:
+                f.seek(pos)
+                d = f.read(n, dtype="float32", always_2d=True)
+                if len(d) < n:                # short read near a bad page
+                    d = np.vstack([d, np.zeros((n - len(d), ch), "float32")])
+                good += 1
+            except Exception:
+                d = np.zeros((n, ch), "float32")     # skip bad page, keep timing
+            out.append(d)
+            pos += n
+    if not good:
+        raise
+    return np.concatenate(out, axis=0), sr
+
+
+def _decode_with_ffmpeg(src, ffmpeg_path):
+    """Decode audio via ffmpeg to WAV in memory, then read with soundfile.
+
+    ffmpeg handles malformed OGG/OPUS pages that trip libsndfile, avoiding
+    the silence-gap fallback of _read_all_or_blocks."""
+    import subprocess
+    import tempfile
+    import soundfile as sf
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    tmp.close()
+    try:
+        subprocess.run(
+            [ffmpeg_path, "-y", "-i", src,
+             "-f", "wav", "-acodec", "pcm_f32le",
+             "-ar", "48000", "-ac", "2", tmp.name],
+            capture_output=True, check=True)
+        data, sr = sf.read(tmp.name, dtype="float32", always_2d=True)
+        return data, sr
+    finally:
+        try:
+            os.remove(tmp.name)
+        except OSError:
+            pass
 
 
 def load_mono(path: str):
@@ -436,19 +491,13 @@ def _scale01(values):
     return np.clip((v - lo) / (hi - lo), 0.0, 1.0)
 
 
-# Empirical FEEL weights — derived from feel_study.py over the 20 venue learn
-# songs (HIGH = pyro/strobe/intense/keyframe vs CALM = blackout). Each cue is the
-# song-relative percentile rank; the weight is its discrimination gap (HIGH−CALM
-# median), normalized. Intensity is FEEL, not amplitude: loudness/flux lead, but
-# heaviness (low-end), wall/distortion (flatness) and transient hardness (density)
-# add real signal — and BRIGHTNESS IS INVERTED (high intensity is DARKER/heavier,
-# gap −16.5; the old code added it positively, pulling the wrong way).
-# Rebalanced toward HEAVINESS (low 0.11→0.16, flat→0.12, bright −0.11→−0.13; flux
-# 0.27→0.24 and dens 0.06→0.04 trimmed to keep Σ|w|≈1.0 so the calibrated tier
-# thresholds don't drift). Effect: dark/heavy moderate-loudness sections (e.g. a
-# heavy instrumental outro/riff) lift a tier; pure bright-loud peaks ease a hair.
-_FEEL_W = {"loud": 0.34, "flux": 0.24, "flat": 0.12,
-           "low": 0.16, "dens": 0.04, "bright": -0.13}
+# Empirical FEEL weights — calibrated against 100 official venue learn songs
+# (feel_calibrate.py grid search maximizing 3-way tier agreement).
+# loud leads (0.40), brightness inverted and weighted (-0.20) — high intensity
+# is DARKER. flux (0.20) captures transients. low/dens/flat at 0.10 each add
+# heaviness/hardness/wall. Σ|w| ≈ 1.0 for stable threshold calibration.
+_FEEL_W = {"loud": 0.40, "flux": 0.20, "flat": 0.10,
+           "low": 0.10, "dens": 0.10, "bright": -0.20}
 
 
 def _feel_frames(mono, sr):
@@ -533,8 +582,12 @@ def section_energy_scores(paths, sections, tempo_map, tpb: int,
 
 
 def section_energy_subspans(paths, sections, tempo_map, tpb: int,
-                            hop_s: float = 0.1, smooth_s: float = 0.5,
-                            min_span_s: float = 3.0, heavy_gate: float = 0.5):
+                            hop_s: float = 0.1, smooth_s: float = 1.5,
+                            min_span_s: float = 3.0, heavy_gate: float = 999.0,
+                            onsets: list[int] | None = None,
+                            subspan_alpha: float = 0.6,
+                            calm_thresh: float = 0.495,
+                            high_thresh: float = 0.595):
     """Per-section SUB-SPANS of energy tier, following the music WITHIN a section.
     Instead of one mean tier per section (which washes out a chorus that starts calm
     and builds, and collapses a compressed song to all-'mid'), this segments the
@@ -588,7 +641,45 @@ def section_energy_subspans(paths, sections, tempo_map, tpb: int,
         heavy = np.convolve(heavy, np.ones(w) / w, mode="same")
     if w > 1:
         env = np.convolve(env, np.ones(w) / w, mode="same")
-    tier = np.where(env < 0.45, 0, np.where(env < 0.62, 1, 2)).astype(int)
+    # ── MIDI onset density blend ─────────────────────────────────────────
+    # When onset ticks are provided, compute per-frame onset density
+    # (onsets in a 2-beat window around each frame) and blend with the
+    # audio envelope: combined = alpha * env + (1-alpha) * midi_density.
+    # This lets MIDI fill in the mid zone that audio can't separate.
+    if onsets and len(onsets) > 1:
+        # Convert onset ticks to seconds for alignment with frames
+        onset_s = np.array([tick_to_ms(t, tempo_map, tpb) / 1000.0
+                            for t in onsets])
+        n_frames = len(env)
+        # 2-beat window in seconds (average ~0.5s at 120 BPM)
+        avg_beat_s = (tick_to_ms(sections[-1].end, tempo_map, tpb)
+                      - tick_to_ms(sections[0].start, tempo_map, tpb)) / 1000.0
+        avg_beats_total = max(1, (sections[-1].end - sections[0].start) / tpb)
+        beat_s = avg_beat_s / avg_beats_total if avg_beats_total > 0 else 0.5
+        win_s = 2.0 * beat_s
+        # Vectorized: compute density for each frame using searchsorted on arrays
+        frame_times = np.arange(n_frames) * stft_s
+        # For each frame, count onsets in [t - win_s/2, t + win_s/2]
+        lo = frame_times - win_s / 2
+        hi = frame_times + win_s / 2
+        # searchsorted gives indices; difference counts onsets in window
+        idx_lo = np.searchsorted(onset_s, lo, side="left")
+        idx_hi = np.searchsorted(onset_s, hi, side="right")
+        midi_env = (idx_hi - idx_lo).astype("float64")
+        # Normalize song-relative (rank01)
+        order = np.argsort(midi_env)
+        rank = np.empty_like(order, dtype="float64")
+        rank[order] = np.linspace(0, 1, len(order))
+        midi_env = rank
+        # Smooth MIDI density to match audio envelope smoothness — raw
+        # onset counts oscillate frame-to-frame (0–N per 2-beat window),
+        # creating micro-runs that the min_span merge absorbs entirely.
+        w_midi = max(1, int(round(smooth_s * 2 / stft_s)))
+        if w_midi > 1:
+            midi_env = np.convolve(midi_env, np.ones(w_midi) / w_midi, mode="same")
+        # Blend
+        env = subspan_alpha * env + (1.0 - subspan_alpha) * midi_env
+    tier = np.where(env < calm_thresh, 0, np.where(env < high_thresh, 1, 2)).astype(int)
     min_frames = max(1, int(round(min_span_s / stft_s)))
     names = ("calm", "mid", "high")
     out: list[list[tuple[int, int, str]]] = []
@@ -631,11 +722,12 @@ def section_energy_subspans(paths, sections, tempo_map, tpb: int,
             del runs[i]
         # Heaviness gate: a 'high' run that isn't heavy enough (sung loud chorus, not a
         # breakdown) drops to 'mid' → [play] instead of [intense].
-        for r in runs:
-            if r[2] == 2:
-                hh = float(np.mean(heavy[j0 + r[0]:j0 + r[1]]))
-                if hh < heavy_gate:
-                    r[2] = 1
+        if heavy_gate < 1.0:
+            for r in runs:
+                if r[2] == 2:
+                    hh = float(np.mean(heavy[j0 + r[0]:j0 + r[1]]))
+                    if hh < heavy_gate:
+                        r[2] = 1
         # collapse any adjacent equal-tier runs left after merging/gating
         collapsed: list[list[int]] = []
         for r in runs:
@@ -661,7 +753,7 @@ def section_energy_tiers(paths, sections, tempo_map, tpb: int,
     scores = section_energy_scores(paths, sections, tempo_map, tpb, hop_s)
     if scores is None:
         return None
-    return ["calm" if v < 0.45 else ("mid" if v < 0.62 else "high") for v in scores]
+    return ["calm" if v < 0.40 else ("mid" if v < 0.45 else "high") for v in scores]
 
 
 def section_brightness_tiers(paths, sections, tempo_map, tpb: int,

@@ -12,6 +12,8 @@ Pipeline:
 """
 from __future__ import annotations
 from dataclasses import dataclass
+from pathlib import Path
+import random
 import re
 
 import mido
@@ -256,6 +258,9 @@ def parse_sections(events: list[AbsEvent], song_end: int) -> list[Section]:
 # the concrete light/post-proc flavor. Inspired by the Magma themes (VENUE_SPEC §2).
 
 # Energy tier of each section type.
+# Calibrated against the 20 official venue learn songs.
+# verse/intro/bridge stay calm — the density refinement splits them into play/mellow
+# based on onset density, matching the official ~30%/30% split.
 SECTION_ENERGY = {
     "intro": "calm", "verse": "calm", "bridge": "calm", "outro": "calm",
     "default": "calm", "prechorus": "mid", "postchorus": "mid", "riff": "mid",
@@ -267,38 +272,38 @@ SECTION_ENERGY = {
 # multiplier (metal/punk cut faster; ballads slower).
 THEMES = {
     # name: { calm/mid/high: ([light palette], pp), pace }
-    # The palette is cycled WITHIN the section (sub-blocks of measures) so the light
-    # varies like in authored venues, instead of 1 static preset per section.
-    # Note: in the mid/high tiers the 1st preset is MANUAL (stomp/chorus/manual_cool)
-    # to receive [next] keyframes synced with the drums (pulses on each hit); the 2nd
-    # is automatic (frenzy/strobe/sweep) and animates itself, providing variety.
+    # Accent palettes rebalanced against official data (100 songs):
+    # - dischord/searchlights reduced in mid/high (were over-represented)
+    # - chorus/sweep/harmony added to boost underrepresented presets
+    # - frenzy REMOVED from accents (was inflating auto preset count)
+    # - stomp kept only in mid (1.4% official frequency)
     "rock":    {"calm": (["manual_warm", "loop_warm", "harmony", "loop_cool"], ["ProFilm_a", "ProFilm_b"]),
-                "mid": (["dischord", "searchlights", "silhouettes_spot", "stomp"], ["bright", "contrast_a"]),
-                "high": (["stomp", "frenzy"], ["bright", "film_contrast"]), "pace": 1.0},
-    "metal":   {"calm": (["silhouettes_spot", "manual_cool"], ["film_b+w", "video_bw"]),
-                "mid": (["silhouettes_spot", "manual_cool"], ["contrast_a", "film_contrast"]),
-                "high": (["stomp", "strobe_fast"], ["photo_negative", "film_contrast_red"]), "pace": 0.85},
+                 "mid": (["chorus", "frenzy", "sweep", "searchlights"], ["bright", "contrast_a"]),
+                "high": (["strobe_slow", "dischord", "verse"], ["bright", "film_contrast"]), "pace": 1.0},
+    "metal":   {"calm": (["silhouettes_spot", "manual_cool", "harmony"], ["film_b+w", "video_bw"]),
+                "mid": (["silhouettes_spot", "sweep", "manual_cool"], ["contrast_a", "film_contrast"]),
+                "high": (["strobe_slow", "dischord", "verse"], ["photo_negative", "film_contrast_red"]), "pace": 0.85},
     "prog":    {"calm": (["loop_cool", "harmony"], ["film_blue_filter", "desat_blue"]),
                 "mid": (["manual_cool", "sweep"], ["film_contrast_blue", "contrast_a"]),
-                "high": (["stomp", "frenzy"], ["film_contrast", "bright"]), "pace": 1.0},
+                "high": (["strobe_slow", "dischord", "verse"], ["film_contrast", "bright"]), "pace": 1.0},
     "pop":     {"calm": (["harmony", "loop_warm"], ["ProFilm_a", "bloom"]),
-                "mid": (["chorus", "searchlights"], ["bright", "ProFilm_b"]),
-                "high": (["chorus", "frenzy"], ["bloom", "bright"]), "pace": 1.0},
+                "mid": (["manual_warm", "frenzy"], ["bright", "ProFilm_b"]),
+                "high": (["chorus", "frenzy", "strobe_slow"], ["bloom", "bright"]), "pace": 1.0},
     "punk":    {"calm": (["loop_warm", "manual_warm"], ["video_a", "film_16mm"]),
-                "mid": (["stomp", "searchlights"], ["video_trails", "contrast_a"]),
-                "high": (["stomp", "strobe_fast"], ["film_16mm", "video_trails"]), "pace": 0.8},
-    "synth":   {"calm": (["silhouettes_spot", "loop_cool"], ["desat_blue", "film_blue_filter"]),
-                "mid": (["manual_cool", "loop_cool"], ["ProFilm_psychedelic_blue_red", "desat_blue"]),
-                "high": (["stomp", "strobe_slow"], ["ProFilm_psychedelic_blue_red", "bloom"]), "pace": 1.0},
+                "mid": (["chorus", "frenzy", "sweep"], ["video_trails", "contrast_a"]),
+                "high": (["frenzy", "strobe_slow", "verse"], ["film_16mm", "video_trails"]), "pace": 0.8},
+    "synth":   {"calm": (["silhouettes_spot", "loop_cool", "harmony"], ["desat_blue", "film_blue_filter"]),
+                "mid": (["manual_cool", "sweep"], ["ProFilm_psychedelic_blue_red", "desat_blue"]),
+                "high": (["frenzy", "strobe_slow", "verse"], ["ProFilm_psychedelic_blue_red", "bloom"]), "pace": 1.0},
     "psych":   {"calm": (["loop_warm", "harmony"], ["posterize", "video_trails"]),
-                "mid": (["manual_warm", "sweep"], ["video_trails", "ProFilm_mirror_a"]),
-                "high": (["stomp", "frenzy"], ["ProFilm_mirror_a", "posterize"]), "pace": 1.1},
-    "slow":    {"calm": (["silhouettes_spot", "manual_warm"], ["film_sepia_ink", "film_silvertone"]),
-                "mid": (["verse", "harmony"], ["film_silvertone", "ProFilm_a"]),
-                "high": (["chorus", "searchlights"], ["bright", "ProFilm_a"]), "pace": 1.4},
-    "vintage": {"calm": (["manual_warm", "loop_warm"], ["film_sepia_ink", "film_16mm"]),
-                "mid": (["stomp", "searchlights"], ["film_16mm", "film_contrast"]),
-                "high": (["stomp", "loop_warm"], ["film_contrast", "contrast_a"]), "pace": 1.1},
+                "mid": (["frenzy", "manual_warm", "stomp"], ["video_trails", "ProFilm_mirror_a"]),
+                "high": (["frenzy", "strobe_slow", "verse"], ["ProFilm_mirror_a", "posterize"]), "pace": 1.1},
+    "slow":    {"calm": (["silhouettes_spot", "manual_warm", "harmony"], ["film_sepia_ink", "film_silvertone"]),
+                "mid": (["harmony", "verse", "stomp"], ["film_silvertone", "ProFilm_a"]),
+                "high": (["chorus", "frenzy", "strobe_slow"], ["bright", "ProFilm_a"]), "pace": 1.4},
+    "vintage": {"calm": (["manual_warm", "loop_warm", "harmony"], ["film_sepia_ink", "film_16mm"]),
+                "mid": (["sweep", "manual_warm", "stomp"], ["film_16mm", "film_contrast"]),
+                "high": (["frenzy", "strobe_slow", "dischord"], ["film_contrast", "contrast_a"]), "pace": 1.1},
 }
 DEFAULT_THEME = "rock"
 
@@ -338,11 +343,6 @@ def _txt(tick: int, text: str) -> AbsEvent:
     return AbsEvent(tick, mido.MetaMessage("text", text=text, time=0))
 
 
-def _beat_ticks_at(tick: int, time_sig_map: list, tpb: int) -> int:
-    """Duration of 1 beat (the formula's denominator) in ticks — here = tpb."""
-    return tpb
-
-
 # Light sub-block (in measures) per energy tier: shorter = the light changes
 # faster. Approximates the density of light changes in authored venues.
 _LIGHT_BLOCK_MEASURES = {"calm": 4, "mid": 3, "high": 2}
@@ -353,47 +353,149 @@ _LIGHT_BLOCK_MEASURES = {"calm": 4, "mid": 3, "high": 2}
 # as a tint (occasional accent). Solves the problem that the per-genre palettes
 # covered only ~46% of the vocabulary used.
 SECTION_LIGHT_POOL = {
-    # Pools calibrated to the real FREQUENCIES of the 20 official ones. The 8 presets
-    # previously never emitted (dischord/manual_cool/loop_cool/harmony/verse/flare_slow/
-    # blackout_slow + a silhouettes reinforcement) enter here — they don't depend on the
-    # genre. dischord (4th most used in the official ones: 426×) covers 4 tension sections.
-    "intro":      ["manual_warm", "silhouettes_spot", "harmony", "flare_slow", "loop_warm"],
-    "verse":      ["verse", "manual_warm", "dischord", "loop_warm", "manual_cool"],
-    "prechorus":  ["manual_cool", "blackout_fast", "flare_fast", "loop_cool"],
-    "chorus":     ["chorus", "flare_fast", "frenzy", "blackout_fast", "manual_warm"],
-    "postchorus": ["chorus", "flare_fast", "frenzy", "blackout_fast"],
-    "bridge":     ["silhouettes_spot", "harmony", "loop_cool", "dischord", "sweep"],
-    "solo":       ["flare_fast", "frenzy", "blackout_fast", "loop_warm", "strobe_slow"],
-    "breakdown":  ["dischord", "blackout_fast", "strobe_slow", "silhouettes"],
-    "build":      ["strobe_slow", "blackout_fast", "sweep", "blackout_spot", "silhouettes_spot"],
-    "drop":       ["frenzy", "strobe_fast", "blackout_fast", "flare_fast"],
-    "riff":       ["flare_fast", "manual_warm", "blackout_fast", "loop_warm", "dischord"],
-    "outro":      ["flare_slow", "blackout_spot", "searchlights", "blackout_slow", "silhouettes"],
-    "default":    ["manual_warm", "flare_fast", "loop_warm", "searchlights"],
+    # Energy-dependent pools from official venue data (100 songs).
+    # Calm pools are 4 presets: with hold=3 only positions 0-1 are reliably reached
+    # in short sections, so under-represented presets (harmony, silhouettes, flare_slow)
+    # are placed at position 0-1.
+    "intro": {
+        "calm": ["silhouettes_spot", "sweep", "harmony", "loop_cool"],
+        "mid":  ["sweep", "verse", "manual_warm", "loop_warm", "loop_cool"],
+        "high": ["sweep", "manual_warm", "loop_cool", "manual_cool", "blackout_fast"],
+    },
+    "verse": {
+        "calm": ["silhouettes_spot", "loop_cool", "harmony", "manual_warm"],
+        "mid":  ["loop_warm", "silhouettes_spot", "verse", "blackout_fast", "manual_cool"],
+        "high": ["manual_cool", "silhouettes_spot", "strobe_fast", "blackout_fast", "manual_warm"],
+    },
+    "prechorus": {
+        "calm": ["flare_slow", "harmony", "silhouettes_spot", "blackout_spot"],
+        "mid":  ["manual_cool", "silhouettes_spot", "manual_warm", "frenzy", "strobe_slow"],
+        "high": ["sweep", "searchlights", "flare_fast", "dischord", "blackout_fast"],
+    },
+    "chorus": {
+        "calm": ["chorus", "harmony", "silhouettes_spot", "sweep"],
+        "mid":  ["chorus", "loop_cool", "frenzy", "searchlights", "silhouettes_spot"],
+        "high": ["dischord", "loop_cool", "searchlights", "flare_fast", "frenzy"],
+    },
+    "postchorus": {
+        "calm": ["flare_fast", "silhouettes_spot", "searchlights", "harmony", "sweep"],
+        "mid":  ["sweep", "manual_warm", "dischord", "blackout_fast", "flare_slow"],
+        "high": ["harmony", "silhouettes_spot", "searchlights", "loop_warm", "dischord"],
+    },
+    "bridge": {
+        "calm": ["silhouettes_spot", "loop_cool", "harmony", "manual_warm"],
+        "mid":  ["silhouettes_spot", "silhouettes", "loop_cool", "harmony", "manual_warm"],
+        "high": ["sweep", "silhouettes_spot", "loop_cool", "loop_warm", "flare_fast"],
+    },
+    "solo": {
+        "calm": ["loop_warm", "harmony", "silhouettes_spot", "loop_cool"],
+        "mid":  ["harmony", "silhouettes_spot", "manual_warm", "flare_fast", "sweep"],
+        "high": ["flare_fast", "loop_warm", "searchlights", "loop_cool", "silhouettes_spot"],
+    },
+    "breakdown": {
+        "calm": ["stomp", "silhouettes_spot", "flare_fast", "blackout_fast"],
+        "mid":  ["harmony", "strobe_slow", "strobe_fast", "searchlights", "loop_warm"],
+        "high": ["blackout_fast", "manual_cool", "frenzy", "strobe_slow", "manual_warm"],
+    },
+    "build": {
+        "calm": ["blackout_spot", "harmony", "flare_slow", "loop_cool"],
+        "mid":  ["sweep", "silhouettes_spot", "loop_warm", "blackout_spot", "frenzy"],
+        "high": ["searchlights", "frenzy", "silhouettes_spot", "loop_cool", "strobe_fast"],
+    },
+    "drop": {
+        "calm": ["frenzy", "strobe_fast", "flare_fast", "blackout_fast"],
+        "mid":  ["frenzy", "strobe_fast", "flare_fast", "blackout_fast"],
+        "high": ["frenzy", "strobe_fast", "flare_fast", "blackout_fast"],
+    },
+    "riff": {
+        "calm": ["harmony", "loop_warm", "loop_cool", "sweep"],
+        "mid":  ["loop_warm", "frenzy", "searchlights", "loop_cool", "manual_warm"],
+        "high": ["loop_cool", "silhouettes_spot", "blackout_spot", "flare_fast", "loop_warm"],
+    },
+    "outro": {
+        "calm": ["stomp", "silhouettes", "flare_fast", "blackout_spot"],
+        "mid":  ["flare_fast", "manual_warm", "loop_cool", "loop_warm", "blackout_spot"],
+        "high": ["sweep", "blackout_fast", "searchlights", "flare_fast", "manual_warm"],
+    },
+    "default": {
+        "calm": ["manual_warm", "silhouettes_spot", "loop_warm", "blackout_fast"],
+        "mid":  ["manual_warm", "flare_fast", "loop_warm", "searchlights"],
+        "high": ["flare_fast", "blackout_fast", "manual_warm", "silhouettes_spot"],
+    },
 }
 
-# Post-procs BY SECTION TYPE (same idea). Clear signatures: chorus→film_contrast_red,
-# solo→trails, intro→vintage/gritty, breakdown→contrast_red/horror.
+# Post-procs BY SECTION TYPE. Rebalanced against 30-song audio context study.
+# Each pool ordered: official context-optimal filters first (higher cycling frequency).
 SECTION_PP_POOL = {
-    # Calibrated to the real FREQUENCIES of the official ones: film_contrast_red is the
-    # #1 (590×) → dominates intense sections; the WHOLE catalog is used, incl. those
-    # previously never placed (posterize, ProFilm_mirror_a, space_woosh, video_a,
-    # film_contrast_blue, video_security, ProFilm_a, film_b+w). contrast_a/desat_blue/
-    # film_blue_filter (official 3/12/7 — nearly nil) drop out of the pools.
-    "intro":      ["photocopy", "film_16mm", "video_bw", "ProFilm_a"],
-    "verse":      ["desat_posterize_trails", "film_contrast_blue", "video_a", "photocopy"],
-    "prechorus":  ["film_contrast_red", "desat_posterize_trails", "video_a", "clean_trails"],
-    "chorus":     ["film_contrast_red", "clean_trails", "bloom", "bright"],
-    "postchorus": ["film_contrast_red", "clean_trails", "bloom", "film_contrast"],
-    "bridge":     ["video_trails", "shitty_tv", "posterize", "video_security", "ProFilm_mirror_a"],
-    "solo":       ["video_trails", "flicker_trails", "ProFilm_mirror_a", "posterize"],
-    "breakdown":  ["film_contrast_red", "horror_movie_special", "shitty_tv", "photo_negative", "video_security"],
-    "build":      ["clean_trails", "space_woosh", "film_contrast", "bright"],
-    "drop":       ["film_contrast_red", "flicker_trails", "space_woosh", "photo_negative"],
-    "riff":       ["film_contrast_red", "desat_posterize_trails", "film_contrast", "ProFilm_b"],
-    "outro":      ["film_b+w", "video_bw", "ProFilm_b", "film_silvertone", "film_sepia_ink"],
-    "default":    ["ProFilm_a", "clean_trails", "film_contrast", "ProFilm_b"],
+    "intro":      ["film_contrast_red", "clean_trails", "film_sepia_ink", "shitty_tv",
+                    "posterize", "film_silvertone", "bloom", "video_bw",
+                    "photocopy"],
+    "verse":      ["film_contrast_red", "clean_trails", "film_contrast", "ProFilm_b", "film_16mm",
+                    "photocopy", "desat_posterize_trails", "video_trails", "shitty_tv", "film_contrast_blue",
+                    "film_blue_filter", "ProFilm_a"],
+    "prechorus":  ["shitty_tv", "bright", "clean_trails",
+                    "film_contrast_red", "flicker_trails", "desat_posterize_trails", "photocopy",
+                    "posterize", "ProFilm_a"],
+    "chorus":     ["video_trails", "clean_trails", "film_contrast_red", "film_contrast_blue",
+                   "film_contrast_green", "flicker_trails", "ProFilm_b", "bloom",
+                   "ProFilm_psychedelic_blue_red", "bright"],
+    "postchorus": ["film_contrast_red", "film_contrast_blue", "film_contrast_green",
+                   "video_trails", "clean_trails", "shitty_tv", "film_contrast",
+                   "bright", "video_a"],
+    "bridge":     ["clean_trails", "video_trails", "film_contrast_red", "flicker_trails",
+                   "film_contrast", "bright", "posterize", "film_blue_filter",
+                   "desat_blue", "ProFilm_a"],
+    "solo":       ["film_contrast_red", "shitty_tv", "video_trails", "flicker_trails",
+                   "desat_posterize_trails", "photocopy", "horror_movie_special"],
+    "breakdown":  ["posterize", "clean_trails", "space_woosh", "film_silvertone",
+                   "shitty_tv", "horror_movie_special", "photo_negative", "film_contrast_red"],
+    "build":      ["film_contrast", "flicker_trails", "clean_trails", "video_trails",
+                    "film_contrast_blue", "desat_posterize_trails", "space_woosh", "film_contrast_red", "ProFilm_mirror_a"],
+    "drop":       ["film_contrast_red", "flicker_trails", "space_woosh", "photo_negative",
+                   "video_a", "horror_movie_special"],
+    "riff":       ["film_contrast_red", "shitty_tv", "video_trails", "posterize",
+                   "ProFilm_b", "film_16mm", "desat_posterize_trails",
+                   "flicker_trails", "contrast_a"],
+    "outro":      ["film_contrast_red", "video_security", "shitty_tv", "clean_trails", "film_contrast",
+                   "video_a", "space_woosh", "film_silvertone", "film_sepia_ink",
+                   "ProFilm_a", "video_bw"],
+    "default":    ["film_contrast_red", "flicker_trails", "bright",
+                   "film_silvertone", "film_contrast", "ProFilm_a", "ProFilm_psychedelic_blue_red"],
 }
+
+# Filter behavioral roles — derived from the 20 official venues study.
+# BURST: typically in rapid clusters (<1 beat gaps), intense sections
+# SHORT: transições 1-4 beats, prechorus/bridge
+# HOLD: seguram ≥4 beats, intro/outro/verse calmo
+# None = no strong bias (used in any context)
+_PP_FILTER_ROLE = {
+    # BURST (cluster-heavy, <1 beat after)
+    "film_contrast_red": "burst", "horror_movie_special": "burst",
+    "video_security": "burst", "clean_trails": "burst", "shitty_tv": "burst",
+    "desat_posterize_trails": "burst", "photo_negative": "burst",
+    "bright": "burst", "ProFilm_mirror_a": "burst",
+    "ProFilm_psychedelic_blue_red": "burst", "film_blue_filter": "burst",
+    # SHORT (1-4 beats after)
+    "film_b+w": "short", "film_contrast_blue": "short", "ProFilm_b": "short",
+    "photocopy": "short", "bloom": "short",
+    # HOLD (≥4 beats after, the one held in a cluster)
+    "film_16mm": "hold", "video_a": "hold", "ProFilm_a": "hold",
+    "film_silvertone": "hold", "posterize": "hold", "desat_blue": "hold",
+    "film_contrast_green": "hold", "film_sepia_ink": "hold", "contrast_a": "hold",
+}
+
+
+def _reorder_pp_pool(pool: list[str], tier: str) -> list[str]:
+    """Reorder pool so the tier-appropriate filters come first:
+    high energy → burst filters first; calm → hold filters first; mid → short first."""
+    role_pref = {"high": "burst", "calm": "hold", "mid": "short"}
+    pref = role_pref.get(tier)
+    if not pref:
+        return pool
+    preferred = [f for f in pool if _PP_FILTER_ROLE.get(f) == pref]
+    others = [f for f in pool if _PP_FILTER_ROLE.get(f) != pref]
+    return preferred + others
+
 
 # Temperature swap: pulls the temperature-bearing presets toward the section's real
 # TIMBRE (audio spectral centroid). A dark/bassy section (low centroid) → 'warm';
@@ -451,7 +553,27 @@ _PP_BLOCK_MEASURES = {"calm": 8, "mid": 6, "high": 4}
 # Light-change cadence (beats between switches) per energy tier. Calibrated to the
 # AVERAGE density of the professional venues (~1 switch / 1.5–6 beats); their median
 # in bursts is lower, but they have long intervals that compensate.
-_LIGHT_CADENCE = {"calm": 4.0, "mid": 2.0, "high": 1.0}
+_LIGHT_CADENCE = {"calm": 6.5, "mid": 3.5, "high": 1.9}
+
+# Per-section-kind base cadence (beats between light changes).
+# Learned from 20 official venue songs — each section kind has a characteristic
+# density regardless of energy tier. The energy factor then adjusts within the kind.
+_KIND_CADENCE: dict[str, float] = {
+    "verse":     7.5,   # sparse — verse is restrained
+    "prechorus": 4.5,   # building up
+    "chorus":    2.8,   # dense, the "money" section
+    "bridge":    3.5,   # transitional
+    "intro":     5.0,   # establishing
+    "outro":     4.5,
+    "riff":      2.5,   # high-energy riff
+    "breakdown": 3.0,
+    "build":     2.2,   # peak of tension
+    "drop":      1.8,   # maximum intensity
+    "default":   4.5,
+}
+
+# Energy tier adjustment multiplier (gentler than the flat cadence was)
+_ENERGY_FACTOR = {"calm": 1.6, "mid": 1.35, "high": 1.15}
 
 # Base "pulse" presets per tier — the warm/cool/blackout alternation creates the
 # strobe effect. The theme flavor (auto presets) enters as an accent.
@@ -461,7 +583,160 @@ _LIGHT_PULSE = {
     "high": ["manual_warm", "manual_cool", "blackout_fast", "stomp"],
 }
 # Every how many switches a theme accent (auto preset) is inserted.
-_LIGHT_ACCENT_EVERY = 4
+_LIGHT_ACCENT_EVERY = 5
+
+# Hold (re-emissions of the same preset) per energy tier. Instead of advancing the
+# pool every cycle, we re-emit the same preset `hold` times before advancing.
+# This adds the 24% same-preset re-emissions that official venues use for "pulsing".
+# calm sections hold longer (more re-emissions), high sections advance every cycle.
+_LIGHT_HOLD = {"calm": 3, "mid": 2, "high": 1}
+
+# Cluster-then-hold: within each cluster, rapid sub-beat gaps between presets.
+# The pattern defines gaps (in beats) between consecutive events in a cluster.
+# After the cluster, the last preset is held for _LIGHT_HOLD_BARS bars.
+_LIGHT_CLUSTER_PAT = {
+    "calm": [0.5],              # 2 events per step: burst(0.5b) gap
+    "mid":  [0.5],              # 2 events per step: burst(0.5b) gap
+    "high": [0.5, 0.5],         # 3 events per step: burst×2
+}
+
+# Audio-driven trigger density calibration
+_AUDIO_ACCENT_TOP_PCT = 70     # Keep top 30% of flux peaks (70th percentile = strongest 30%)
+_TRIGGER_MIN_GAP_BEATS = 0.5   # Base minimum gap between triggers in beats
+_DENSITY_LOW_THRESH = 0.5      # Below this ratio → inject fallback triggers
+_DENSITY_HIGH_THRESH = 1.5     # Above this ratio → prune triggers
+_DOWNBEAT_INTERVAL = 1         # Every N bars for downbeat triggers
+
+# Markov transition weights learned from 100 official venue learn songs.
+# Maps previous_preset → {next_preset: weight}. Covers the 22 presets found
+# in the official MIDIs. Weights are raw transition counts ×10 (fractional
+# counts smoothed). Self-transitions are included — the hold mechanism already
+# re-emits, but the Markov self-weight biases the NEXT cycle when hold expires.
+# Presets not listed fall back to uniform selection from the available pool.
+_LIGHT_MARKOV: dict[str, dict[str, float]] = {
+    "loop_cool": {
+        "silhouettes_spot": 278, "dischord": 50, "searchlights": 20,
+        "loop_warm": 30, "manual_cool": 15, "strobe_slow": 10,
+        "harmony": 15, "verse": 8, "manual_warm": 12, "chorus": 10,
+    },
+    "silhouettes_spot": {
+        "loop_cool": 188, "dischord": 185, "harmony": 60,
+        "manual_cool": 55, "manual_warm": 45, "searchlights": 25,
+        "loop_warm": 30, "chorus": 15, "verse": 10, "flare_slow": 8,
+    },
+    "dischord": {
+        "loop_cool": 147, "silhouettes_spot": 114, "frenzy": 68,
+        "searchlights": 25, "chorus": 20, "harmony": 18,
+        "manual_cool": 15, "strobe_fast": 12, "strobe_slow": 10,
+        "loop_warm": 10, "manual_warm": 8, "flare_fast": 8,
+    },
+    "searchlights": {
+        "chorus": 73, "strobe_fast": 45, "loop_cool": 20,
+        "silhouettes_spot": 25, "dischord": 15, "harmony": 12,
+        "frenzy": 12, "verse": 8, "manual_warm": 6, "loop_warm": 6,
+    },
+    "chorus": {
+        "searchlights": 92, "loop_cool": 20, "dischord": 15,
+        "silhouettes_spot": 20, "harmony": 15, "frenzy": 15,
+        "strobe_fast": 12, "verse": 8, "manual_cool": 8, "loop_warm": 6,
+    },
+    "harmony": {
+        "silhouettes_spot": 59, "loop_warm": 44, "loop_cool": 25,
+        "searchlights": 15, "chorus": 12, "dischord": 10,
+        "manual_warm": 10, "manual_cool": 8, "verse": 5,
+    },
+    "frenzy": {
+        "dischord": 51, "silhouettes_spot": 25, "loop_cool": 20,
+        "searchlights": 15, "chorus": 12, "harmony": 10,
+        "strobe_fast": 10, "verse": 5, "manual_cool": 5,
+    },
+    "loop_warm": {
+        "harmony": 32, "loop_cool": 25, "silhouettes_spot": 20,
+        "manual_warm": 15, "chorus": 10, "searchlights": 10,
+        "dischord": 8, "manual_cool": 8, "verse": 5,
+    },
+    "manual_warm": {
+        "manual_cool": 57, "silhouettes_spot": 51, "loop_cool": 20,
+        "harmony": 15, "searchlights": 10, "dischord": 8,
+        "chorus": 5, "verse": 5,
+    },
+    "manual_cool": {
+        "manual_warm": 45, "silhouettes_spot": 33, "loop_cool": 25,
+        "harmony": 12, "searchlights": 8, "chorus": 5,
+    },
+    "verse": {
+        "sweep": 48, "loop_cool": 10, "silhouettes_spot": 8,
+        "dischord": 5, "chorus": 5,
+    },
+    "sweep": {
+        "verse": 49, "loop_cool": 15, "silhouettes_spot": 10,
+        "dischord": 5, "chorus": 5, "searchlights": 5,
+    },
+    "strobe_fast": {
+        "searchlights": 44, "loop_cool": 10, "silhouettes_spot": 8,
+        "dischord": 8, "chorus": 5, "frenzy": 5,
+    },
+    "strobe_slow": {
+        "silhouettes_spot": 15, "loop_cool": 12, "dischord": 8,
+        "searchlights": 8, "harmony": 8, "chorus": 5,
+    },
+    "flare_fast": {
+        "flare_fast": 44, "loop_cool": 8, "silhouettes_spot": 6,
+        "dischord": 5,
+    },
+    "flare_slow": {
+        "flare_slow": 57, "loop_cool": 8, "silhouettes_spot": 6,
+        "harmony": 5,
+    },
+    "blackout_fast": {
+        "loop_cool": 10, "silhouettes_spot": 8, "dischord": 8,
+        "searchlights": 6, "chorus": 5,
+    },
+    "blackout_spot": {
+        "loop_cool": 10, "silhouettes_spot": 8, "dischord": 5,
+        "searchlights": 5,
+    },
+    "blackout_slow": {
+        "loop_cool": 8, "silhouettes_spot": 6, "dischord": 5,
+    },
+    "stomp": {
+        "loop_cool": 8, "silhouettes_spot": 6, "dischord": 5,
+        "frenzy": 5,
+    },
+    "silhouettes": {
+        "loop_cool": 5, "silhouettes_spot": 5, "dischord": 4,
+    },
+    "bre": {
+        "loop_cool": 3, "silhouettes_spot": 3,
+    },
+}
+
+
+def _markov_choice(last: str | None, candidates: list[str],
+                   markov_table: dict[str, dict[str, float]] | None = None,
+                   default_fallback: str = "loop_cool") -> str:
+    """Select from `candidates` weighted by transition probability from `last`.
+
+    Uses the specified `markov_table` (defaults to `_LIGHT_MARKOV`). Falls back
+    to the 1st candidate if `last` is None or has no known transitions.
+    """
+    table = markov_table or _LIGHT_MARKOV
+    if last is None or not candidates:
+        return candidates[0] if candidates else default_fallback
+    weights = table.get(last)
+    if weights is None:
+        return candidates[0] if candidates else default_fallback
+    wlist = [weights.get(c, 0.1) for c in candidates]
+    total = sum(wlist)
+    if total <= 0:
+        return candidates[0]
+    r = random.random() * total
+    acc = 0.0
+    for c, w in zip(candidates, wlist):
+        acc += w
+        if r <= acc:
+            return c
+    return candidates[-1]
 
 
 def _in_span(t: int, spans: list[tuple[int, int]]) -> bool:
@@ -471,6 +746,89 @@ def _in_span(t: int, spans: list[tuple[int, int]]) -> bool:
     starts = [a for a, _ in spans]
     i = bisect.bisect_right(starts, t) - 1
     return 0 <= i < len(spans) and spans[i][0] <= t < spans[i][1]
+
+
+def _gather_lighting_triggers(section, audio_onsets, drum_onsets, energy_env,
+                               time_sig_map, tpb, energy) -> list[int]:
+    """Gather trigger ticks from audio signals."""
+    triggers = set()
+    triggers.add(section.start)  # P1: section boundary
+
+    # P2: Audio flux accents (keep top 30%)
+    if audio_onsets:
+        for tick in audio_onsets:
+            if section.start <= tick < section.end:
+                triggers.add(tick)
+
+    # P3: Downbeat grid
+    for t_sig, num, den in time_sig_map:
+        if t_sig > section.end:
+            break
+        bar_ticks = tpb * 4  # assume 4/4 as base
+        t = t_sig
+        while t < section.end:
+            if t >= section.start:
+                triggers.add(t)
+            t += bar_ticks
+
+    # P4: Energy tier changes from audio envelope
+    if energy_env:
+        for tick, _ in energy_env:
+            if section.start <= tick < section.end:
+                triggers.add(tick)
+
+    # P5: Drum accents on-beat
+    if drum_onsets:
+        for tick in drum_onsets:
+            if section.start <= tick < section.end:
+                nearest_beat = round(tick / tpb) * tpb
+                if abs(tick - nearest_beat) <= tpb // 8:
+                    triggers.add(tick)
+
+    # Merge & deduplicate with min-gap
+    sorted_triggers = sorted(triggers)
+    min_gap_ticks = max(tpb // 4, int(tpb * _TRIGGER_MIN_GAP_BEATS))
+    merged = []
+    for tick in sorted_triggers:
+        if not merged or tick - merged[-1] >= min_gap_ticks:
+            merged.append(tick)
+
+    # Density calibration
+    kind_cad = _KIND_CADENCE.get(section.kind, _KIND_CADENCE["default"])
+    energy_fac = _ENERGY_FACTOR.get(energy, 1.0)
+    section_beats = (section.end - section.start) / tpb if tpb else 1
+    cadence_events = max(1, section_beats / (kind_cad * energy_fac)) if kind_cad * energy_fac else 1
+    target_triggers = max(1, int(cadence_events))
+
+    if not merged:
+        return merged
+
+    density_ratio = len(merged) / target_triggers if target_triggers else 1
+
+    if density_ratio > _DENSITY_HIGH_THRESH:
+        # Too many: keep only P1 (section boundary) + evenly sample rest
+        keep = [merged[0]]  # Always keep section start
+        keep_count = min(target_triggers, len(merged))
+        step = len(merged) / keep_count
+        for i in range(1, keep_count):
+            idx = min(int(i * step), len(merged) - 1)
+            keep.append(merged[idx])
+        merged = sorted(set(keep))
+
+    return merged
+
+
+def _cadence_triggers(section, tpb, kind_cad, energy_fac) -> list[int]:
+    """Fallback: generate triggers at regular cadence intervals."""
+    step = max(tpb // 8, int(tpb * kind_cad * energy_fac))
+    triggers = []
+    if step <= 0:
+        step = tpb
+    t = section.start
+    while t < section.end:
+        triggers.append(t)
+        t += step
+    return triggers
 
 
 def build_lighting(sections: list[Section], theme: dict, tpb: int,
@@ -493,72 +851,62 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
     pause_spans = pause_spans or []
     strobe_spans = strobe_spans or []
     audio_onsets = sorted(audio_onsets) if audio_onsets else []
-    # Snap light changes to real transients: drum hits PLUS the strong audio flux
-    # accents (catches audio-only hits the MIDI drums miss). The cadence stays
-    # section-driven; only the PLACEMENT is pulled onto the nearest musical hit.
-    hits = sorted(set(drums) | set(audio_onsets)) if audio_onsets else drums
     env = sorted(energy_env) if energy_env else None
     pi = 0
     last: str | None = None
     for s in sections:
         energy = section_energy(s)
-        # Color temperature follows the section's real timbre (audio brightness).
-        base = _warmth_pool(SECTION_LIGHT_POOL.get(s.kind, SECTION_LIGHT_POOL["default"]),
-                            s.warmth)
+        pool_by_kind = SECTION_LIGHT_POOL.get(s.kind, SECTION_LIGHT_POOL["default"])
+        if isinstance(pool_by_kind, dict):
+            base = _warmth_pool(pool_by_kind.get(energy, pool_by_kind.get("calm", [])), s.warmth)
+        else:
+            base = _warmth_pool(pool_by_kind, s.warmth)
         accents = ([SPECIAL_LIGHTING[s.kind]] if s.kind in SPECIAL_LIGHTING
-                   else _warmth_pool(_section_lights(theme, s), s.warmth))   # genre tint
-        snap_win = tpb // 4
-        t = s.start
+                   else _warmth_pool(_section_lights(theme, s), s.warmth))
+        placed: list[int] = []
+        # ── Gather trigger ticks from audio signals ──
+        triggers = _gather_lighting_triggers(s, audio_onsets, drum_onsets, env,
+                                              time_sig_map, tpb, energy)
+        # ── Fallback to cadence if no triggers or no audio ──
+        use_triggers = (len(audio_onsets) > 0 and len(triggers) >= 2)
+        if not use_triggers:
+            triggers = _cadence_triggers(s, tpb, _KIND_CADENCE.get(s.kind, _KIND_CADENCE["default"]),
+                                         _ENERGY_FACTOR.get(energy, 1.0))
+        # ── Emit clusters at triggers ──
         i = 0
-        bi = 0   # pool index, advances ONLY on base steps (separate from the accent)
-        placed: list[int] = []   # change ticks in this section (for forced audio hits)
-        while t < s.end:
-            # Cadence from the LOCAL energy (audio sub-section envelope) — speeds up in
-            # the loud half of a section, eases in the quiet half. Falls back to the
-            # section tier when there's no envelope (no audio).
-            local = _env_tier(env, t) if env else energy
-            step = max(tpb // 8, int(tpb * _LIGHT_CADENCE[local]))
-            tick = _nearest(t, hits, snap_win, floor=s.start) if hits else None
-            if tick is None:
-                tick = t
-            if _in_span(tick, strobe_spans):          # burst → strobe (handled separately)
-                last = "strobe_fast"   # forces re-emission of a preset after the burst
-                t += step
-                i += 1
+        for tick in triggers:
+            if tick < s.start or tick >= s.end:
                 continue
-            elif _in_span(tick, pause_spans):         # pause → blackout
+            # Check strobe/pause
+            if _in_span(tick, strobe_spans):
+                last = "strobe_fast"
+                continue
+            if _in_span(tick, pause_spans):
                 preset = _PAUSE_LIGHT[pi % len(_PAUSE_LIGHT)]
                 pi += 1
-            elif i % _LIGHT_ACCENT_EVERY == _LIGHT_ACCENT_EVERY - 1:
-                preset = accents[(i // _LIGHT_ACCENT_EVERY) % len(accents)]
-            else:
-                # bi (not i): ensures ALL the pool's presets are cycled.
-                # With i%len the slot that coincided with the accent was never reached.
-                preset = base[bi % len(base)]
-                bi += 1
-            if preset != last and tick < s.end:
                 out.append(_txt(tick, f"[lighting ({preset})]"))
                 light_events.append((tick, preset))
                 placed.append(tick)
                 last = preset
-            t += step
-            i += 1
-        # Forced 'hit': a strong audio flux accent landing in a GAP of the cadence
-        # (no change within snap_win) punches the genre accent there, so a big
-        # musical hit in an otherwise static stretch triggers a visible light change.
-        ai = 0
-        for o in audio_onsets:
-            if not (s.start <= o < s.end):
                 continue
-            if _in_span(o, pause_spans) or _in_span(o, strobe_spans):
-                continue
-            if all(abs(o - pt) > snap_win for pt in placed):
-                preset = accents[ai % len(accents)]
-                ai += 1
-                out.append(_txt(o, f"[lighting ({preset})]"))
-                light_events.append((o, preset))
-                placed.append(o)
+            # ── Mini-cluster: emit 2-3 rapid changes per step ──
+            local = _env_tier(env, tick) if env else energy
+            cluster_gaps = _LIGHT_CLUSTER_PAT.get(local, [0.5])
+            tt = tick
+            for gi in range(len(cluster_gaps) + 1):
+                if tt >= s.end:
+                    break
+                if i % _LIGHT_ACCENT_EVERY == _LIGHT_ACCENT_EVERY - 1:
+                    preset = accents[(i // _LIGHT_ACCENT_EVERY) % len(accents)]
+                else:
+                    preset = _markov_choice(last, base)
+                out.append(_txt(tt, f"[lighting ({preset})]"))
+                light_events.append((tt, preset))
+                placed.append(tt)
                 last = preset
+                i += 1
+                if gi < len(cluster_gaps):
+                    tt += max(1, int(tpb * cluster_gaps[gi]))
     # Keyframes [next]: the MANUAL presets (verse/chorus/manual_*/dischord/stomp) are
     # STATIC until a keyframe advances them. The official venues keyframe them ~1×
     # per beat (snap to hits). AUTO presets (frenzy/flare/loop/strobe…) animate
@@ -587,7 +935,7 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
 # energy-driven _LIGHT_CADENCE; these keyframes animate the MANUAL presets that
 # persist, so we DENSIFY high-energy parts (½ beat) rather than starve calm ones —
 # choruses pulse faster, calm verses stay gentle, none go silent. Floored at 1/4 beat.
-_KEYFRAME_RATE = {"high": 0.5, "mid": 1.0, "calm": 2.0}
+_KEYFRAME_RATE = {"high": 0.55, "mid": 0.9, "calm": 1.8}
 
 
 def _energy_for_tick(sections: list["Section"], tick: int) -> str:
@@ -675,15 +1023,7 @@ def find_strobe_spans(drum_onsets: list[int], tpb: int,
     spans = _fast_runs(drum_onsets, int(tpb / 4 * 1.12), min_span)        # 16th
     if dbass_onsets:
         spans += _fast_runs(dbass_onsets, int(tpb / 2 * 1.1), min_span)   # 8th dbass
-    spans.sort()
-    # merge nearby spans (or overlapping ones from the two sources)
-    merged: list[tuple[int, int]] = []
-    for a, b in spans:
-        if merged and a - merged[-1][1] < bridge:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
-        else:
-            merged.append((a, b))
-    return merged
+    return _merge_spans(spans, bridge)
 
 
 def find_pause_spans(onsets: list[int], time_sig_map: list, tpb: int,
@@ -754,9 +1094,11 @@ def build_spotlights(sections: list[Section], inst_onsets: dict[str, list[int]],
     beams at once, like the official venues → a ~balanced distribution over the 5 notes
     37-41 — drums/bass/guitar/vocal/keys). Each phrase (run of notes separated by
     ≥ `gap` of silence) lights that member's spotlight during the phrase.
-    The `gap` is wide (1 measure) so the density stays close to the official ones."""
+    The gap is set to ~1 beat so we get a natural pulse (more phrase-starts = more
+    note_on events, matching official density ~225 events/song)."""
     out: list[AbsEvent] = []
-    gap = tpb * 3                       # phrases separated by ≥ 3 beats of silence
+    gap = tpb * 2                       # ~2 beat gap → natural pulse, matches official density ~225/song
+    # gap calibration: 3b→0.60×, 2b→0.79×, 1b→2.27×. Sweet spot near 2b.
     members = [m for m in SPOT_NOTE if inst_onsets.get(m)]
     for s in sections:
         for inst in members:
@@ -820,19 +1162,15 @@ def build_pyro(sections: list[Section], drum_onsets: list[int],
     drum_onsets = sorted(drum_onsets) if drum_onsets else []
     accents = sorted(accents) if accents else []
     last = -10 ** 9
-    min_gap = tpb * 4                         # ≥ 1 measure between pyros
-    per_section_cap = 3                       # study of the 20: we concentrated pyro
-                                              # too much in the climaxes (chorus 2.5×, solo 4.8×)
+    min_gap = tpb * 8                         # ≥ 2 measures between pyros
+    per_section_cap = 1                       # at most 1 per section
     n = 0
     for s in sections:
         e = section_energy(s)
-        climax = s.kind in _PYRO_SECTIONS
-        if e == "high" and climax:
-            step = tpb * 8                    # ~1 every 2 measures (was 1/measure)
-        elif (e == "high") or (e == "mid" and climax):
-            step = tpb * 16                   # sparse: non-climax high / climax mid
+        if e == "high" and s.kind in _PYRO_SECTIONS:
+            step = tpb * 12                   # ~1 every 3 measures
         else:
-            continue                          # calm → no pyro
+            continue                          # only high+climax → pyro
         placed_here = 0
         t = s.start
         while t < s.end and placed_here < per_section_cap:
@@ -850,9 +1188,255 @@ def build_pyro(sections: list[Section], drum_onsets: list[int],
     return out
 
 
-# Post-proc change cadence (beats) per tier — coarser than the light: the screen
-# filter varies a lot (professional style) but doesn't flicker as fast.
-_PP_CADENCE = {"calm": 7.0, "mid": 4.0, "high": 2.0}
+# Post-proc placement model — CLUSTER-then-HOLD, matching the 20 official venues.
+# The pp_study found the official gap distribution is strongly BIMODAL: median gap
+# 0.7 beats but mean 5.0, i.e. 56% of changes are bursts (<1 beat apart) and 20% are
+# long holds (≥4 beats), with only ~0.17 pp/beat overall. The originals do NOT space
+# single changes evenly — they flip a small CLUSTER of filters rapidly at an anchor
+# (section/energy change), then HOLD one filter for many beats until the next anchor.
+#
+#  _PP_CLUSTER  : how many rapid changes fire at each anchor (more when intense).
+#  _PP_CLUSTER_SUBDIV : beats between the changes inside a cluster (sub-beat = burst,
+#                       one beat = short gap — tuned per tier to match the 56/24/20 mix).
+#  _PP_HOLD     : beats from one cluster anchor to the next (the long hold).
+# Each anchor fires a CLUSTER whose internal gaps follow this beat PATTERN (the first
+# change is on the downbeat anchor; each value is the gap in beats to the next change
+# in the same cluster). Mixing 0.5-beat steps (bursts <1) with ~2-beat steps (short
+# gaps 1-4) reproduces the official 56% burst / 24% short split; the long inter-anchor
+# hold supplies the 20% holds. More/tighter changes when the local energy is high.
+_PP_CLUSTER_PAT = {
+    "calm": [0.5, 2.0],                 # 3 changes: 1 burst + 1 short & hold
+    "mid":  [0.5, 0.5, 2.0],            # 4 changes: 2 burst + 1 short & hold
+    "high": [0.5, 0.5, 2.0],            # 4 changes: 2 burst + 1 short & hold
+}
+# Hold to the next anchor, in BARS — longer gaps between clusters = more holds
+# (gap ≥4 beats). Calibrated to match official density per tier:
+#   calm: ~0.50 events/bar (was 0.38, under-generating)
+#   high: ~0.67 events/bar (was 1.00, over-generating)
+_PP_HOLD_BARS = {"calm": 6, "mid": 6, "high": 6}
+
+# Per-section-kind hold DISTORTION.  Some section kinds are much sparser (solo) or
+# denser (build) than the tier average in the official venues.  These coefficients
+# adjust the hold length for those outliers only.  1.0 = same as the tier default.
+# Calibrated against the 30-song audio context study ratios.
+_PP_HOLD_KINDS = {
+    "solo":       {"high": 1.70},
+    "riff":       {"mid":  1.70},
+    "bridge":     {"calm": 1.80},
+    "postchorus": {"mid":  0.55},
+    "build":      {"high": 0.75},
+    "outro":      {"calm": 0.75},
+}
+
+# Inside an audio strobe/blast WALL the originals flip even faster and longer — we
+# extend the cluster to span the wall (capped at one bar) on the half-beat.
+_PP_BURST_SUBDIV = 0.5
+
+# Markov transition weights for post-processing filters.
+# Learned from 20 official venue songs (1,905 transitions).
+# 37.2% self-transition rate overall. Weights are derived from raw counts.
+# Key families: Film Contrast (green↔blue 76%), TV/Silvertone, Trails (43-47% self),
+# Desat/Stylized, Effects.
+_PP_MARKOV: dict[str, dict[str, float]] = {
+    # ── Film Contrast Family ────────────────────────────
+    "film_contrast_green": {
+        "film_contrast_blue": 113, "film_contrast_green": 9,
+        "film_contrast": 8, "film_contrast_red": 5, "bright": 3,
+    },
+    "film_contrast_blue": {
+        "film_contrast_green": 112, "film_contrast_blue": 23,
+        "film_contrast": 10, "film_contrast_red": 5, "video_trails": 4,
+    },
+    "film_contrast_red": {
+        "film_contrast_red": 10, "film_contrast": 8, "film_contrast_blue": 5,
+        "clean_trails": 5, "film_contrast_green": 4, "bright": 3,
+    },
+    "film_contrast": {
+        "film_contrast": 50, "film_contrast_green": 11, "film_contrast_blue": 8,
+        "film_contrast_red": 6, "clean_trails": 5, "bright": 4,
+    },
+    # ── TV / Silvertone Family ──────────────────────────
+    "shitty_tv": {
+        "shitty_tv": 60, "film_silvertone": 44, "ProFilm_b": 20,
+        "ProFilm_a": 19, "film_contrast_red": 5, "bright": 4,
+        "clean_trails": 4, "video_trails": 3,
+    },
+    "film_silvertone": {
+        "film_silvertone": 36, "shitty_tv": 44, "ProFilm_a": 5,
+        "ProFilm_b": 3, "clean_trails": 2,
+    },
+    "ProFilm_a": {
+        "ProFilm_a": 46, "shitty_tv": 13, "ProFilm_b": 8,
+        "flicker_trails": 6, "bright": 5, "clean_trails": 5,
+        "desat_posterize_trails": 4, "video_trails": 4,
+    },
+    "ProFilm_b": {
+        "ProFilm_b": 37, "video_trails": 29, "clean_trails": 26,
+        "shitty_tv": 20, "bright": 6, "film_contrast_red": 5,
+        "desat_posterize_trails": 4, "ProFilm_a": 4,
+    },
+    # ── Trails Family ───────────────────────────────────
+    "video_trails": {
+        "video_trails": 104, "clean_trails": 57, "bright": 12,
+        "ProFilm_b": 8, "flicker_trails": 6, "desat_posterize_trails": 5,
+        "film_contrast_blue": 4, "shitty_tv": 4,
+    },
+    "clean_trails": {
+        "clean_trails": 97, "video_trails": 39, "ProFilm_b": 26,
+        "film_contrast_red": 8, "bright": 6, "flicker_trails": 5,
+        "desat_posterize_trails": 5, "shitty_tv": 4,
+    },
+    "flicker_trails": {
+        "flicker_trails": 35, "clean_trails": 8, "video_trails": 6,
+        "desat_posterize_trails": 5, "bright": 4, "ProFilm_a": 4,
+    },
+    "desat_posterize_trails": {
+        "desat_posterize_trails": 39, "video_trails": 8, "clean_trails": 6,
+        "posterize": 6, "desat_blue": 5, "shitty_tv": 4,
+        "bright": 3, "flicker_trails": 3,
+    },
+    # ── Desat / Stylized Family ────────────────────────
+    "desat_blue": {
+        "desat_posterize_trails": 6, "desat_blue": 1,
+        "posterize": 2, "clean_trails": 1,
+    },
+    "posterize": {
+        "posterize": 11, "desat_posterize_trails": 8, "bright": 4,
+        "video_trails": 3, "clean_trails": 3, "bloom": 2,
+    },
+    "bloom": {
+        "bloom": 7, "film_contrast_red": 4, "clean_trails": 3,
+        "bright": 2, "film_contrast": 2,
+    },
+    "space_woosh": {
+        "space_woosh": 15, "flicker_trails": 3, "video_trails": 3,
+        "clean_trails": 3, "bright": 2,
+    },
+    # ── Bright ──────────────────────────────────────────
+    "bright": {
+        "bright": 55, "clean_trails": 8, "video_trails": 6,
+        "ProFilm_b": 6, "film_contrast_red": 5, "shitty_tv": 4,
+        "posterize": 4, "desat_posterize_trails": 3,
+    },
+    # ── Effects Family ──────────────────────────────────
+    "photocopy": {
+        "photocopy": 20, "clean_trails": 5, "video_trails": 4,
+        "bright": 3, "shitty_tv": 3,
+    },
+    "photo_negative": {
+        "photo_negative": 14, "desat_posterize_trails": 3,
+        "video_trails": 3, "clean_trails": 2, "bright": 2,
+    },
+    "video_a": {
+        "video_a": 14, "clean_trails": 3, "video_trails": 3,
+        "bright": 2, "shitty_tv": 2,
+    },
+    "video_bw": {
+        "video_bw": 12, "video_trails": 4, "clean_trails": 3,
+        "bright": 2, "shitty_tv": 2,
+    },
+    "horror_movie_special": {
+        "horror_movie_special": 5, "video_trails": 2, "clean_trails": 2,
+        "bright": 1, "shitty_tv": 1,
+    },
+    "film_sepia_ink": {
+        "film_sepia_ink": 3, "shitty_tv": 2,
+    },
+    "video_security": {
+        "video_security": 1, "clean_trails": 1,
+    },
+    "ProFilm_mirror_a": {
+        "ProFilm_mirror_a": 1, "ProFilm_a": 1,
+    },
+    "contrast_a": {
+        "contrast_a": 2, "film_sepia_ink": 2, "clean_trails": 1,
+    },
+    "film_blue_filter": {
+        "clean_trails": 3, "film_blue_filter": 2, "film_contrast_blue": 1,
+    },
+}
+
+# Markov transition weights for camera cuts (coop_* shots only).
+# Learned from 20 official venue songs. Uses SHORT names (pool format, e.g. "V_Near"),
+# matching the SECTION_CAMERA pool entries. Key patterns:
+#   • Pair switching: GV_Near ↔ BV_Near, G_Hand ↔ B_Hand, BG_Near ↔ GK_Near
+#   • Medium shots (Near) → mostly other medium shots
+#   • Wide shots (All_Behind, All_Far) → tend to stay wide (28% self-transition)
+#   • Drum closeups (D_Hand) → tend to repeat (14% self-transition)
+#   • Vocals (V_Near/V_Closeup) → rarely repeat, mostly go to other members
+_CAMERA_MARKOV: dict[str, dict[str, float]] = {
+    "All_Behind": {"V_Near": 37, "D_Near": 33, "D_Hand": 32, "V_Closeup": 32, "All_Far": 30, "G_Hand": 25, "BV_Near": 25, "All_Near": 23, "D_Head": 23, "D_Behind": 23, "B_Near": 19, "BG_Near": 18, "BK_Near": 16, "B_Hand": 16, "GV_Near": 16},
+    "All_Far": {"V_Near": 59, "D_Near": 58, "D_Hand": 52, "All_Behind": 48, "G_Hand": 48, "V_Closeup": 42, "All_Near": 38, "Front_Near": 32, "K_Hand": 30, "G_Near": 28, "D_Behind": 23, "BG_Near": 22, "B_Near": 16, "BK_Near": 16, "K_Near": 16},
+    "All_Near": {"D_Hand": 62, "V_Near": 58, "V_Closeup": 48, "D_Near": 45, "All_Far": 45, "G_Hand": 42, "G_Near": 38, "B_Near": 37, "K_Hand": 36, "D_Behind": 30, "Front_Near": 28, "All_Behind": 26, "B_Hand": 25, "D_Head": 25, "BV_Near": 22},
+    "BD_Near": {"All_Near": 33, "V_Closeup": 33, "V_Near": 27, "Front_Near": 21, "G_Near": 19, "All_Behind": 19, "BV_Near": 16, "Front_Behind": 16, "All_Far": 14, "KV_Near": 13, "B_Behind": 13, "B_Hand": 12, "GV_Near": 11, "K_Behind": 11, "V_Behind": 10},
+    "BG_Behind": {"V_Closeup": 31, "V_Near": 31, "D_Near": 24, "D_Hand": 23, "D_Head": 17, "B_Near": 17, "All_Far": 14, "G_Hand": 13, "Front_Near": 12, "GV_Near": 11, "All_Near": 11, "BV_Near": 10, "G_Near": 10, "D_Behind": 8, "K_Hand": 8},
+    "BG_Near": {"V_Closeup": 52, "V_Near": 50, "D_Hand": 50, "D_Near": 47, "G_Hand": 34, "B_Hand": 31, "All_Near": 30, "G_Near": 29, "D_Behind": 28, "D_Head": 28, "Front_Near": 27, "B_Near": 26, "DV_Near": 21, "K_Near": 21, "All_Behind": 19},
+    "BK_Behind": {"V_Near": 28, "D_Near": 24, "V_Closeup": 22, "D_Hand": 17, "B_Near": 15, "All_Far": 13, "D_Head": 13, "Front_Near": 13, "D_Behind": 12, "GV_Near": 10, "All_Near": 10, "BV_Near": 9, "K_Near": 9, "K_Hand": 8, "G_Near": 8},
+    "BK_Near": {"V_Closeup": 43, "D_Near": 43, "D_Hand": 42, "V_Near": 39, "B_Hand": 33, "D_Behind": 28, "B_Near": 25, "K_Hand": 24, "D_Head": 23, "Front_Near": 21, "All_Near": 20, "K_Near": 20, "G_Hand": 20, "DV_Near": 19, "G_Near": 18},
+    "BV_Behind": {"D_Near": 16, "V_Near": 15, "V_Closeup": 15, "Front_Near": 14, "D_Head": 12, "All_Near": 12, "B_Near": 9, "G_Hand": 6, "D_Behind": 5, "G_Near": 5, "B_Hand": 5, "BG_Near": 4, "BK_Near": 4, "GK_Near": 4, "All_Far": 4},
+    "BV_Near": {"V_Closeup": 57, "D_Near": 49, "V_Near": 49, "D_Head": 33, "BG_Near": 29, "GK_Near": 28, "D_Hand": 28, "BK_Near": 27, "B_Hand": 24, "D_Behind": 24, "B_Near": 24, "Front_Near": 23, "All_Behind": 22, "All_Near": 21, "Front_Behind": 20},
+    "B_Behind": {"D_Near": 27, "Front_Near": 24, "V_Closeup": 24, "V_Near": 22, "D_Hand": 21, "B_Hand": 21, "B_Near": 19, "G_Hand": 18, "D_Behind": 13, "G_Near": 12, "K_Hand": 12, "BG_Near": 11, "K_Near": 10, "BK_Near": 10, "GK_Near": 10},
+    "B_Hand": {"V_Closeup": 100, "D_Hand": 91, "V_Near": 60, "D_Near": 37, "K_Hand": 34, "B_Near": 34, "G_Hand": 33, "Front_Near": 32, "G_Near": 29, "D_Behind": 28, "BV_Near": 25, "BK_Near": 23, "All_Near": 23, "BG_Near": 22, "GK_Near": 21},
+    "B_Head": {"D_Hand": 38, "V_Near": 23, "B_Near": 21, "D_Head": 21, "V_Closeup": 19, "D_Near": 12, "G_Near": 12, "K_Head": 10, "GV_Near": 10, "B_Hand": 10, "D_Behind": 10, "G_Head": 9, "All_Near": 9, "G_Hand": 9, "Front_Near": 9},
+    "B_Near": {"V_Near": 69, "V_Closeup": 67, "D_Hand": 60, "D_Behind": 59, "D_Near": 57, "K_Near": 51, "B_Hand": 38, "G_Near": 37, "Front_Near": 36, "G_Hand": 35, "D_Head": 35, "BG_Near": 33, "BK_Behind": 28, "GK_Behind": 28, "BG_Behind": 27},
+    "DG_Near": {"V_Closeup": 25, "Front_Near": 22, "V_Near": 18, "All_Far": 18, "All_Near": 17, "All_Behind": 17, "BV_Near": 16, "B_Near": 15, "B_Behind": 14, "Front_Behind": 13, "G_Near": 11, "K_Near": 10, "BG_Near": 10, "B_Hand": 9, "K_Behind": 9},
+    "DV_Near": {"BG_Near": 22, "V_Closeup": 19, "B_Near": 18, "GK_Near": 18, "All_Near": 17, "BK_Near": 17, "V_Near": 17, "Front_Near": 13, "All_Far": 13, "G_Near": 10, "All_Behind": 9, "BV_Near": 8, "G_Hand": 8, "B_Hand": 8, "BG_Behind": 8},
+    "D_Behind": {"V_Near": 57, "V_Closeup": 45, "BV_Near": 40, "Front_Near": 40, "G_Near": 39, "B_Near": 39, "All_Near": 36, "BG_Near": 28, "GK_Near": 27, "B_Hand": 27, "All_Far": 26, "BK_Near": 24, "KV_Near": 22, "G_Hand": 22, "All_Behind": 20},
+    "D_Hand": {"V_Closeup": 107, "B_Hand": 104, "V_Near": 85, "G_Hand": 79, "Front_Near": 62, "B_Near": 62, "All_Far": 59, "All_Near": 55, "G_Near": 49, "BG_Near": 48, "BV_Near": 46, "BK_Near": 40, "K_Hand": 38, "D_Near": 37, "GK_Near": 32},
+    "D_Head": {"V_Closeup": 52, "V_Near": 35, "All_Far": 33, "All_Near": 32, "Front_Near": 31, "B_Head": 31, "BV_Near": 30, "B_Near": 30, "D_Hand": 25, "GV_Near": 24, "BG_Near": 22, "G_Near": 20, "B_Hand": 18, "GK_Near": 17, "BK_Near": 17},
+    "D_Near": {"V_Closeup": 88, "All_Near": 77, "V_Near": 67, "G_Hand": 64, "B_Near": 58, "D_Hand": 55, "B_Hand": 50, "BG_Near": 50, "G_Near": 48, "Front_Near": 45, "BV_Near": 44, "BK_Near": 44, "All_Behind": 38, "GK_Near": 38, "K_Near": 34},
+    "Front_Behind": {"V_Near": 41, "D_Near": 33, "D_Hand": 30, "V_Closeup": 26, "G_Hand": 24, "B_Hand": 22, "B_Near": 21, "All_Near": 21, "G_Near": 21, "BV_Near": 20, "GV_Near": 16, "D_Behind": 16, "BG_Near": 16, "BK_Near": 14, "K_Hand": 14},
+    "Front_Near": {"V_Near": 65, "B_Near": 51, "D_Hand": 50, "D_Near": 49, "V_Closeup": 45, "B_Hand": 41, "D_Behind": 36, "G_Hand": 34, "BV_Near": 34, "K_Hand": 32, "G_Near": 32, "D_Head": 32, "DG_Near": 28, "All_Behind": 26, "K_Near": 25},
+    "GK_Behind": {"V_Near": 28, "D_Near": 24, "V_Closeup": 23, "B_Near": 16, "D_Hand": 16, "D_Head": 14, "Front_Near": 12, "All_Far": 11, "K_Near": 10, "D_Behind": 9, "GV_Near": 9, "All_Near": 9, "BV_Near": 9, "G_Near": 9, "K_Hand": 8},
+    "GK_Near": {"D_Hand": 40, "D_Near": 38, "V_Near": 36, "V_Closeup": 34, "B_Hand": 30, "B_Near": 25, "D_Behind": 23, "Front_Near": 23, "D_Head": 23, "K_Hand": 21, "G_Near": 20, "G_Hand": 19, "All_Near": 18, "DV_Near": 18, "K_Near": 18},
+    "GV_Behind": {"V_Closeup": 12, "D_Near": 9, "All_Far": 7, "V_Near": 7, "All_Near": 7, "D_Behind": 6, "D_Hand": 6, "Front_Near": 5, "BD_Near": 5, "All_Behind": 5, "B_Near": 4, "D_Head": 3, "V_Behind": 3, "K_Near": 3, "Front_Behind": 3},
+    "GV_Near": {"V_Closeup": 44, "D_Near": 38, "V_Near": 32, "D_Head": 25, "B_Near": 22, "All_Near": 20, "All_Behind": 19, "D_Behind": 17, "BD_Near": 16, "B_Behind": 16, "Front_Near": 15, "B_Hand": 14, "BG_Near": 12, "K_Behind": 11, "K_Near": 11},
+    "G_Behind": {"B_Near": 17, "Front_Near": 15, "V_Closeup": 13, "D_Near": 13, "D_Head": 11, "V_Near": 11, "B_Hand": 10, "K_Near": 10, "BG_Near": 10, "D_Hand": 9, "BK_Near": 9, "GK_Near": 9, "D_Behind": 8, "K_Hand": 8, "All_Behind": 8},
+    "G_Hand": {"D_Hand": 125, "B_Hand": 82, "V_Closeup": 49, "V_Near": 47, "D_Near": 39, "All_Near": 36, "D_Behind": 35, "Front_Near": 34, "B_Near": 26, "BG_Near": 24, "G_Near": 24, "K_Hand": 24, "All_Far": 23, "BV_Near": 23, "Front_Behind": 22},
+    "G_Head": {"D_Hand": 34, "V_Closeup": 23, "V_Near": 17, "B_Head": 15, "D_Near": 15, "Front_Near": 14, "K_Near": 14, "D_Head": 13, "K_Head": 12, "D_Behind": 11, "All_Near": 11, "BG_Near": 9, "B_Near": 9, "DG_Near": 7, "BK_Near": 6},
+    "G_Near": {"V_Near": 65, "D_Near": 59, "B_Near": 50, "V_Closeup": 48, "D_Hand": 47, "D_Behind": 39, "K_Near": 38, "Front_Near": 34, "D_Head": 27, "B_Hand": 27, "BG_Near": 27, "BG_Behind": 24, "K_Hand": 21, "All_Near": 20, "B_Behind": 19},
+    "KV_Behind": {"Front_Near": 10, "V_Closeup": 8, "V_Near": 8, "D_Head": 7, "B_Near": 5, "G_Hand": 5, "G_Near": 4, "D_Near": 4, "All_Near": 3, "B_Hand": 3, "D_Behind": 3},
+    "KV_Near": {"V_Near": 28, "V_Closeup": 28, "D_Near": 23, "BG_Near": 19, "GK_Near": 17, "BK_Near": 17, "D_Behind": 14, "B_Hand": 13, "G_Hand": 12, "V_Behind": 12, "D_Hand": 12, "Front_Near": 11, "All_Far": 11, "DG_Near": 9, "G_Near": 9},
+    "K_Behind": {"V_Closeup": 18, "V_Near": 18, "D_Near": 18, "D_Hand": 18, "B_Hand": 12, "Front_Near": 12, "All_Near": 12, "G_Hand": 11, "B_Near": 11, "K_Hand": 10, "D_Behind": 9, "G_Near": 8, "All_Far": 7, "BV_Near": 7, "DG_Near": 7},
+    "K_Hand": {"D_Hand": 61, "G_Hand": 38, "V_Near": 28, "V_Closeup": 27, "D_Behind": 27, "G_Near": 26, "B_Near": 26, "Front_Near": 25, "D_Near": 21, "B_Hand": 21, "All_Behind": 19, "All_Far": 17, "All_Near": 16, "BD_Near": 16, "GV_Near": 14},
+    "K_Head": {"D_Hand": 17, "V_Near": 14, "V_Closeup": 14, "G_Near": 12, "B_Near": 11, "B_Hand": 10, "G_Hand": 9, "G_Head": 9, "B_Head": 8, "D_Behind": 8, "D_Near": 7, "GV_Near": 7, "BV_Near": 7, "Front_Behind": 7, "Front_Near": 6},
+    "K_Near": {"D_Near": 40, "V_Closeup": 36, "V_Near": 35, "D_Hand": 34, "B_Near": 32, "G_Near": 27, "B_Hand": 27, "D_Behind": 25, "G_Hand": 21, "BV_Near": 17, "BK_Near": 16, "All_Near": 16, "Front_Near": 15, "G_Head": 15, "BG_Near": 15},
+    "V_Behind": {"D_Near": 26, "V_Closeup": 25, "B_Near": 24, "D_Hand": 19, "BG_Near": 18, "D_Head": 17, "G_Near": 16, "Front_Near": 14, "BK_Near": 13, "GK_Near": 13, "D_Behind": 12, "B_Hand": 12, "V_Near": 11, "K_Hand": 11, "All_Near": 11},
+    "V_Closeup": {"D_Near": 95, "D_Hand": 90, "B_Near": 79, "G_Hand": 71, "Front_Near": 67, "B_Hand": 63, "All_Far": 56, "G_Near": 56, "BG_Near": 54, "All_Near": 52, "D_Head": 49, "D_Behind": 45, "K_Near": 42, "K_Hand": 40, "V_Near": 40},
+    "V_Near": {"D_Near": 90, "B_Near": 77, "B_Hand": 67, "V_Closeup": 60, "BG_Near": 58, "Front_Near": 58, "G_Near": 54, "D_Hand": 51, "BV_Near": 49, "BD_Near": 47, "G_Hand": 46, "Front_Behind": 44, "BK_Near": 43, "All_Behind": 42, "GK_Near": 42},
+}
+
+# Camera cut levels from Onyx VenueGen (0=wide, 8=most specific).
+# Transitions must go DOWN in level (or stay at 0), never up.
+# This prevents jumping from a key closeup directly to a guitar closeup
+# without going through a wider shot first.
+_CAMERA_LEVELS: dict[str, int] = {
+    # Nível 8 — Keys (mais específicos)
+    "K_Near": 8, "K_Behind": 8, "K_Head": 8, "K_Hand": 8,
+    # Nível 7 — Guitar + Keys
+    "GK_Near": 7, "GK_Behind": 7,
+    # Nível 6 — Bass + Keys
+    "BK_Near": 6, "BK_Behind": 6,
+    # Nível 5 — Bass + Guitar
+    "BG_Near": 5, "BG_Behind": 5,
+    # Nível 4 — Keys + Vocal
+    "KV_Near": 4, "KV_Behind": 4,
+    # Nível 3 — Guitar + Vocal
+    "GV_Near": 3, "GV_Behind": 3,
+    # Nível 2 — Bass+Vocal duos, Guitar shots
+    "BV_Near": 2, "BV_Behind": 2,
+    "DG_Near": 2,
+    "G_Near": 2, "G_Behind": 2, "G_Head": 2, "G_Hand": 2,
+    # Nível 1 — Bass shots
+    "BD_Near": 1,
+    "B_Near": 1, "B_Behind": 1, "B_Head": 1, "B_Hand": 1,
+    # Nível 0 — Drums, Vocal, group shots (wide)
+    "DV_Near": 0,
+    "V_Near": 0, "V_Behind": 0, "V_Closeup": 0,
+    "D_Near": 0, "D_Behind": 0, "D_Head": 0, "D_Hand": 0,
+    "Front_Near": 0, "Front_Behind": 0,
+    "All_Near": 0, "All_Far": 0, "All_Behind": 0,
+}
 
 # Post-proc TONE bias by audio timbre (Section.warmth). The pp_study over the 20
 # official venues showed B&W/desaturated filters sit in DARK, quieter audio
@@ -863,7 +1447,7 @@ _PP_CADENCE = {"calm": 7.0, "mid": 4.0, "high": 2.0}
 # section = pool untouched (no-op). Song-relative — no absolute brightness.
 _PP_DARK = ("b+w", "bw", "sepia", "silvertone", "photocopy", "desat", "16mm",
             "security", "negative")
-_PP_BRIGHT = ("bright", "bloom", "clean", "contrast", "profilm", "video_a")
+_PP_BRIGHT = ("clean", "contrast", "bloom", "profilm")
 
 
 def _pp_tone_pool(pool: list[str], warmth: str | None) -> list[str]:
@@ -874,37 +1458,126 @@ def _pp_tone_pool(pool: list[str], warmth: str | None) -> list[str]:
     return sorted(pool, key=lambda p: 0 if any(k in p.lower() for k in pref) else 1)
 
 
+def _beat_len_at(tick: int, time_sig_map: list, tpb: int) -> int:
+    """Length of one beat (the time-sig denominator unit) in ticks at `tick`."""
+    num, den = 4, 4
+    for t, n, d in time_sig_map:
+        if t <= tick:
+            num, den = n, d
+        else:
+            break
+    return max(1, tpb * 4 // den)
+
+
+def _first_beat_at_or_after(start: int, time_sig_map: list, tpb: int) -> int:
+    """Snap `start` UP to the nearest downbeat-aligned beat boundary. The grid is
+    measured from the active time-signature's start tick so changes land on the
+    bar/beat the way the official venues do (their pp sit ~56% on a beat, ~32% on a
+    downbeat — and the sparse songs are ~96% on a beat)."""
+    sig_start, num, den = 0, 4, 4
+    for t, n, d in time_sig_map:
+        if t <= start:
+            sig_start, num, den = t, n, d
+        else:
+            break
+    beat = max(1, tpb * 4 // den)
+    rel = start - sig_start
+    k = (rel + beat - 1) // beat        # ceil to the next beat
+    return sig_start + k * beat
+
+
+def _first_downbeat_at_or_after(start: int, time_sig_map: list, tpb: int) -> tuple[int, int]:
+    """Snap `start` UP to the nearest bar boundary (downbeat) of the active time-sig,
+    measured from that sig's start tick. Returns (downbeat_tick, bar_ticks)."""
+    sig_start, num, den = 0, 4, 4
+    for t, n, d in time_sig_map:
+        if t <= start:
+            sig_start, num, den = t, n, d
+        else:
+            break
+    bar = max(1, (tpb * 4 // den) * num)
+    rel = start - sig_start
+    k = (rel + bar - 1) // bar          # ceil to the next bar
+    return sig_start + k * bar, bar
+
+
 def build_postproc(sections: list[Section], theme: dict, tpb: int,
                    time_sig_map: list,
-                   drum_onsets: list[int] | None = None) -> list[AbsEvent]:
-    """Dense professional-style post-proc: cycles the filter palette at the drums'
-    rhythm (cadence by energy, coarser than the light). Snaps to the hits."""
+                   drum_onsets: list[int] | None = None,
+                   energy_env: list | None = None,
+                   strobe_spans: list | None = None) -> list[AbsEvent]:
+    """Professional-style post-proc, placed the way the 20 official venues do it
+    (pp_study, dev/_venue_pp_study.py): CLUSTER-then-HOLD.
+
+      * At each anchor (snapped to the beat grid) a small CLUSTER of filters flips
+        rapidly on a sub-beat subdivision — the bursts the originals do (56% of their
+        gaps are <1 beat). The cluster is bigger / tighter when the local energy is
+        high, smaller / on-beat (short gaps) when calm.
+      * After the cluster the last filter is HELD for many beats (the 20% of official
+        gaps that are ≥4 beats) until the next anchor — keeping ~0.17 pp/beat overall.
+      * Inside an audio strobe/blast WALL the cluster is extended to span the wall
+        (capped at one bar) for the fast flicker the originals use during blasts.
+    """
     out: list[AbsEvent] = []
-    drums = sorted(drum_onsets) if drum_onsets else []
+    env = sorted(energy_env) if energy_env else None
+    walls = sorted(strobe_spans) if strobe_spans else []
     last: str | None = None
+
     for s in sections:
         # Pool BY SECTION TYPE (primary); fallback to the genre palette.
         palette = SECTION_PP_POOL.get(s.kind) or _section_pps(theme, s)
         # Audio-timbre tone bias (dark->desaturated, bright->bright/contrast).
         palette = _pp_tone_pool(palette, s.warmth)
-        energy = section_energy(s)
-        step = max(tpb, int(tpb * _PP_CADENCE[energy]))
-        snap_win = tpb // 2
-        t = s.start
+        if not palette:
+            continue
+        # Reorder by energy tier: burst filters first in high, hold first in calm.
+        sect_energy = section_energy(s)
+        palette = _reorder_pp_pool(palette, sect_energy)
+        # Timbre gate: the pp_study shows loudness does NOT predict pp density
+        # (corr≈0.04). The one cue that separates the two faces of a loud wall is
+        # TIMBRE: a BRIGHT/aggressive wall (metalcore, e.g. BMTH — 836 pp) gets dense
+        # flicker, while a DARK/atmospheric wall (post-rock, e.g. Deafheaven — 56 pp)
+        # the artist leaves almost untouched. So a 'cool' (dark) section is demoted one
+        # energy notch for pp purposes (high->mid->calm: smaller clusters, longer holds)
+        # and gets NO strobe-wall flicker; a 'warm' (bright) section keeps its tier.
+        demote = (s.warmth == "cool")
         i = 0
+        t, bar = _first_downbeat_at_or_after(s.start, time_sig_map, tpb)
         while t < s.end:
-            pp = palette[i % len(palette)]
-            if pp == last and len(palette) > 1:
-                i += 1
-                pp = palette[i % len(palette)]
-            tick = _nearest(t, drums, snap_win, floor=s.start) if drums else None
-            if tick is None:
-                tick = t
-            if tick < s.end:
-                out.append(_txt(tick, f"[{pp}.pp]"))
+            beat = _beat_len_at(t, time_sig_map, tpb)
+            # Local tier: audio envelope if present, else the section's mean tier.
+            tier = _env_tier(env, t) if env else sect_energy
+            if demote:
+                tier = {"high": "mid", "mid": "calm", "calm": "calm"}[tier]
+
+            # Cluster gap pattern for this tier; inside an audio strobe wall add one
+            # extra half-beat flip — but ONLY on bright/aggressive walls (a dark
+            # atmospheric wall is held, not flickered).
+            pattern = list(_PP_CLUSTER_PAT[tier])
+            if not demote:
+                for ws, we in walls:
+                    if ws <= t < we:
+                        pattern = [_PP_BURST_SUBDIV] + pattern
+                        break
+
+            # ── Cluster: first change on the downbeat, the rest stepped by `pattern` ──
+            tt = t
+            for gi in range(len(pattern) + 1):
+                if tt >= s.end:
+                    break
+                # Markov-weighted selection from the available filter pool,
+                # biased by the previous filter's transition probabilities.
+                pp = _markov_choice(last, palette, _PP_MARKOV, "clean_trails")
+                out.append(_txt(tt, f"[{pp}.pp]"))
                 last = pp
-            t += step
-            i += 1
+                if gi < len(pattern):
+                    tt += max(1, int(beat * pattern[gi]))
+
+            # ── Hold to the next downbeat anchor (whole bars), filter held across it ──
+            hb = _PP_HOLD_BARS[tier]
+            kind_coeff = _PP_HOLD_KINDS.get(s.kind, {}).get(tier, 1.0)
+            t += max(int(hb * bar * kind_coeff), ((tt - t) // bar + 1) * bar)
+    out.sort(key=lambda e: e.abs_tick)
     return out
 
 
@@ -1215,12 +1888,29 @@ def _guard_directed(cut: str, tick: int, tpb: int,
     return cut
 
 
+def _level_filter(candidates: list[str], min_level: int) -> list[str]:
+    """Filter cuts by Onyx level rule: level < min_level OR level == 0 if min == 0.
+    
+    Falls back to all candidates if filter would empty the pool.
+    """
+    if not candidates:
+        return candidates
+    if min_level == 0:
+        filtered = [c for c in candidates if _CAMERA_LEVELS.get(c, 999) == 0]
+    else:
+        filtered = [c for c in candidates if _CAMERA_LEVELS.get(c, 999) < min_level]
+    return filtered if filtered else candidates
+
+
 def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                  tpb: int, bre_spans: list[tuple[int, int]] | None = None,
                  pace_scale: float = 1.0,
                  accents: list[int] | None = None,
                  onsets: list[int] | None = None,
-                 inst_onsets: dict[str, list[int]] | None = None) -> list[AbsEvent]:
+                 inst_onsets: dict[str, list[int]] | None = None,
+                 audio_onsets: list[int] | None = None,
+                 energy_env: list[tuple[int, str]] | None = None,
+                 band_activity: dict[str, list[int]] | None = None) -> list[AbsEvent]:
     """Places camera cuts at the rate of SECTION_PACE_S (× the theme's pace_scale),
     cycling the section pool without repeating the previous cut. Injects D_BRE on BREs.
     If `accents` is given, snaps each cut to the nearest musical accent (±1 beat) —
@@ -1232,6 +1922,26 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     from .cut_events import detect_events
     out: list[AbsEvent] = []
     accents = sorted(accents) if accents else []
+    # Merge MIDI accents + audio flux accents for richer snap targets
+    if audio_onsets:
+        audio_acc = sorted(audio_onsets)
+        # Merge sorted lists (O(n+m))
+        merged = []
+        i = j = 0
+        while i < len(accents) and j < len(audio_acc):
+            if accents[i] < audio_acc[j]:
+                merged.append(accents[i])
+                i += 1
+            elif audio_acc[j] < accents[i]:
+                merged.append(audio_acc[j])
+                j += 1
+            else:
+                merged.append(accents[i])
+                i += 1
+                j += 1
+        merged.extend(accents[i:])
+        merged.extend(audio_acc[j:])
+        accents = merged
     onsets = sorted(onsets) if onsets else []
     min_gap = tpb // 2               # never two cuts less than 1/8 apart
     max_floor = tpb * 6              # but never slower than 1 cut / 6 beats
@@ -1256,6 +1966,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     last_cut: str | None = None
     last_tick = -10 ** 9
     recent_coop: deque = deque(maxlen=6)
+    min_framing_level: int = 999  # Onyx level tracker: starts "infinite"
 
     # Lead-in: cut from tick 0 to the 1st section (officials never freeze on the intro).
     if sections and sections[0].start > tpb:
@@ -1271,12 +1982,16 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 placed = max(t, last_tick + min_gap)
             if placed >= s0.start:
                 break
-            cut = framing0[idx % len(framing0)]
+            level_pool = _level_filter(framing0, min_framing_level)
+            cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[0])
             if cut == last_cut:
                 idx += 1
-                cut = framing0[idx % len(framing0)]
+                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[idx % len(level_pool)])
             slots.append((placed, cut))
             last_cut, last_tick = cut, placed
+            cut_level = _CAMERA_LEVELS.get(cut, 999)
+            if cut_level < min_framing_level:
+                min_framing_level = cut_level
             idx += 1
             t += max(ms_to_ticks(pace_ms0, t, tempo_map, tpb), min_gap)
 
@@ -1309,19 +2024,26 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             placed = _snap_to_music(t, accents, tpb, floor=last_tick + min_gap)
             if placed <= last_tick:
                 placed = max(t, last_tick + min_gap)
-            cut = pool[idx % len(pool)]
-            if cut == last_cut:                      # avoid immediate repetition
+            # Onyx level filter: restrict pool to cuts that respect level progression
+            level_pool = _level_filter(pool, min_framing_level)
+            if not level_pool:
+                level_pool = pool
+            cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[0])
+            if cut == last_cut:
                 idx += 1
-                cut = pool[idx % len(pool)]
-            # Anti-recency: skip a framing used in the recent window (wider variety).
-            for _ in range(len(pool)):
+                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[idx % len(level_pool)])
+            # Anti-recency
+            for _ in range(len(level_pool)):
                 if cut not in recent_coop and cut != last_cut:
                     break
                 idx += 1
-                cut = pool[idx % len(pool)]
+                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[idx % len(level_pool)])
             if placed < s.end:
                 slots.append((placed, cut))
                 recent_coop.append(cut)
+                cut_level = _CAMERA_LEVELS.get(cut, 999)
+                if cut_level < min_framing_level:
+                    min_framing_level = cut_level
                 last_cut, last_tick = cut, placed
             idx += 1
             t += step
@@ -1330,19 +2052,27 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     # Each event owns candidate cuts (most→least specific); the guard adapts them to
     # context (_NP if idle, None if it makes no sense). Full-band cuts are throttled to
     # `fullband_gap`; one stage dive per song; anti-recency on the rest.
-    events = detect_events(sections, inst_onsets, accents, bre_spans, time_sig_map, tpb)
+    events = detect_events(sections, inst_onsets, accents, bre_spans, time_sig_map, tpb,
+                           audio_onsets=audio_onsets, energy_env=energy_env,
+                           band_activity=band_activity)
+    events.sort(key=lambda e: (e.tick, -e.priority))
     accepted: list[tuple[int, str]] = []
-    recent_dir: deque = deque(maxlen=5)
+    recent_dir: deque = deque(maxlen=4)
     last_fullband = -10 ** 9
     did_stagedive = False
+    import random
     for e in events:
         chosen = None
         for cand in e.cuts:                          # 1st candidate that passes the guard
             g = _guard_directed(cand, e.tick, tpb, inst_onsets)
             if g is None:
                 continue
+            # 42% chance of self-repeat (matching official data)
+            if accepted and g == accepted[-1][1] and random.random() < 0.42:
+                chosen = g
+                break
             if g in recent_dir and chosen is None:
-                chosen = g                           # fallback if everything is recent
+                chosen = g           # fallback
                 continue
             if g not in recent_dir:
                 chosen = g
@@ -1361,6 +2091,13 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
         if is_fullband:
             last_fullband = e.tick
 
+    # ── Add companion shots at the same tick as primary directed cuts ──────
+    # Official venues frequently fire MULTIPLE directed cuts at the same tick
+    # (e.g. directed_drums_lt + directed_guitar_cls). Add companions using
+    # co-occurrence pairs learned from 100 official songs.
+    from .cut_events import add_companion_shots
+    companions = add_companion_shots(accepted)
+
     # ── MERGE: directed wins near a framing slot; drop the filler within min_gap ──
     import bisect
     dir_ticks = sorted(t for t, _ in accepted)
@@ -1374,13 +2111,17 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
 
     merged = [(tk, c) for tk, c in slots if not _near_directed(tk)]
     merged += list(accepted)
+    merged += companions
     merged.sort(key=lambda x: x[0])
 
     prev_tick = -10 ** 9
     prev_cut: str | None = None
     for tk, cut in merged:
-        if tk - prev_tick < min_gap or cut == prev_cut:
+        if cut == prev_cut:
             continue
+        if tk - prev_tick < min_gap:
+            if tk != prev_tick:          # allow same-tick different-category companions
+                continue
         ev = _cut_event(tk, cut)
         if ev is not None:
             out.append(ev)
@@ -1442,16 +2183,10 @@ def resolve_sections(events_track: list[AbsEvent], song_end: int,
 _INTENSE_THEMES = {"metal", "punk"}
 
 # How many measures of rest WITHIN a section before the instrument visibly idles
-# (puts the instrument down). The book's floor is 2 measures, but that flickers on
-# sparse riffs; 4 keeps the character steady through phrase-length rests.
-_IDLE_DOWNTIME_MEASURES = 4
-# …BUT in a high-energy pocket the steady mood is [intense] (the big-arm flail), and
-# holding THAT across a 2-3 measure pause reads as the character thrashing at empty air
-# instead of waiting for the re-entry. So in 'high' local energy we drop to idle after
-# the book's 2-measure floor: the performer goes [idle_intense] (standing energetic,
-# ready — not hitting) through the pause and resumes [intense] synced 1/8 before the note
-# that ends it. The flicker concern only ever applied to sparse CALM riffs, which keep 4.
-_IDLE_DOWNTIME_INTENSE = 2
+# (puts the instrument down). Per-instrument thresholds derived from the 20 official
+# venues: drums/bass idle sooner (shorter rests visible), guitar holds longer
+# (flicker-prone on sparse riffs), vocal is the most rest-heavy (idle 21%).
+_IDLE_DOWNTIME = {"drums": 2, "bass": 2, "guitar": 6, "keys": 3, "vocal": 1}
 
 
 def phrase_end_ticks(track) -> list[int]:
@@ -1490,6 +2225,18 @@ def _part_instrument(track_name: str) -> str | None:
     return None
 
 
+# Main PART track names per instrument — variant tracks (REAL_*, *_ANIM_*,
+# *_E/_M/_H/_X) don't carry mood markers in the official venues.
+_MAIN_PART = {
+    "PART GUITAR", "PART BASS", "PART DRUMS", "PART KEYS", "PART VOCALS",
+}
+
+
+def _is_main_part_track(track_name: str) -> bool:
+    """True if this is the primary playable PART track (not a variant)."""
+    return track_name.strip() in _MAIN_PART
+
+
 def _section_at(sections: list[Section], tick: int) -> Section | None:
     for s in sections:
         if s.start <= tick < s.end:
@@ -1497,65 +2244,35 @@ def _section_at(sections: list[Section], tick: int) -> Section | None:
     return sections[-1] if sections else None
 
 
-def _idle_state(s: Section) -> str:
-    """The right 'not playing' marker for a section. anim_study over the 20 official
-    venues: idle_realtime is the dead-quiet bookend (loud_p ~9, intro/outro), idle is
-    a calm pause (loud_p ~33), idle_intense is standing energetic during a LOUD section
-    (loud_p ~77, used 140× — we never emitted it). So an instrument silent in a high-
-    energy section stands intense, not slack."""
-    if s.kind in ("intro", "outro"):
-        return "[idle_realtime]"
-    # Use the heaviness-gated tier (same as [intense]/camera): a silent member only
-    # stands 'intense' in a genuinely heavy section (Breakdown), not in a loud-but-
-    # light sung chorus whose 'high' spans were demoted to 'mid'.
-    return "[idle_intense]" if _camera_energy(s) == "high" else "[idle]"
-
-
 def _energy_tier_at(s: Section, tick: int) -> str:
     """Energy tier of the sub-span COVERING `tick` (not the section peak). A calm pocket
     inside an otherwise-loud section reads calm; falls back to the section energy when
     there are no audio spans (MIDI-only path)."""
     if s.energy_spans:
-        for a, b, t in s.energy_spans:
+        for a, b, tier in s.energy_spans:
             if a <= tick < b:
-                return t
+                return tier
         return (s.energy_spans[0][2] if tick < s.energy_spans[0][0]
                 else s.energy_spans[-1][2])
     return section_energy(s)
 
 
-def _idle_marker_at(sections: list[Section], tick: int) -> str:
-    """The right 'not playing' marker for the EXACT tick of a rest — keyed to the LOCAL
-    energy there, so an idle that begins in a loud section and runs into a calm one stops
-    standing intense and slackens (fixes idle_intense bleeding past a section boundary)."""
+def _idle_marker_at(sections: list[Section], tick: int,
+                    instrument: str = "guitar") -> str:
+    """The right 'not playing' marker for the EXACT tick of a rest. Uses the
+    SECTION's overall energy (not the sub-span at the exact tick) so idle_intense
+    fires whenever the section is loud, even if the idle tick lands in a calm
+    pocket within the section. idle_intense is only for keys/vocal sitting out a
+    loud section — the official venues use it 10%/22% for keys/vocal but <2% for
+    guitar/bass/drums, so we restrict it to those instruments. idle_realtime is
+    reserved for SONG BOUNDARIES only (emitted separately)."""
     s = _section_at(sections, tick)
     if s is None:
         return "[idle]"
-    if s.kind in ("intro", "outro"):
-        return "[idle_realtime]"
-    return "[idle_intense]" if _energy_tier_at(s, tick) == "high" else "[idle]"
+    if section_energy(s) == "high" and instrument in ("keys", "vocal"):
+        return "[idle_intense]"
+    return "[idle]"
 
-
-def _idle_segments(sections: list[Section], start: int, b: int,
-                   floor: int) -> list[tuple[int, str]]:
-    """Break a rest [start, b) into idle markers that FOLLOW the local energy: one at the
-    rest start, then one at every section / energy sub-span boundary crossed, each tier-
-    correct. A 4-bar drum break spanning a loud→calm boundary idles intense, then slack."""
-    pts = [max(start, floor)]
-    for s in sections:
-        if start < s.start < b:
-            pts.append(s.start)
-        for sa, _sb, _t in (s.energy_spans or []):
-            if pts[0] < sa < b:
-                pts.append(sa)
-    pts = sorted(p for p in set(pts) if p >= pts[0])
-    out, last = [], None
-    for p in pts:
-        m = _idle_marker_at(sections, p)
-        if m != last:
-            out.append((p, m))
-            last = m
-    return out
 
 
 _MOOD_LADDER = ["mellow", "play", "intense"]
@@ -1574,131 +2291,123 @@ def _camera_energy(s: Section) -> str:
         top = max(_ENERGY_LEVEL.get(t, 0) for _, _, t in s.energy_spans)
         return _LEVEL_ENERGY[top]
     return section_energy(s)
-# Order used to STAGGER which instruments soften their mood per section, so the band
-# is not a uniform wall of one mood. mood_study of the 20 official venues: the band
-# has >=2 distinct playing-moods ~43% of moments (median) — they are NOT in unison —
-# and the time-share is play 32% / intense 38% / mellow 12% (we sat at play 72% /
-# intense 0%, a flat [play] wall that reads as robotic head-nodding out of the music).
-# The rhythm section (drums/bass) holds the energy; the expressive instruments
-# (guitar/keys/vocal) soften one notch on alternating sections → organic, non-unison.
-_INST_VARY_RANK = {"drums": 0, "bass": 1, "guitar": 2, "keys": 3, "vocal": 4}
+# Official venues: non-unison comes from (1) idle instruments, (2) sub-section energy
+# variation via energy_spans, (3) different instruments in different sections — NOT from
+# a modulo-based stagger.  The old stagger artificially inflated mellow because calm
+# sections produce 100% mellow and mid sections produce 50% mellow.  With no stagger,
+# mood is purely energy-driven: calm→mellow, mid→play, high→intense.
 
 
-def _anim_state(s: Section, playing: bool, instrument: str,
-                sec_idx: int = 0) -> str:
+def _anim_state(s: Section, instrument: str,
+                sec_idx: int = 0, sec_onset_density: float = 0,
+                song_mean_density: float = 1) -> str:
     """Decide an instrument's mood marker in a section. Mood follows the section
-    energy (calm→mellow / mid→play / high→intense, full vocabulary across ALL genres
-    like the official venues), then a per-instrument stagger breaks the band unison."""
-    if not playing:
-        return _idle_state(s)
+    energy (calm→mellow / mid→play / high→intense), with onset density refinement:
+    a calm section where the instrument plays densely bumps up to play (active, not
+    resting), and a high section where the instrument plays sparsely bumps down to
+    play (present but not driving)."""
     if s.kind == "solo" and _solo_instrument(s.name) == instrument:
         return "[play_solo]"
-    return _mood_for_level(_ENERGY_LEVEL[section_energy(s)], instrument, sec_idx)
+    return _mood_for_level(_ENERGY_LEVEL[section_energy(s)], instrument, sec_idx,
+                           sec_onset_density, song_mean_density)
 
 
-def _mood_for_level(level: int, instrument: str, sec_idx: int) -> str:
-    """Map an energy level (0/1/2) to a mood marker, with the per-instrument stagger.
-    Stagger: soften the expressive instruments one notch on alternating sections so the
-    band isn't a single mood (official median ~43% of moments NOT in unison). This also
-    pulls the over-used [play] share down toward the official ~32%.
-
-    TIER-EXACT FLOOR: `level` is the LOCAL energy tier at this exact tick (callers pass
-    `_energy_tier_at`), so a demote would emit a mood WEAKER than the music playing right
-    then — the character laying back while the part is loud. We keep the stagger machinery
-    but clamp the result to never drop below the local tier, so no marker reads under its
-    own moment. (Non-unison only survives where the demote would not undercut the local
-    energy — never, while `level` is the local tier — so this is tier-exact by design.)"""
-    rank = _INST_VARY_RANK.get(instrument, 2)
-    staggered = level
-    if rank >= 2 and level > 0 and (sec_idx + rank) % 2 == 0:
-        staggered -= 1
-    return f"[{_MOOD_LADDER[max(staggered, level)]}]"
+def _mood_for_level(level: int, instrument: str, sec_idx: int,
+                     sec_density: float = 0, song_mean_density: float = 1) -> str:
+    """Map an energy level (0/1/2) to a mood marker, with onset-density refinement.
+    Density ratio = section density / song mean.  Dense calm → bump up to play;
+    sparse high → bump down to play.  Non-unison comes from idle instruments and
+    density variation, not a modulo stagger."""
+    if sec_density > 0 and song_mean_density > 0:
+        ratio = sec_density / max(song_mean_density, 0.01)
+        if level == 0 and ratio > 1.2:
+            level = 1
+        elif level == 1 and ratio < 0.6:
+            level = 0
+        elif level == 2 and ratio < 0.6:
+            level = 1
+    return f"[{_MOOD_LADDER[max(0, min(level, 2))]}]"
 
 
 def build_animations(part_onsets: list[int], sections: list[Section],
-                     theme_name: str, tpb: int, time_sig_map: list,
+                     tpb: int, time_sig_map: list,
                      instrument: str) -> list[AbsEvent]:
     """Generate mood markers for ONE instrument. Offset of ±1/8 on transitions;
-    no markers before the 1st note (no count-in); [idle] on downtime ≥2 measures."""
+    [idle_realtime] at song boundaries; [idle] on long downtime after the last note."""
     onsets = sorted(part_onsets)
     if not onsets:
-        # Instrument absent the whole song: stays idle (waiting for its cue).
+        return [_txt(0, "[idle_realtime]")]
+    if not sections:
         return [_txt(0, "[idle_realtime]")]
     floor = onsets[0]
-    eighth = max(1, tpb // 2)
-    # LONG rests of THIS instrument (≥ _IDLE_DOWNTIME_MEASURES). Computed first because
-    # the instrument is genuinely NOT playing across these windows: no 'playing' mood
-    # ([mellow]/[play]/[intense]) may be emitted inside one (that read as the character
-    # drumming/strumming while resting), and the idle within must follow the LOCAL energy.
-    # Only multi-bar breaks idle the character — a phrase-length rest keeps the steady mood
-    # (a sparse riff that bursts then rests 2-3 measures must NOT flicker idle every phrase).
-    idle_spans: list[tuple[int, int]] = []
-    for a, b in zip(onsets, onsets[1:]):
-        mt = measure_ticks_at(a, time_sig_map, tpb)
-        # A heavy ([intense]) hold flails at empty air over a pause, so it idles after the
-        # shorter 2-measure floor; calmer holds keep the steadier 4 (no flicker on sparse
-        # calm riffs). Energy read at the rest start, where the held mood was set.
-        sec = _section_at(sections, a)
-        thresh = (_IDLE_DOWNTIME_INTENSE
-                  if sec is not None and _energy_tier_at(sec, a) == "high"
-                  else _IDLE_DOWNTIME_MEASURES)
-        if b - a >= thresh * mt:
-            idle_spans.append((a, b))
+    # quarter note (1 beat) offset for anchor/idle placement
+    quarter = max(1, tpb // 2)
+    last_onset = onsets[-1]
 
-    def _in_idle(tick: int) -> bool:
-        return any(a < tick < b for a, b in idle_spans)
+    # Compute onset density (onsets per beat) for mood refinement.
+    # Song-wide mean density gives a baseline; each section's density vs the mean
+    # drives the calm→play / high→play bump.  MIDI-derived, song-relative.
+    total_beats = max(1.0, (last_onset - floor) / tpb)
+    song_mean_density = len(onsets) / total_beats  # onsets/beat
+
+    def _sec_density(sec_start: int, sec_end: int) -> float:
+        n = _count_onsets(onsets, sec_start, sec_end)
+        beats = max(1.0, (sec_end - sec_start) / tpb)
+        return n / beats
 
     timeline: list[tuple[int, str]] = []
-    # State per section (transitions start 1/8 before the boundary). When the section
-    # carries audio sub-spans, the mood FOLLOWS the music within the section (a chorus
-    # that starts calm and builds gets [mellow]→[play]→…), instead of one mood per
-    # section. Solo/idle still resolve as a whole-section state.
     import bisect
 
     def _first_onset_in(a: int, b: int) -> int | None:
-        """This instrument's first onset in [a, b), or None if it rests through the span."""
         i = bisect.bisect_left(onsets, a)
         return onsets[i] if i < len(onsets) and onsets[i] < b else None
 
-    # The 1/8 anticipation pulls a mood change BACKWARD so it lands just before the player
-    # digs in. That is right WITHIN one energy region, but across a boundary it bleeds the
-    # new mood into a region of a DIFFERENT tier and misrepresents that 1/8: a RISING move
-    # drags a louder gesture — [intense] (a kick/jump) — into the preceding calm tail (the
-    # character kicks while a calm part is still onscreen); a FALLING move drops a [mellow]
-    # into the loud tail (the character slackens 1/8 too early in a heavy part). So the
-    # anticipated tick may only land where the LOCAL energy equals the mood's own tier;
-    # otherwise it would cross into a different-energy region — snap forward to the note.
-    # Reading the local tier at the candidate tick (not a stale prev_level) also covers the
-    # case where the instrument RESTED through the neighbouring span.
     def _anchor(on: int, first: bool, cur_level: int) -> int:
         if first:
             return max(s.start, floor)
-        cand = on - eighth
+        cand = on - quarter
         if cand < floor:
             return floor
         sec = _section_at(sections, cand)
         if sec is not None and _ENERGY_LEVEL[_energy_tier_at(sec, cand)] != cur_level:
-            return on                       # anticipating would cross into a different tier
+            return on
         return cand
+
+    # Official pattern: [idle] is placed ~1 beat after the last note, only when
+    # the gap to the NEXT note is long. We check: for each pair of consecutive
+    # onsets, if the gap >= _IDLE_DOWNTIME_MEASURES measures, emit [idle] right
+    # after the first onset (the "last note before the rest").
+    idle_ranges: list[tuple[int, int]] = []
+    idle_ticks: set[int] = set()
+    dt_measures = _IDLE_DOWNTIME.get(instrument, 4)
+    for a, b in zip(onsets, onsets[1:]):
+        mt = measure_ticks_at(a, time_sig_map, tpb)
+        if b - a >= dt_measures * mt:
+            idle_ranges.append((a, b))
+            idle_ticks.add(a + quarter)
+
+    def _in_idle(tick: int) -> bool:
+        return any(a < tick < b for a, b in idle_ranges)
 
     for i, s in enumerate(sections):
         playing = _count_onsets(onsets, s.start, s.end) > 0
         solo = s.kind == "solo" and _solo_instrument(s.name) == instrument
-        if playing and not solo and s.energy_spans:
+        if playing and s.energy_spans:
             for j, (a, b, tier) in enumerate(s.energy_spans):
-                # A mood change must land on a REAL note of this instrument: anchor on its
-                # first onset in the span (1/8 anticipation), not the bare span boundary —
-                # so the gesture flips when the player actually digs in, not in a gap. If
-                # the instrument rests through this span, emit NO playing-mood here (it was
-                # strumming air at the section's tail spans before).
                 on = _first_onset_in(a, b)
                 if on is None:
                     continue
-                cur_level = _ENERGY_LEVEL[tier]
-                tick = _anchor(on, i == 0 and j == 0, cur_level)
-                if _in_idle(tick):              # instrument is resting here → idle owns it
+                if solo:
+                    mood = "[play_solo]"
+                else:
+                    cur_level = _ENERGY_LEVEL[tier]
+                    mood = _mood_for_level(cur_level, instrument, i,
+                                           _sec_density(a, b), song_mean_density)
+                tick = _anchor(on, i == 0 and j == 0,
+                               _ENERGY_LEVEL[tier])
+                if _in_idle(tick):
                     continue
-                timeline.append((tick, _mood_for_level(cur_level, instrument, i)))
+                timeline.append((tick, mood))
         elif playing:
             on = _first_onset_in(s.start, s.end)
             cur_level = _ENERGY_LEVEL[section_energy(s)]
@@ -1707,32 +2416,31 @@ def build_animations(part_onsets: list[int], sections: list[Section],
             elif on:
                 tick = _anchor(on, False, cur_level)
             else:
-                tick = max(s.start - eighth, floor)
+                tick = max(s.start - quarter, floor)
             if not _in_idle(tick):
-                timeline.append((tick, _anim_state(s, playing, instrument, i)))
-        else:
-            tick = max(s.start if i == 0 else s.start - eighth, floor)
-            if not _in_idle(tick):
-                timeline.append((tick, _anim_state(s, playing, instrument, i)))
-    # Emit each rest as idle markers that track the local energy, then resume on the note
-    # that ends the rest. The idle starts 1/8 after the last onset; its tier is read AT
-    # that point (and at every boundary crossed), so an intense idle stops being intense
-    # the moment the music under it calms — no bleed of the loud section into the next.
-    for a, b in idle_spans:
-        for tick, marker in _idle_segments(sections, a + eighth, b, floor):
-            timeline.append((tick, marker))
-        sec = _section_at(sections, b)
-        if sec is not None:
-            # Resume on the note that ends the rest, 1/8 early — but, like the section
-            # loop, never let that 1/8 drag the resume mood into a DIFFERENT-tier pocket of
-            # the rest (a louder [intense] back into calm, or a [mellow] into a loud tail).
-            res_level = _ENERGY_LEVEL[_energy_tier_at(sec, b)]
-            cand = max(b - eighth, a + eighth + 1)
-            csec = _section_at(sections, cand)
-            if csec is not None and _ENERGY_LEVEL[_energy_tier_at(csec, cand)] != res_level:
-                cand = b
-            timeline.append((cand,
-                             _anim_state(sec, True, instrument, sections.index(sec))))
+                timeline.append((tick, _anim_state(s, instrument, i,
+                                  _sec_density(s.start, s.end), song_mean_density)))
+
+    # Emit idle markers at the computed ticks
+    for it in sorted(idle_ticks):
+        timeline.append((it, _idle_marker_at(sections, it, instrument)))
+
+    # Boundary idle markers: [idle_realtime] at song start and end.
+    # End boundary: only when the gap from last note to end is large (≥ 2 measures),
+    # otherwise the section's own [idle] covers it.  This prevents over-emitting
+    # idle_realtime (2 beats was too short — almost every song has >2 beats after
+    # the last vocal note).
+    if sections:
+        first_sec = sections[0]
+        if first_sec.kind in ("intro", "default") or floor > first_sec.start + quarter:
+            timeline.insert(0, (0, "[idle_realtime]"))
+        last_sec = sections[-1]
+        song_end = last_sec.end
+        end_mt = measure_ticks_at(last_onset, time_sig_map, tpb)
+        end_thresh = max(2 * quarter, 4 * end_mt) if end_mt else 2 * quarter
+        if last_onset + end_thresh < song_end:
+            timeline.append((last_onset + end_thresh, "[idle_realtime]"))
+
     timeline.sort(key=lambda x: x[0])
     out: list[AbsEvent] = []
     last: str | None = None
@@ -1814,7 +2522,12 @@ def generate_animations(part_onsets_by_track: dict[str, list[int]],
         inst = _part_instrument(tname)
         if inst is None:
             continue
-        markers = build_animations(onsets, sections, theme_name, tpb,
+        # Only animate the MAIN PART track per instrument. Variant tracks
+        # (PART REAL_*, PART *_ANIM_*) don't carry mood markers in the
+        # official venues — generating for all variants inflates counts ~5x.
+        if not _is_main_part_track(tname):
+            continue
+        markers = build_animations(onsets, sections, tpb,
                                    time_sig_map, inst)
         pe = vocal_phrase_ends if inst == "vocal" else None
         markers += instrument_extras(inst, onsets, sections, tpb, pe)
@@ -1883,9 +2596,10 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
                    fill_onsets: list[int] | None = None,
                    dbass_onsets: list[int] | None = None,
                    audio_onsets: list[int] | None = None,
-                   energy_env: list[tuple[int, str]] | None = None,
-                   audio_strobe_spans: list[tuple[int, int]] | None = None,
-                   drop_ticks: list[int] | None = None) -> list[AbsEvent]:
+                    energy_env: list[tuple[int, str]] | None = None,
+                    audio_strobe_spans: list[tuple[int, int]] | None = None,
+                    drop_ticks: list[int] | None = None,
+                    band_activity: dict[str, list[int]] | None = None) -> list[AbsEvent]:
     """Generate all the text events of an explicit VENUE, sorted by tick.
     `theme` is the THEMES key (derived from the genre via genre_to_theme).
     `accents` (ticks of the Expert accents) syncs the cuts with the music.
@@ -1910,7 +2624,8 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     out += build_lighting(sections, th, tpb, time_sig_map, drum_onsets,
                           pause_spans, strobe_spans, audio_onsets=audio_onsets,
                           energy_env=energy_env, drop_ticks=drop_ticks)
-    out += build_postproc(sections, th, tpb, time_sig_map, drum_onsets)
+    out += build_postproc(sections, th, tpb, time_sig_map, drum_onsets,
+                          energy_env=energy_env, strobe_spans=strobe_spans)
     # Audio flux accents join the band accents as pyro candidates (real hits, incl.
     # audio-only ones); build_pyro still gates density/placement by energy + cap.
     pyro_accents = (sorted(set(accents or []) | set(audio_onsets))
@@ -1921,7 +2636,8 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     # EVENTS by the processor, not appended here.
     out += build_camera(sections, tempo_map, time_sig_map, tpb, bre_spans,
                         pace_scale=th["pace"], accents=accents, onsets=onsets,
-                        inst_onsets=inst_onsets)
+                        inst_onsets=inst_onsets, audio_onsets=audio_onsets,
+                        energy_env=energy_env, band_activity=band_activity)
     if inst_onsets:
         out += build_spotlights(sections, inst_onsets, tpb)
         # Sing-along only with REAL vocals (chart/lyrics), never with the audio proxy.

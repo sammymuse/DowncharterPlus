@@ -30,21 +30,119 @@ BLUE    = "#4A8AC4"
 MONO    = "Courier New"
 
 
+# ── song.ini field definitions ───────────────────────────────────────────────
+# Union of the YARG Wiki song.ini reference and the Clone Hero song.ini guide.
+# Grouped as (section title, [(tag, hint, type)]) where type is "str" | "int" |
+# "bool". The creator window renders one input per field and exports a clean
+# [song] block with only the tags the user actually filled in (no comments).
+SONGINI_GROUPS = [
+    ("Core  (name is mandatory; the rest are strongly recommended)", [
+        ("name", "The title of the song.", "str"),
+        ("artist", "The artist / band.", "str"),
+        ("album", "Album the song is from. Single? write the title then (Single).", "str"),
+        ("genre", "Broad genre (see the common genre names list).", "str"),
+        ("sub_genre", "More specific genre (YARG).", "str"),
+        ("year", "Year of the song's (or album's) first release.", "str"),
+        ("charter", "Who created the playable note track (you).", "str"),
+        ("song_length", "Audio length in MILLISECONDS (215000 is 3:35).", "int"),
+    ]),
+    ("Album / playlist / preview", [
+        ("album_track", "Track number on the album (default 16000).", "int"),
+        ("playlist", "Name of the playlist this chart belongs to.", "str"),
+        ("playlist_track", "Track number within the playlist.", "int"),
+        ("icon", "Source icon (yarg, yargdlc, yarn, or a game/setlist id).", "str"),
+        ("preview_start_time", "Preview start in MILLISECONDS (85064 is 1:25.064).", "int"),
+        ("preview_end_time", "Preview end in MILLISECONDS.", "int"),
+        ("loading_phrase", "Flavor text shown on the difficulty/instrument screen.", "str"),
+        ("rating", "Age rating: 1 FF, 2 SR, 3 MC, 4 NR, 5 SC (YARG).", "int"),
+        ("location", "Band origin, e.g. Example City, Example Country (YARG).", "str"),
+    ]),
+    ("Difficulties / intensities  (0-6, or -1 if the part is absent)", [
+        ("diff_band", "Overall band intensity.", "int"),
+        ("diff_guitar", "5-Fret Lead Guitar intensity.", "int"),
+        ("diff_guitar_coop", "5-Fret Co-op (Melody) Guitar intensity.", "int"),
+        ("diff_rhythm", "5-Fret Rhythm Guitar intensity.", "int"),
+        ("diff_bass", "5-Fret Bass intensity.", "int"),
+        ("diff_drums", "4-Lane Drums intensity.", "int"),
+        ("diff_drums_real", "Pro Drums intensity.", "int"),
+        ("diff_keys", "5-Lane Keys intensity.", "int"),
+        ("diff_vocals", "Vocals intensity.", "int"),
+    ]),
+    ("6-Fret (GHL) difficulties  (only if the chart has GHL tracks)", [
+        ("diff_guitarghl", "6-Fret Lead Guitar intensity.", "int"),
+        ("diff_guitar_coop_ghl", "6-Fret Co-op Guitar intensity.", "int"),
+        ("diff_rhythm_ghl", "6-Fret Rhythm Guitar intensity.", "int"),
+        ("diff_bassghl", "6-Fret Bass intensity.", "int"),
+    ]),
+    ("Format flags & timing", [
+        ("pro_drums", "Pro Drums present (when no tom notes to auto-detect).", "bool"),
+        ("five_lane_drums", "Drums track is in 5-Lane format.", "bool"),
+        ("modchart", "Mark this chart as a modchart (for sorting).", "bool"),
+        ("end_events", "Tolerate the chart's end events.", "bool"),
+        ("video_start_time", "Background-video start in MS (negative delays it).", "int"),
+        ("vocal_scroll_speed", "Vocal track scroll speed, default 100 (YARG).", "int"),
+        ("delay", "Legacy audio realignment in MS (deprecated).", "int"),
+    ]),
+    ("Credits  (optional)", [
+        ("credit_written_by", "Who wrote the song.", "str"),
+        ("credit_performed_by", "Who performed the song.", "str"),
+        ("credit_composed_by", "Who composed the song.", "str"),
+        ("credit_produced_by", "Who produced the song.", "str"),
+        ("credit_album_art_by", "Who made the album art.", "str"),
+        ("credit_license", "License the song was released under.", "str"),
+    ]),
+    ("Links  (optional)", [
+        ("link_youtube", "Link to the song on YouTube.", "str"),
+        ("link_spotify", "Link to the song on Spotify.", "str"),
+        ("link_bandcamp", "Link to the song on Bandcamp.", "str"),
+        ("link_soundcloud", "Link to the song on SoundCloud.", "str"),
+    ]),
+]
+
+
+def build_songini_text(values: dict) -> str:
+    """Clean [song] block with only the filled-in tags (no comments).
+
+    `values` maps tag -> string ("" / "True" / "False" handled per type)."""
+    lines = ["[song]"]
+    for _title, fields in SONGINI_GROUPS:
+        for tag, _hint, typ in fields:
+            v = values.get(tag, "")
+            if typ == "bool":
+                if v == "True":
+                    lines.append(f"{tag} = True")
+            else:
+                v = (v or "").strip()
+                if v:
+                    lines.append(f"{tag} = {v}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 class StyledButton(tk.Canvas):
     def __init__(self, parent, text, command,
-                 accent=False, danger=False, width=180, height=38):
+                 accent=False, danger=False, color=None, width=180, height=38):
         super().__init__(parent, height=height, width=width,
                          bg=SURFACE, highlightthickness=0, bd=0, cursor="hand2")
         self._text = text; self._cmd = command
-        self._accent = accent; self._danger = danger
+        self._accent = accent; self._danger = danger; self._color = color
         self._on = True; self._hover = False
         self._draw()
         self.bind("<Enter>",    lambda _: self._sh(True))
         self.bind("<Leave>",    lambda _: self._sh(False))
         self.bind("<Button-1>", self._click)
 
+    @staticmethod
+    def _shade(hexcol, factor):
+        hexcol = hexcol.lstrip("#")
+        r, g, b = (int(hexcol[i:i+2], 16) for i in (0, 2, 4))
+        r, g, b = (min(255, int(c * factor)) for c in (r, g, b))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
     def _colors(self):
         if not self._on:     return BORDER,   FG3
+        if self._color:
+            return (self._shade(self._color, 1.18) if self._hover else self._color), FG
         if self._hover:
             if self._accent: return "#c03535", FG
             if self._danger: return "#8b2020", FG
@@ -103,6 +201,57 @@ class CheckTile(tk.Canvas):
                          fill=fc, anchor="w")
 
 
+class TabButton(tk.Canvas):
+    """A flat tab header that underlines in RED when its tab is active."""
+    def __init__(self, parent, text, command, app, width=110, height=30):
+        super().__init__(parent, width=width, height=height,
+                         bg=BG, highlightthickness=0, bd=0, cursor="hand2")
+        self._text = text; self._cmd = command; self._app = app
+        self._active = False; self._hover = False
+        self._draw()
+        self.bind("<Enter>",    lambda _: self._sh(True))
+        self.bind("<Leave>",    lambda _: self._sh(False))
+        self.bind("<Button-1>", lambda _: self._cmd())
+
+    def set_active(self, v):
+        self._active = bool(v); self._draw()
+
+    def _sh(self, v):
+        self._hover = v; self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        w, h = int(self["width"]), int(self["height"])
+        fg = FG if (self._active or self._hover) else FG2
+        self.create_text(w//2, h//2 - 2, text=self._text,
+                         font=(MONO, 10, "bold"), fill=fg, anchor="center")
+        if self._active:
+            self.create_rectangle(0, h-2, w, h, fill=RED, outline=RED)
+
+
+class RadioTile(tk.Canvas):
+    """A single-choice tile bound to a StringVar (radio behaviour)."""
+    def __init__(self, parent, text, variable, value, color=RED, width=120, height=30):
+        super().__init__(parent, width=width, height=height,
+                         bg=BG, highlightthickness=0, bd=0, cursor="hand2")
+        self._text = text; self._var = variable; self._value = value
+        self._color = color
+        self._draw()
+        variable.trace_add("write", lambda *_: self._draw())
+        self.bind("<Button-1>", lambda _: self._var.set(self._value))
+
+    def _draw(self):
+        self.delete("all")
+        on = self._var.get() == self._value
+        bc = self._color if on else BORDER2
+        self.create_oval(3, 8, 17, 22, outline=bc, width=2,
+                         fill=bc if on else BG)
+        if on:
+            self.create_oval(7, 12, 13, 18, fill=BG, outline=BG)
+        self.create_text(26, 15, text=self._text, font=(MONO, 9),
+                         fill=FG if on else FG3, anchor="w")
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -119,12 +268,19 @@ class App(tk.Tk):
         self._do_medium      = tk.BooleanVar(value=cfg.get("medium", True))
         self._do_easy        = tk.BooleanVar(value=cfg.get("easy", True))
         self._do_venue       = tk.BooleanVar(value=cfg.get("venue", True))
+        self._do_drum_anim   = tk.BooleanVar(value=cfg.get("drum_anim", True))
         self._do_hide_bg     = tk.BooleanVar(value=cfg.get("hide_bg", False))
-        self._do_lipsync     = tk.BooleanVar(value=cfg.get("lipsync", False))
+        self._do_lipsync     = tk.BooleanVar(value=cfg.get("lipsync", False))      # talkies
+        self._do_lipsync_trk = tk.BooleanVar(value=cfg.get("lipsync_track", False))  # LIPSYNC1 viseme track
+        # ── Convert tab (native PS3 package generation) ──
+        self._conv_folder = cfg.get("conv_folder", "") or ""
+        self._conv_out = cfg.get("conv_out", "") or ""
+        self._conv_pedal  = tk.StringVar(value=cfg.get("conv_pedal", "2x"))  # 1x | 2x | both
         # Persist whenever a toggle/slider changes
         for var in (self._threshold_ms, self._do_expert_plus, self._do_hard,
-                    self._do_medium, self._do_easy, self._do_venue,
-                    self._do_hide_bg, self._do_lipsync):
+                    self._do_medium, self._do_easy, self._do_venue, self._do_drum_anim,
+                    self._do_hide_bg, self._do_lipsync, self._do_lipsync_trk,
+                    self._conv_pedal):
             var.trace_add("write", lambda *_: self._save_settings())
         self._build()
         if self._folder and os.path.isdir(self._folder):
@@ -153,8 +309,28 @@ class App(tk.Tk):
         tk.Frame(self, bg=RED,    height=1).pack(fill="x")
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
-        body = tk.Frame(self, bg=BG, padx=22, pady=16)
-        body.pack(fill="both")
+        # ── Tab bar ──
+        self._tabs: dict[str, tk.Frame] = {}
+        self._tab_btns: dict[str, "TabButton"] = {}
+        tabbar = tk.Frame(self, bg=BG, padx=22, pady=0)
+        tabbar.pack(fill="x", pady=(10, 0))
+        TabButton(tabbar, "PROCESS", lambda: self._show_tab("process"),
+                  self).pack(side="left")
+        self._tab_btns["process"] = tabbar.winfo_children()[-1]
+        TabButton(tabbar, "CONVERT", lambda: self._show_tab("convert"),
+                  self).pack(side="left", padx=(6, 0))
+        self._tab_btns["convert"] = tabbar.winfo_children()[-1]
+
+        # song.ini creator — opens a pre-filled template the user fills + saves.
+        StyledButton(tabbar, "NEW song.ini", self._open_songini_creator,
+                     width=150, height=28).pack(side="right")
+
+        # ── Tab container (only one child shown at a time) ──
+        container = tk.Frame(self, bg=BG)
+        container.pack(fill="both")
+
+        body = tk.Frame(container, bg=BG, padx=22, pady=16)
+        self._tabs["process"] = body
 
         # ── Folder ──
         self._lbl("SONGS FOLDER", body).pack(anchor="w")
@@ -179,7 +355,7 @@ class App(tk.Tk):
 
         # ── Expert+ ──
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
-        CheckTile(body, "Expert+  (2× kick in PART DRUMS)",
+        CheckTile(body, "Expert+",
                   self._do_expert_plus, color=RED, width=300, height=28).pack(anchor="w")
 
         thr_row = tk.Frame(body, bg=BG)
@@ -205,9 +381,17 @@ class App(tk.Tk):
         self._lbl("GENERATE VENUE  (camera · lights · post-proc)", body).pack(anchor="w", pady=(0, 6))
         CheckTile(body, "Venue",
                   self._do_venue, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        # Drummer limb animations (PART DRUMS 24-51) authored from the Expert gems;
+        # without them the drummer stays idle in-game. On by default.
+        CheckTile(body, "Drum animations",
+                  self._do_drum_anim, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        # LIPSYNC1 viseme track from lyrics (audio-guided keyframes). Independent of
+        # the talkies toggle below — generates the mouth animation track only.
+        CheckTile(body, "Lipsync",
+                  self._do_lipsync_trk, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
         # Hides background images in-game by renaming background.png/jpg →
         # background.bak.png/jpg (revert restores them).
-        CheckTile(body, "Hide in-game background (image)",
+        CheckTile(body, "Hide in-game background",
                   self._do_hide_bg, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
         # ── Talkies ──
@@ -228,6 +412,14 @@ class App(tk.Tk):
                                      self._run_revert, danger=True, width=120, height=40)
         self._btn_rev.pack(side="left", padx=(10, 0))
         self._btn_rev.set_enabled(False)
+
+        # ── Convert tab ──
+        conv = tk.Frame(container, bg=BG, padx=22, pady=16)
+        self._tabs["convert"] = conv
+        self._build_convert_tab(conv)
+
+        # Show the default tab
+        self._show_tab("process")
 
         # ── Log ──
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
@@ -266,8 +458,13 @@ class App(tk.Tk):
             "medium":       bool(self._do_medium.get()),
             "easy":         bool(self._do_easy.get()),
             "venue":        bool(self._do_venue.get()),
+            "drum_anim":    bool(self._do_drum_anim.get()),
             "hide_bg":      bool(self._do_hide_bg.get()),
             "lipsync":      bool(self._do_lipsync.get()),
+            "lipsync_track": bool(self._do_lipsync_trk.get()),
+            "conv_folder":  self._conv_folder,
+            "conv_out":     self._conv_out,
+            "conv_pedal":   self._conv_pedal.get(),
         }
         try:
             path = self._settings_path()
@@ -294,14 +491,15 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    def _set_dark_titlebar(self):
+    def _set_dark_titlebar(self, win=None):
         """Force a dark Windows title bar (DWM immersive dark mode)."""
         if sys.platform != "win32":
             return
+        win = win or self
         try:
             import ctypes
-            self.update_idletasks()
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            win.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
             value = ctypes.c_int(1)
             # 20 = DWMWA_USE_IMMERSIVE_DARK_MODE (Win10 20H1+); 19 = older builds
             for attr in (20, 19):
@@ -340,26 +538,32 @@ class App(tk.Tk):
         ms    = float(self._threshold_ms.get())
         xp    = self._do_expert_plus.get()
         venue = self._do_venue.get()
+        drum_anim = self._do_drum_anim.get()
         hide_bg = self._do_hide_bg.get()
         lipsync = self._do_lipsync.get()
+        lipsync_trk = self._do_lipsync_trk.get()
         diffs = [d for d, v in [("hard", self._do_hard),
                                   ("medium", self._do_medium),
                                   ("easy", self._do_easy)] if v.get()]
-        if not xp and not diffs and not venue and not lipsync and not hide_bg:
+        if (not xp and not diffs and not venue and not lipsync
+                and not lipsync_trk and not hide_bg and not drum_anim):
             self._log("⚠  Nothing selected.\n", "warn"); return
 
         self._log("── PROCESS ──────────────────────────────\n", "head")
         if xp:    self._log(f"  Expert+: {1000/ms:.1f} nps\n")
         if diffs: self._log(f"  Diffs: {', '.join(diffs)}\n")
         if venue: self._log("  Venue: yes (theme from genre)\n")
+        if drum_anim: self._log("  Drum animations: yes (drummer limbs)\n")
         if hide_bg: self._log("  Hide background: yes (background.png/jpg → .bak)\n")
+        if lipsync_trk: self._log("  Lipsync: yes (LIPSYNC1 viseme track from lyrics)\n")
         if lipsync: self._log("  Talkies: yes (talky vocals charted from lyrics)\n")
         self._log("\n")
         self._btn_conv.set_enabled(False); self._btn_rev.set_enabled(False)
 
         def task():
-            process_folder(self._folder, diffs, xp, ms, self._log, venue, lipsync,
-                           do_hide_bg=hide_bg)
+            process_folder(self._folder, diffs, xp, ms, self._log, venue, lipsync_trk,
+                           do_hide_bg=hide_bg, do_talkies=lipsync,
+                           do_drum_anim=drum_anim)
             self.after(0, lambda: self._btn_conv.set_enabled(True))
             self.after(0, lambda: self._btn_rev.set_enabled(True))
             self._log("\n")
@@ -378,6 +582,308 @@ class App(tk.Tk):
             self._log("\n")
 
         threading.Thread(target=task, daemon=True).start()
+
+    # ── Tabs ───────────────────────────────────────────────────────────────
+    def _show_tab(self, name: str):
+        for n, frame in self._tabs.items():
+            if n == name:
+                frame.pack(fill="both")
+            else:
+                frame.pack_forget()
+        for n, btn in self._tab_btns.items():
+            btn.set_active(n == name)
+
+    # ── Convert tab ────────────────────────────────────────────────────────
+    def _build_convert_tab(self, body):
+        self._lbl("SOURCE SONG FOLDER", body).pack(anchor="w")
+        fr = tk.Frame(body, bg=BG)
+        fr.pack(fill="x", pady=(5, 14))
+        self._conv_folder_lbl = tk.Label(fr, text="(none selected)",
+                                         font=(MONO, 9), fg=FG3, bg=SURF2,
+                                         anchor="w", padx=8, pady=6, width=46)
+        self._conv_folder_lbl.pack(side="left", fill="x", expand=True)
+        StyledButton(fr, "  OPEN…", self._pick_conv_folder, width=90, height=30).pack(
+            side="right", padx=(8, 0))
+
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
+        self._lbl("OUTPUT FOLDER  (where the PS3 package is written — "
+                  "default: next to the source)", body).pack(anchor="w")
+        ofr = tk.Frame(body, bg=BG)
+        ofr.pack(fill="x", pady=(5, 14))
+        self._conv_out_lbl = tk.Label(ofr, text="(default: beside source)",
+                                      font=(MONO, 9), fg=FG3, bg=SURF2,
+                                      anchor="w", padx=8, pady=6, width=46)
+        self._conv_out_lbl.pack(side="left", fill="x", expand=True)
+        StyledButton(ofr, "  SET…", self._pick_conv_out, width=90, height=30).pack(
+            side="right", padx=(8, 0))
+        StyledButton(ofr, "  ✕", self._clear_conv_out, width=34, height=30).pack(
+            side="right", padx=(8, 0))
+        if self._conv_out and os.path.isdir(self._conv_out):
+            short = self._conv_out if len(self._conv_out) <= 52 \
+                else "…" + self._conv_out[-50:]
+            self._conv_out_lbl.config(text=short, fg=FG2)
+
+        # ── ROCK BAND section (PS3 folder + Xbox CON — bass pedal applies) ──
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
+        tk.Label(body, text="ROCK BAND  (PS3 / Xbox 360)",
+                 font=(MONO, 10, "bold"), fg=RED, bg=BG, anchor="w").pack(
+                     anchor="w", pady=(0, 8))
+        self._lbl("BASS PEDAL", body).pack(
+            anchor="w", pady=(0, 6))
+        ped_row = tk.Frame(body, bg=BG)
+        ped_row.pack(fill="x", pady=(0, 4))
+        RadioTile(ped_row, "1× pedal", self._conv_pedal, "1x",
+                  width=110, height=28).pack(side="left", padx=(0, 8))
+        RadioTile(ped_row, "2× pedal", self._conv_pedal, "2x",
+                  width=110, height=28).pack(side="left", padx=(0, 8))
+        RadioTile(ped_row, "Both", self._conv_pedal, "both",
+                  width=90, height=28).pack(side="left")
+        tk.Label(body, text="1× removes Expert+ doubles  ·  2× forces doubles to always play",
+                 font=(MONO, 8), fg=FG3, bg=BG, anchor="w").pack(anchor="w", pady=(2, 10))
+
+        self._btn_ps3 = StyledButton(body, "⬢  BUILD PS3 FOLDER",
+                                     lambda: self._run_native_convert("ps3"),
+                                     color=BLUE, width=220, height=40)
+        self._btn_ps3.pack(anchor="w", pady=(0, 8))
+        self._btn_con = StyledButton(body, "⬢  BUILD CON",
+                                     lambda: self._run_native_convert("xbox"),
+                                     color=GREEN, width=220, height=40)
+        self._btn_con.pack(anchor="w", pady=(0, 14))
+
+        # ── SNG section (YARG / Clone Hero — verbatim repackage of the folder) ──
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
+        tk.Label(body, text="YARG / CLONE HERO",
+                 font=(MONO, 10, "bold"), fg=RED, bg=BG, anchor="w").pack(
+                     anchor="w", pady=(0, 6))
+        tk.Label(body, text="Packs the song folder as-is into a .sng container  "
+                            "— no pedal variants, no validation, no milo.",
+                 font=(MONO, 8), fg=FG3, bg=BG, anchor="w",
+                 justify="left", wraplength=520).pack(anchor="w", pady=(0, 8))
+        self._btn_sng = StyledButton(body, "⬢  BUILD SNG",
+                                     lambda: self._run_native_convert("sng"),
+                                     color=RED, width=220, height=40)
+        self._btn_sng.pack(anchor="w", pady=(0, 14))
+
+        self._conv_btns = (self._btn_ps3, self._btn_con, self._btn_sng)
+        for b in self._conv_btns:
+            b.set_enabled(bool(self._conv_folder and
+                               os.path.isdir(self._conv_folder)))
+        if self._conv_folder and os.path.isdir(self._conv_folder):
+            short = self._conv_folder if len(self._conv_folder) <= 52 \
+                else "…" + self._conv_folder[-50:]
+            self._conv_folder_lbl.config(text=short, fg=FG2)
+
+    def _pick_conv_folder(self):
+        folder = filedialog.askdirectory(title="Source song folder")
+        if not folder:
+            return
+        self._conv_folder = folder
+        self._save_settings()
+        short = folder if len(folder) <= 52 else "…" + folder[-50:]
+        self._conv_folder_lbl.config(text=short, fg=FG2)
+        for b in self._conv_btns:
+            b.set_enabled(True)
+        self._log(f"Convert source: {folder}\n\n", "info")
+
+    def _pick_conv_out(self):
+        folder = filedialog.askdirectory(title="Output folder")
+        if not folder:
+            return
+        self._conv_out = folder
+        self._save_settings()
+        short = folder if len(folder) <= 52 else "…" + folder[-50:]
+        self._conv_out_lbl.config(text=short, fg=FG2)
+        self._log(f"Convert output: {folder}\n\n", "info")
+
+    def _clear_conv_out(self):
+        self._conv_out = ""
+        self._save_settings()
+        self._conv_out_lbl.config(text="(default: beside source)", fg=FG3)
+
+    def _run_native_convert(self, fmt):
+        if not self._conv_folder:
+            return
+        pedal = self._conv_pedal.get()
+        out_base = self._conv_out or None
+        fmt_label = {"ps3": "PS3 folder", "xbox": "Xbox CON",
+                     "sng": "SNG"}.get(fmt, fmt)
+        self._log(f"── CONVERT ({fmt_label}) ─────────────────────\n", "head")
+        self._log(f"  Source: {self._conv_folder}\n")
+        self._log(f"  Output: {out_base or '(beside source)'}\n")
+        for b in self._conv_btns:
+            b.set_enabled(False)
+
+        def task():
+            try:
+                # The source may be a single song folder OR a parent holding many
+                # song subfolders — convert every song under it. A "song folder" is
+                # the directory of each notes.mid (same rule the Process tab uses).
+                song_dirs = sorted({os.path.dirname(m)
+                                    for m in find_midis(self._conv_folder)})
+                if not song_dirs:
+                    # No .mid found (e.g. a lone .chart, or the builder will report
+                    # what's missing); fall back to the folder as one song.
+                    song_dirs = [self._conv_folder]
+                self._log(f"  Songs: {len(song_dirs)}\n\n")
+
+                def _label(sd):
+                    return os.path.basename(sd.rstrip("/\\")) or sd
+
+                if fmt == "sng":
+                    # Verbatim repackage — no pedal variants / validation / milo.
+                    from downcharter.sng import build_sng_song
+                    for sd in song_dirs:
+                        self._log(f"  ▸ SNG: {_label(sd)}\n", "head")
+                        try:
+                            build_sng_song(sd, self._log, out_base=out_base)
+                        except Exception as e:
+                            self._log(f"  ✗ {_label(sd)}: {e}\n", "err")
+                    return
+
+                from downcharter.ps3build import source_has_double_kicks
+                if fmt == "ps3":
+                    from downcharter.ps3build import build_ps3_song
+                    builder = build_ps3_song
+                else:  # xbox
+                    from downcharter.stfs import build_con_song
+                    builder = build_con_song
+                for sd in song_dirs:
+                    self._log(f"  ▸ {_label(sd)}\n", "head")
+                    try:
+                        if pedal == "both":
+                            # Only emit a 2x build for songs that actually have
+                            # doubles; otherwise it is identical to the plain 1x.
+                            if source_has_double_kicks(sd):
+                                modes = ["1x", "2x"]
+                            else:
+                                modes = ["1x"]
+                                self._log("    (no double-kicks → 1x only)\n", "info")
+                        else:
+                            modes = [pedal]
+                        for mode in modes:
+                            self._log(f"    {fmt_label} ({mode})\n", "info")
+                            builder(sd, mode, self._log, out_base=out_base)
+                    except Exception as e:
+                        import traceback
+                        self._log(f"  ✗ {_label(sd)}: {e}\n", "err")
+                        self._log(traceback.format_exc(), "err")
+            except Exception as e:
+                import traceback
+                self._log(f"  ✗ {e}\n", "err")
+                self._log(traceback.format_exc(), "err")
+            finally:
+                # Always re-enable so the user can convert again (even the SNG
+                # path, which returns early on success).
+                self.after(0, lambda: [b.set_enabled(True) for b in self._conv_btns])
+                self._log("\n")
+
+        threading.Thread(target=task, daemon=True).start()
+
+    # ── song.ini creator ───────────────────────────────────────────────────
+    def _open_songini_creator(self):
+        if getattr(self, "_ini_win", None) and self._ini_win.winfo_exists():
+            self._ini_win.lift()
+            self._ini_win.focus_force()
+            return
+
+        win = tk.Toplevel(self)
+        self._ini_win = win
+        win.title("New song.ini")
+        win.configure(bg=BG)
+        win.geometry("680x720")
+        win.minsize(560, 480)
+        self._set_dark_titlebar(win)
+
+        head = tk.Frame(win, bg=BG, padx=18, pady=12)
+        head.pack(fill="x")
+        tk.Label(head, text="song.ini  CREATOR", font=(MONO, 13, "bold"),
+                 fg=RED, bg=BG).pack(side="left")
+        tk.Label(head, text="fill what you need · empty fields are skipped on export",
+                 font=(MONO, 8), fg=FG3, bg=BG).pack(side="left", padx=(10, 0), anchor="s",
+                                                     pady=3)
+        tk.Frame(win, bg=BORDER, height=1).pack(fill="x")
+
+        # ── Scrollable form ──
+        outer = tk.Frame(win, bg=BG)
+        outer.pack(fill="both", expand=True)
+        canvas = tk.Canvas(outer, bg=BG, highlightthickness=0, bd=0)
+        sb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        form = tk.Frame(canvas, bg=BG, padx=18, pady=10)
+        win_id = canvas.create_window((0, 0), window=form, anchor="nw")
+        form.bind("<Configure>",
+                  lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfigure(win_id, width=e.width))
+
+        def _wheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _wheel)
+        win.bind("<Destroy>",
+                 lambda e: e.widget is win and canvas.unbind_all("<MouseWheel>"))
+
+        self._ini_fields = {}        # tag -> ("str"/"int", Entry) | ("bool", Var)
+        for title, fields in SONGINI_GROUPS:
+            tk.Label(form, text=title, font=(MONO, 9, "bold"), fg=RED, bg=BG,
+                     anchor="w").pack(fill="x", pady=(12, 2))
+            tk.Frame(form, bg=BORDER, height=1).pack(fill="x", pady=(0, 6))
+            for tag, hint, typ in fields:
+                row = tk.Frame(form, bg=BG)
+                row.pack(fill="x", pady=(0, 1))
+                tk.Label(row, text=tag, font=(MONO, 9), fg=FG, bg=BG,
+                         anchor="w", width=22).pack(side="left")
+                if typ == "bool":
+                    var = tk.BooleanVar(value=False)
+                    CheckTile(row, "True", var, color=GREEN,
+                              width=80, height=24).pack(side="left")
+                    self._ini_fields[tag] = ("bool", var)
+                else:
+                    ent = tk.Entry(row, bg=SURF2, fg=FG, insertbackground=FG,
+                                   font=(MONO, 9), bd=0, highlightthickness=1,
+                                   highlightbackground=BORDER,
+                                   highlightcolor=BORDER2)
+                    ent.pack(side="left", fill="x", expand=True)
+                    self._ini_fields[tag] = (typ, ent)
+                tk.Label(form, text=hint, font=(MONO, 8), fg=FG3, bg=BG,
+                         anchor="w").pack(fill="x", padx=(22, 0), pady=(0, 4))
+
+        tk.Frame(win, bg=BORDER, height=1).pack(fill="x")
+        btn_row = tk.Frame(win, bg=BG, padx=18, pady=12)
+        btn_row.pack(fill="x")
+
+        def collect():
+            vals = {}
+            for tag, (typ, w) in self._ini_fields.items():
+                vals[tag] = "True" if typ == "bool" and w.get() else (
+                    "" if typ == "bool" else w.get())
+            return vals
+
+        def do_save():
+            vals = collect()
+            if not (vals.get("name") or "").strip():
+                self._log("  ✗ song.ini needs at least a 'name'.\n", "err")
+                return
+            path = filedialog.asksaveasfilename(
+                title="Save song.ini", defaultextension=".ini",
+                initialfile="song.ini",
+                filetypes=[("Song info", "*.ini"), ("All files", "*.*")])
+            if not path:
+                return
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(build_songini_text(vals))
+            except OSError as e:
+                self._log(f"  ✗ song.ini save failed: {e}\n", "err")
+                return
+            self._log(f"song.ini saved: {path}\n\n", "info")
+            win.destroy()
+
+        StyledButton(btn_row, "💾  EXPORT song.ini", do_save, accent=True,
+                     width=190, height=36).pack(side="left")
+        StyledButton(btn_row, "  CLOSE", win.destroy,
+                     width=110, height=36).pack(side="right")
 
     def _log(self, text, tag=None):
         def _w():

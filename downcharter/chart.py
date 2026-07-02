@@ -400,4 +400,9 @@ def chart_to_midi(path: str) -> mido.MidiFile:
     if voc_tr is not None:
         mid.tracks.append(voc_tr)
 
+    # Charts are commonly 192 TPB; RB3 requires 480. Normalise so every MIDI we
+    # emit (processed or not) is 480.
+    if mid.ticks_per_beat != 480:
+        from .midi_utils import rescale_midi_tpb
+        rescale_midi_tpb(mid, 480)
     return mid

@@ -8,10 +8,11 @@ import os, shutil
 from .constants import TRACK_TYPES, DIFF_OFFSET, DRUM_KICK_EXPERT, DRUM_KICK_2X, EXPERT_BASE
 from .midi_utils import (
     build_tempo_map, build_time_sig_map, to_abs, to_track, pair_notes, notes_to_events, AbsEvent,
-    tick_to_ms, ms_to_abs_tick,
+    tick_to_ms, ms_to_abs_tick, rescale_midi_tpb,
 )
 from .guitar import reduce_guitar
 from .chart import is_chart, chart_to_midi
+from .convert import normalize_source_midi
 from .quality import groove_check, GROOVE_FLOOR, expert_accents
 from .drums import reduce_drums_all
 from .venue import (
@@ -95,15 +96,26 @@ def _section_midi_cues(mid, sections, part_onsets,
 
 
 def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
-                        mid, part_onsets, audio_path: str | None = None) -> bool:
-    """Set each section's energy from a COMPOSITE score, not loudness alone.
-    Blends song-relative cues: audio (loudness+flux+brightness) + MIDI (band
-    fullness + velocity) + the structural type. A chorus must be loud AND busy AND
-    bright AND full to read 'high' — plain volume no longer decides on its own.
-    Audio is used whenever ANY song audio exists (the mixed .ogg/.mogg/.mp3, not
-    only separated stems — find_song_audio falls back to the single mix). The
-    MIDI-only path (returns False) kicks in solely when the folder has NO audio file
-    at all; the MIDI cues still refine the energy there (dependency-free fallback)."""
+                        mid, part_onsets, audio_path: str | None = None,
+                        theme: str | None = None) -> bool:
+    """Set each section's energy using a HYBRID audio+MIDI approach.
+
+    Audio (feel_envelope) decides calm AND high — it has higher agreement
+    than the MIDI composite because it measures actual sound.  MIDI composite
+    decides mid (audio's overlap zone where calm/high scores are ambiguous).
+
+    Per-theme thresholds: each genre has a different audio baseline (metal is
+    louder than slow), so the calm/high thresholds shift by theme.  Calibrated
+    against 1450 official section markers across 100 venue learn songs
+    (dev/theme_offset_search.py).  Themes without enough data or with inverted
+    thresholds (audio can't separate tiers) fall back to the shared baseline.
+
+    Pipeline:
+      1. Audio feel_envelope < calm_threshold → calm; > high_threshold → high
+      2. Audio ambiguous: MIDI composite decides
+      3. energy_spans (sub-spans) add within-section dynamics from audio
+
+    Without audio, falls back to MIDI-only composite thresholds."""
     if not sections:
         return False
     from .venue import SECTION_ENERGY
@@ -129,40 +141,60 @@ def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
             au = _audio.section_energy_scores(paths, sections, tempo_map, tpb)
             # Per-section sub-spans so character moods follow the music WITHIN a
             # section (calm intro that builds) instead of one mood per section.
-            spans = _audio.section_energy_subspans(paths, sections, tempo_map, tpb)
+            all_onsets = sorted(set(t for ons in part_onsets.values() for t in ons))
+            spans = _audio.section_energy_subspans(paths, sections, tempo_map, tpb,
+                                                   onsets=all_onsets)
             if spans is not None:
                 for s, sp in zip(sections, spans):
                     s.energy_spans = sp
+    # ── MIDI composite: density-led mid/high decider ──────────────────────
+    # Optimized against the 100 official venue learn songs' section energy
+    # markers. Density + structure lead; fullness supports, velocity is
+    # zeroed (charts are often near-flat in velocity).
+    midi_comp = [0.70 * rdens[i] + 0.00 * rfull[i] + 0.20 * struct[i]
+                 + 0.10 * rvel[i] for i in range(len(sections))]
 
-    comp: list[float] = []
-    for i in range(len(sections)):
+    # ── Hybrid tier assignment ────────────────────────────────────────────
+    # BLENDED approach: combined = alpha * audio + (1-alpha) * midi, then
+    # thresholds on the combined score.  Alpha=0.6 means audio leads (60%)
+    # but MIDI fills in the mid zone that audio can't separate.
+    #
+    # Calibrated against 1450 official section markers across 100 songs
+    # (dev/blend_compare.py): alpha=0.6 + calm<0.40 + high>0.55 gives the
+    # best balance of agreement (41.2%) and distribution (23/35/42 vs
+    # official 31/35/35).
+    #
+    # Per-theme thresholds: slow songs have a quieter baseline, so the
+    # calm threshold drops and the high threshold rises.
+    _BLEND_ALPHA = 0.60
+    _BLEND_CALM = 0.475
+    _BLEND_HIGH = 0.570
+    _THEME_THRESHOLDS = {
+        "slow":    (0.45, 0.70),   # slow songs are quieter
+    }
+    blend_calm, blend_high = _THEME_THRESHOLDS.get(theme, (_BLEND_CALM, _BLEND_HIGH))
+
+    for i, s in enumerate(sections):
         if au is not None:
-            # FEEL audio dominates (0.78). MIDI note-density cues are a weak support
-            # only (they track note count, not felt intensity) and the structural
-            # prior is barely-there (0.05) so energy is NOT locked to section type —
-            # a busy chorus no longer auto-reads 'high'.
-            comp.append(0.78 * au[i] + 0.06 * rfull[i] + 0.06 * rdens[i]
-                        + 0.05 * rvel[i] + 0.05 * struct[i])
+            combined = _BLEND_ALPHA * au[i] + (1 - _BLEND_ALPHA) * midi_comp[i]
+            if combined < blend_calm:
+                s.energy = "calm"
+            elif combined > blend_high:
+                s.energy = "high"
+            else:
+                s.energy = "mid"
         else:
-            # No audio: note DENSITY leads (survives a missing vocal track), band
-            # fullness + structure support, velocity is the weakest (charts are often
-            # near-flat in velocity). Density-led so a heavy instrumental outro/
-            # breakdown (no singer) is no longer dragged to 'calm' by the fullness
-            # penalty — it reads by how busy the band actually is.
-            comp.append(0.45 * rdens[i] + 0.20 * rfull[i] + 0.25 * struct[i]
-                        + 0.10 * rvel[i])
+            # No audio — MIDI composite only
+            if midi_comp[i] < 0.20:
+                s.energy = "calm"
+            elif midi_comp[i] < 0.60:
+                s.energy = "mid"
+            else:
+                s.energy = "high"
 
-    # Tier by FIXED thresholds on the composite itself — NOT forced thirds, and NOT
-    # re-normalized to this song's range (which would undo the song-relative meaning
-    # and re-force a spread). The audio cue (au) is now MAGNITUDE-scaled song-relative
-    # (_scale01: judged vs the song's loud ceiling, not rank position), so a merely-
-    # moderate verse maps low and reads 'calm' instead of being inflated to 'mid' just
-    # for sitting above the quiet parts. 'high' stays rare (only the real peaks); a
-    # near-flat song collapses to ~0.5 → all 'mid' (no fake extremes). Thresholds
-    # recalibrated (calm<0.45) on the magnitude comp vs the 20 venues (CALM markers
-    # median ~0.40, HIGH ~0.69) + the Broken Mirror anchors (Verse 2 → calm).
-    for s, c in zip(sections, comp):
-        s.energy = "calm" if c < 0.45 else ("mid" if c < 0.62 else "high")
+    # Sub-spans from audio are NOT clamped — they provide within-section
+    # dynamics that may differ from the section-level tier.
+
     return au is not None
 
 
@@ -408,6 +440,8 @@ def process_midi(
     do_venue: bool = False,
     audio_path: str | None = None,
     do_lipsync: bool = False,
+    do_talkies: bool = False,
+    do_drum_anim: bool = True,
 ) -> dict:
     """
     Process a MIDI file:
@@ -422,6 +456,15 @@ def process_midi(
         # Some MIDIs (e.g. miracle) have sysex/data bytes outside 0..127.
         # clip=True clamps them to the valid MIDI range instead of blowing up.
         mid = mido.MidiFile(src_path, clip=True)
+    # RB3 requires 480 TPB; .chart imports keep the chart's native resolution
+    # (often 192). Normalise up-front so all downstream tick math AND the output
+    # are 480.
+    rescale_midi_tpb(mid, 480)
+    # Onyx-style source-format auto-detect: rename legacy tracks to RB names and
+    # remap FoF star-power (note 103) to RB overdrive (116). No-op on RB-format
+    # charts (incl. our own .chart imports). Runs before difficulty generation so
+    # the whole pipeline sees standard track names and overdrive on 116.
+    norm = normalize_source_midi(mid)
     tpb = mid.ticks_per_beat
     tempo_map = build_tempo_map(mid)
     time_sig_map = build_time_sig_map(mid)
@@ -435,6 +478,7 @@ def process_midi(
         "beat_extended": False,
         "audio_used": False, "audio_drums": False, "audio_lyrics": False,
         "audio_anim_instr": [],
+        "tracks_renamed": norm["tracks_renamed"], "sp_remapped": norm["sp_remapped"],
     }
 
     # Signals for generating the venue
@@ -564,7 +608,7 @@ def process_midi(
         # energy. With no audio/libs, sections.energy stays None (MIDI-only intact).
         stats["audio_used"] = _apply_audio_energy(
             os.path.dirname(os.path.abspath(src_path)), sections, tempo_map, tpb,
-            mid, part_onsets, audio_path)
+            mid, part_onsets, audio_path, theme)
         # Drum hits for the lightshow (synced keyframes + pyro).
         drum_onsets = sorted(
             t for nm, ons in part_onsets.items()
@@ -617,6 +661,7 @@ def process_midi(
         energy_env = None
         audio_strobe = None
         drop_ticks = None
+        band_activity: dict[str, list[int]] = {}
         if _audio.available() and a_paths:
             if not drum_onsets:                       # Layer 1
                 pd = _audio.percussive_onset_ticks(a_paths, tempo_map, tpb)
@@ -657,6 +702,14 @@ def process_midi(
                     a_paths, sections, tempo_map, tpb)
                 if drop_ticks:
                     stats["audio_blackout_calm"] = len(drop_ticks)
+            # Audio band activity for camera identity refinement
+            band_activity = {}
+            for band in ("bass", "drums", "lead"):
+                ba = _audio.band_activity_ticks(a_paths, tempo_map, tpb, band)
+                if ba:
+                    band_activity[band] = ba
+            if band_activity:
+                stats["audio_band_activity"] = list(band_activity.keys())
             # Character ANIMATION from the audio: ONLY vocals. Animating an ABSENT
             # bass/guitar/drums/keys creates a PART track with no charted gems —
             # RB3 doesn't render the character (camera/animation pointing at nothing)
@@ -689,7 +742,7 @@ def process_midi(
                 inst_onsets=inst_onsets, n_harm=n_harm, fill_onsets=fill_onsets,
                 dbass_onsets=dbass_onsets, audio_onsets=audio_accents,
                 energy_env=energy_env, audio_strobe_spans=audio_strobe,
-                drop_ticks=drop_ticks)
+                drop_ticks=drop_ticks, band_activity=band_activity)
             new_mid.tracks.append(build_venue_track(venue_events))
             stats["venue_events"] = len(venue_events)
             stats["venue_theme"] = theme
@@ -730,7 +783,7 @@ def process_midi(
                 tname = _INST_TRACK[inst]
                 if tname.upper() in existing:
                     continue
-                markers = build_animations(ons, sections, theme, tpb, time_sig_map, inst)
+                markers = build_animations(ons, sections, tpb, time_sig_map, inst)
                 markers += instrument_extras(inst, ons, sections, tpb)
                 if markers:
                     new_mid.tracks.append(_build_anim_track(tname, markers))
@@ -790,11 +843,24 @@ def process_midi(
                         new_mid.tracks[bi] = ext
                         stats["beat_extended"] = True
 
+    # Drummer limb animations (PART DRUMS notes 24-51): RB3 needs them authored or
+    # the drummer stays idle. Synthesise them HERE, into the notes.mid track, from the
+    # Expert gems — NOT at conversion time. No-op if the drums track is already animated.
+    if do_drum_anim:
+        try:
+            from . import convert as _convert
+            new_mid, drum_anim_stats = _convert.generate_drum_animations(new_mid)
+            if drum_anim_stats.get("added"):
+                stats["drum_anim_events"] = drum_anim_stats["added"]
+        except Exception:
+            pass
+
     # Generate talkies: for songs with lyrics, chart PART VOCALS as talky/unpitched
     # vocals (extended to the next syllable + gap). Onyx generates the lipsync itself
     # from the length of these tubes in the .ini→RB3/PS3 build.
-    if do_lipsync and song_end > 0:
-        _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats)
+    if (do_talkies or do_lipsync) and song_end > 0:
+        _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
+                       do_talkies=do_talkies, do_lipsync=do_lipsync)
 
     new_mid.save(dst_path)
     if stats.get("sysex_kept"):
@@ -842,7 +908,8 @@ def _gen_phrase_notes(notes: list[tuple[int, int]], tpb: int) -> list[tuple[int,
 
 
 def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
-                              tempo_map=None, folder: str | None = None) -> None:
+                              tempo_map=None, folder: str | None = None,
+                              write_gems: bool = True) -> None:
     """Create unpitched gems (talky, lyric '#') in PART VOCALS from the lyrics.
 
     Each note extends to near the next syllable / phrase end, leaving a GAP (notes
@@ -923,7 +990,7 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
         gems.append((t, end))
         # mark the lyric as talky ('#' at the end, after '-'/'='), if it isn't already.
         cur = e.msg.text
-        if not cur.rstrip().endswith(("#", "^")):
+        if write_gems and not cur.rstrip().endswith(("#", "^")):
             e.msg = e.msg.copy(text=cur + "#")
         # Record the span (seconds) + loudness gain for the viseme track.
         if tempo_map is not None:
@@ -931,6 +998,11 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
             e_s = tick_to_ms(end, tempo_map, tpb) / 1000.0
             gain = _audio.syllable_gain(va, s_s, e_s) if va is not None else 1.0
             lip_spans.append((s_s, e_s, cur, gain))
+
+    # When only the LIPSYNC1 track is requested (talkies off), don't touch PART
+    # VOCALS — just hand back the spans that drive the viseme track.
+    if not write_gems:
+        return lip_spans
 
     # phrase markers (105) if the track doesn't have them — RB needs them for the vocals.
     have_phrases = any(e.msg.type == "note_on" and getattr(e.msg, "velocity", 0) > 0
@@ -957,21 +1029,30 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
     return lip_spans
 
 
-def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats) -> None:
-    """Two complementary lipsync outputs from the lyrics:
+def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
+                   do_talkies: bool = True, do_lipsync: bool = True) -> None:
+    """Two independent lipsync outputs from the lyrics, each toggled separately:
 
-    1. Talky vocals in PART VOCALS — the path RB/Onyx's `.ini` import actually uses
-       (charted tubes → autoLipsync). Works in-game today.
-    2. A LIPSYNC1 viseme track — text-commands `[<viseme> <weight>[ hold|ease]]`, the
-       exact format Onyx parses (confirmed in `Onyx/MIDI/Track/Lipsync.hs`: track name
-       `LIPSYNC1`, graph token = curve out of the keyframe). Sparse keyframes (held vowels,
-       diphthong glides), not dense 30fps deltas. Consumed by Onyx's milo workflow and
-       future-proof for YARG (its `LoadLipsyncFromMilo` has a TODO to parse lipsync
-       from MIDI). Timing/weight are audio-guided from the same spans as (1), beating
-       both engines' built-in geometric generators."""
+    1. Talky vocals in PART VOCALS (``do_talkies``) — the path RB/Onyx's `.ini` import
+       actually uses (charted tubes → autoLipsync). Works in-game today.
+    2. A LIPSYNC1 viseme track (``do_lipsync``) — text-commands
+       `[<viseme> <weight>[ hold|ease]]`, the exact format Onyx parses (confirmed in
+       `Onyx/MIDI/Track/Lipsync.hs`: track name `LIPSYNC1`, graph token = curve out of
+       the keyframe). Sparse keyframes (held vowels, diphthong glides), not dense 30fps
+       deltas. Consumed by Onyx's milo workflow and future-proof for YARG (its
+       `LoadLipsyncFromMilo` has a TODO to parse lipsync from MIDI). Timing/weight are
+       audio-guided from the same spans as (1), beating both engines' built-in
+       geometric generators.
+
+    The spans are computed from the lyrics regardless; ``write_gems`` only controls
+    whether PART VOCALS is rewritten, so the LIPSYNC1 track can be generated without
+    charting talkies (and vice-versa)."""
+    if not do_talkies and not do_lipsync:
+        return
     folder = os.path.dirname(os.path.abspath(dst_path))
-    spans = _chart_vocals_from_lyrics(new_mid, tpb, stats, tempo_map, folder) or []
-    if spans and tempo_map is not None and song_end > 0:
+    spans = _chart_vocals_from_lyrics(new_mid, tpb, stats, tempo_map, folder,
+                                      write_gems=do_talkies) or []
+    if do_lipsync and spans and tempo_map is not None and song_end > 0:
         try:
             from . import lipsync as _lip
             keyframes = _lip.lipsync_keyframes_from_spans(spans)
@@ -986,6 +1067,11 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats) -> None:
                 stats["lipsync_events"] = len(keyframes)
         except Exception:
             pass
+        # NOTE: the .milo file is NOT built here. Processing only authors the
+        # audio-guided LIPSYNC1 track (above); the actual <id>.milo_ps3 is created
+        # later, at conversion time (ps3build.build_ps3_song), from this very track
+        # / its charted talky vocals — so there's exactly one milo, made when the
+        # PS3 pack is assembled.
 
 
 _LIPSYNC_GRAPH_TOKEN = {"linear": "", "hold": " hold", "ease": " ease"}
@@ -1118,6 +1204,8 @@ def process_folder(
     do_venue: bool = False,
     do_lipsync: bool = False,
     do_hide_bg: bool = False,
+    do_talkies: bool = False,
+    do_drum_anim: bool = True,
 ) -> None:
     # Hide in-game background images (background.png/jpg → .bak) — Venue sub-option.
     if do_hide_bg:
@@ -1153,7 +1241,8 @@ def process_folder(
             if not from_chart and not os.path.exists(backup):
                 shutil.copy2(path, backup)
             s = process_midi(path, path, diffs_to_gen, do_expert_plus,
-                             threshold_ms, do_venue, None, do_lipsync)
+                             threshold_ms, do_venue, None, do_lipsync, do_talkies,
+                             do_drum_anim=do_drum_anim)
             modified += 1
             skipped_total += len(s.get("diffs_skipped", []))
             if s.get("venue_skipped"):
@@ -1162,6 +1251,12 @@ def process_folder(
                 groove_fails.append(f"{name}: {w}")
             extra = f"  [2x: {s['converted_2x']}]" if do_expert_plus and s["total_kicks"] else ""
             log_fn(f"  ✓ {name}{extra}\n", "ok")
+            if s.get("tracks_renamed"):
+                ren = ", ".join(f"{o or '?'}→{n}" for o, n in s["tracks_renamed"])
+                log_fn(f"    ◇ normalized track names: {ren}\n", "info")
+            if s.get("sp_remapped"):
+                log_fn(f"    ◇ FoF star-power: remapped {s['sp_remapped']} "
+                       f"phrase(s) from note 103 → overdrive 116\n", "info")
             if do_venue and s.get("venue_events"):
                 audio = " · audio✓" if s.get("audio_used") else ""
                 extra = ""
@@ -1184,6 +1279,8 @@ def process_folder(
                 tr_txt = f" · {tr} trimmed by audio" if tr else ""
                 log_fn(f"    ◇ talkies: {s['vocals_charted']} charted vocals"
                        f"{ph_txt}{tr_txt}\n", "info")
+            if s.get("lipsync_events"):
+                log_fn(f"    ◇ lipsync: {s['lipsync_events']} viseme keyframes\n", "info")
             for sk in s.get("diffs_skipped", []):
                 log_fn(f"    ↷ skipped {sk} (already charted)\n", "info")
             # Groove-check warnings are recorded only in the session log file,

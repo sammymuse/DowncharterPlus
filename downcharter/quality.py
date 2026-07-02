@@ -9,6 +9,7 @@ before publishing.
 """
 from .midi_utils import AbsEvent
 from .guitar import pair_notes, note_to_fret
+import bisect
 
 TOL = 20
 
@@ -32,7 +33,6 @@ def accent_preservation(expert_events: list[AbsEvent],
                         reduced_events: list[AbsEvent],
                         diff: str, tpb: int) -> float:
     """Fraction of Expert accents preserved (±TOL) in the `diff` reduction."""
-    import bisect
     accents = expert_accents(expert_events, tpb)
     if not accents:
         return 1.0
