@@ -695,7 +695,26 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     if san.get("ps_tracks_dropped"):
         log(f"    ◇ mid: dropped {san['ps_tracks_dropped']} Phase-Shift-only "
             f"track(s) (e.g. PART REAL_DRUMS_PS)\n", "info")
-    # b3) Onyx no-Magma fixups: remove note-less overdrive phrases (fixNotelessOD)
+    # b3) Guitar/bass hand position map: generate force-HOPO (101/102) markers
+    #     on Expert guitar/bass tracks throughout the whole song, not just at the
+    #     first note cluster. No-op if markers already exist.
+    from .guitar_handmap import apply_handmap
+    from .midi_utils import to_abs, to_track
+    for i, tr in enumerate(out_mid.tracks):
+        nm = (tr.name or "").strip().upper()
+        if "GUITAR" not in nm and "BASS" not in nm:
+            continue
+        if "COOP" in nm or "RHYTHM" in nm:
+            continue
+        events = to_abs(tr)
+        new_events = apply_handmap(events, out_mid.ticks_per_beat)
+        new_tr = to_track(new_events)
+        new_tr.name = tr.name
+        out_mid.tracks[i] = new_tr
+    # b4) Init markers at the first note cluster for all guitar/bass tracks.
+    #     Onyx edgesBRE — force-HOPO (101/102/89/90/77/78/65/66) + lane notes.
+    out_mid = _convert.fix_init_markers(out_mid)
+    # b5) Onyx no-Magma fixups: remove note-less overdrive phrases (fixNotelessOD)
     #     and add missing drum [mix] events (drumsComplete).
     out_mid, fx = _convert.apply_rb_fixups(out_mid)
     if fx["noteless_od_removed"] or fx["drum_mix_added"]:
@@ -717,7 +736,7 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
         log(f"    ◇ mid: added "
             f"{'[music_start] ' if fx['music_start_added'] else ''}"
             f"{'[music_end]' if fx['music_end_added'] else ''}\n", "info")
-    # b4) Lead-in pad (Onyx magmaPad): RB3 needs >=6 beats (2.6s at 120 BPM)
+    # b6) Lead-in pad (Onyx magmaPad): RB3 needs >=6 beats (2.6s at 120 BPM)
     #     before the first gem or it can reject/hang.  Pad is computed from the
     #     RAW source (like Onyx), not the processed output, because processing
     #     removes/shifts init markers.  Both MIDI and audio are padded so they
