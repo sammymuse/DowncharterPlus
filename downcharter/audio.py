@@ -36,6 +36,10 @@ _NON_BAND_STEMS = ("crowd", "click", "guide")
 # Filename keywords that mark an ISOLATED vocal stem.
 _VOCAL_STEM_KEYS = ("vocal", "vox")
 
+# Default vocal channel indices inside a 12-channel .mogg (RB3 standard layout).
+# Layout: drum=(0,1), bass=(2,3), guitar=(4,5), vocals=(6,7), keys=(8,9), crowd=(10,11)
+_MOGG_VOCAL_CHANNELS = (6, 7)
+
 
 def find_vocal_stems(folder: str) -> list[str]:
     """Isolated vocal stem files in the folder (filename contains 'vocal'/'vox').
@@ -51,6 +55,94 @@ def find_vocal_stems(folder: str) -> list[str]:
                 and "harm" not in low):   # keep only the lead vocal stem
             out.append(os.path.join(folder, f))
     return sorted(out)
+
+
+def find_vocal_audio(folder: str) -> list[str] | None:
+    """Find vocal audio in a song folder.
+
+    Returns a list of paths (separated vocal stems) for direct use with
+    ``voice_activity()``, or ``None`` to indicate the caller should try
+    ``load_vocal_from_mogg()`` on the folder's ``.mogg`` instead.
+
+    Priority:
+    1. Separated vocal stems (``Vocal.ogg`` / ``vocals.wav``, no 'harm')
+       → returned directly
+    2. A ``.mogg`` in the folder → ``None`` (caller calls ``load_vocal_from_mogg``)
+    3. Nothing found → ``[]`` (no vocal audio at all → geometric fallback)
+    """
+    stems = find_vocal_stems(folder)
+    if stems:
+        return stems
+    # No separated stems — check for a .mogg to extract from.
+    if os.path.isdir(folder):
+        for f in os.listdir(folder):
+            if f.lower().endswith(".mogg"):
+                return None  # signal: try load_vocal_from_mogg
+    return []
+
+
+def load_vocal_from_mogg(
+    mogg_path: str,
+    vocal_channels: tuple[int, int] = _MOGG_VOCAL_CHANNELS,
+) -> tuple:
+    """Extract ONLY the vocal channels from an unencrypted .mogg file.
+
+    Returns ``(mono_float32, sample_rate)`` or ``None`` on failure
+    (encrypted mogg, missing channels, or I/O error).
+
+    The standard RB3 12-channel layout places vocals at channels 6-7
+    (stereo).  The caller can override ``vocal_channels`` for non-standard
+    layouts.  If the file has fewer channels than required, falls back to
+    an all-channel mean (so it never silently returns silence)."""
+    try:
+        raw = open(mogg_path, "rb").read()
+    except Exception:
+        return None
+    version = struct.unpack("<I", raw[:4])[0]
+    if version != 0x0A:
+        return None  # encrypted — not supported
+    offset = struct.unpack("<I", raw[4:8])[0]
+    try:
+        data, sr = _read_all_or_blocks(io.BytesIO(raw[offset:]))
+    except Exception:
+        return None
+    # Select requested channels, or fall back to all-channel mean.
+    mc = data.shape[1]
+    lo, hi = vocal_channels
+    if hi < mc:
+        mono = data[:, lo:hi + 1].mean(axis=1)
+    else:
+        mono = data.mean(axis=1)
+    return mono.astype("float32"), sr
+
+
+def voice_activity_from_mogg(
+    mogg_path: str,
+    vocal_channels: tuple[int, int] = _MOGG_VOCAL_CHANNELS,
+    hop_s: float = 0.05,
+):
+    """Voice activity envelope from the vocal channels of a ``.mogg`` file.
+
+    Returns ``(env, hop_s, thr)`` — same three-tuple format as
+    :func:`voice_activity` — or ``None`` if the mogg can't be read /
+    is encrypted / has no audible content on the vocal channels."""
+    result = load_vocal_from_mogg(mogg_path, vocal_channels)
+    if result is None:
+        return None
+    mono, sr = result
+    try:
+        import numpy as np
+        env = rms_envelope(mono, sr, hop_s)
+        if len(env) < 4:
+            return None
+        peak = float(env.max())
+        floor = float(np.percentile(env, 20))
+        if peak <= 0:
+            return None
+        thr = floor + 0.08 * (peak - floor)
+        return env, hop_s, thr
+    except Exception:
+        return None
 
 
 def voice_activity(paths, hop_s: float = 0.05):

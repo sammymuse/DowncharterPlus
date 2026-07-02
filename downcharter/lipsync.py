@@ -576,14 +576,135 @@ def _simplify_series(ser: list[list]) -> list[list]:
     return ser[max(0, nz[0] - 1):nz[-1] + 2]   # keep one zero on each side
 
 
-def lipsync_keyframes_from_spans(spans, lang: str = "en"):
+# ─────────────────── facial animation keyframes ───────────────────
+# Generated alongside mouth visemes in the same LIPSYNC1 track.
+# Official RB3 milos carry Blink, Brow_*, Squint mixed with mouth shapes.
+
+_FACIAL_VISEMES = ("Blink", "Brow_aggressive", "Brow_down",
+                   "Brow_pouty", "Brow_up", "Squint")
+
+# Timing constants (seconds)
+_BLINK_INTERVAL = (2.0, 10.0)     # random uniform range
+_BLINK_CLOSE_S = 0.06             # close duration
+_BLINK_HOLD_S = 0.05              # hold closed
+_BLINK_OPEN_S = 0.08              # open duration
+_BLINK_WEIGHT = 140
+
+_SQUINT_INTERVAL = (8.0, 15.0)
+_SQUINT_DURATION = 0.25
+_SQUINT_WEIGHT = 100
+
+
+def _generate_blinks(
+    song_len_s: float,
+    phrase_ends: list[float] | None = None,
+    rng=None,
+) -> list[tuple[float, str, int, str]]:
+    """Periodic eye-blink keyframes with extra blinks at phrase boundaries.
+
+    Returns ``(time_s, "Blink", weight, graph)`` sparse keyframes that
+    interleave with mouth visemes.  Blinks are quick: close → hold → open
+    in ~0.19 s."""
+    if rng is None:
+        import random as rng
+    out: list[tuple[float, str, int, str]] = []
+    t = rng.uniform(*_BLINK_INTERVAL)
+    while t < song_len_s:
+        out.append((t, "Blink", _BLINK_WEIGHT, "ease"))       # close
+        out.append((t + _BLINK_CLOSE_S, "Blink", _BLINK_WEIGHT, "hold"))  # hold
+        out.append((t + _BLINK_CLOSE_S + _BLINK_HOLD_S, "Blink", 0, "linear"))  # open
+        t += rng.uniform(*_BLINK_INTERVAL)
+
+    # Phrase-boundary bonus blinks: 40 % chance of an extra blink just
+    # after each phrase end (but not within 0.5 s of an existing blink).
+    if phrase_ends:
+        blink_times = {round(e[0], 2) for e in out}
+        for pe in phrase_ends:
+            if pe < 0 or pe >= song_len_s:
+                continue
+            if any(abs(pe - bt) < 0.5 for bt in blink_times):
+                continue
+            if rng.random() < 0.4:
+                out.append((pe, "Blink", _BLINK_WEIGHT, "ease"))
+                out.append((pe + _BLINK_CLOSE_S, "Blink", _BLINK_WEIGHT, "hold"))
+                out.append((pe + _BLINK_CLOSE_S + _BLINK_HOLD_S, "Blink", 0, "linear"))
+                blink_times.update({pe, pe + _BLINK_CLOSE_S,
+                                    pe + _BLINK_CLOSE_S + _BLINK_HOLD_S})
+
+    out.sort(key=lambda e: (e[0], e[1]))
+    return out
+
+
+def _generate_squints(
+    song_len_s: float,
+    rng=None,
+) -> list[tuple[float, str, int, str]]:
+    """Periodic squint keyframes."""
+    if rng is None:
+        import random as rng
+    out: list[tuple[float, str, int, str]] = []
+    t = rng.uniform(*_SQUINT_INTERVAL)
+    while t < song_len_s:
+        out.append((t, "Squint", _SQUINT_WEIGHT, "ease"))
+        out.append((t + _SQUINT_DURATION, "Squint", 0, "linear"))
+        t += rng.uniform(*_SQUINT_INTERVAL)
+    return out
+
+
+def generate_facial_keyframes(
+    song_len_s: float,
+    phrase_ends: list[float] | None = None,
+    rng_seed: int | None = None,
+) -> list[tuple[float, str, int, str]]:
+    """All facial animation keyframes (Blink, Squint) for the whole song.
+
+    Returns sparse keyframes in the same ``(time_s, viseme, weight, graph)``
+    format as :func:`lipsync_keyframes_from_spans`, ready to be merged.
+    Eyebrows (Brow_aggressive, Brow_down, …) are a stub for future
+    intensity-based generation."""
+    import random as _rng
+    rng = _rng.Random(rng_seed) if rng_seed is not None else _rng
+    out: list[tuple[float, str, int, str]] = []
+    out.extend(_generate_blinks(song_len_s, phrase_ends, rng))
+    out.extend(_generate_squints(song_len_s, rng))
+    # Eyebrows: stub — empty for now.  Future work can wire in
+    # phrase intensity → Brow_aggressive / Brow_down.
+    out.sort(key=lambda e: (e[0], e[1]))
+    return out
+
+
+def merge_facial_into_keyframes(
+    mouth_kf: list[tuple[float, str, int, str]],
+    facial_kf: list[tuple[float, str, int, str]],
+) -> list[tuple[float, str, int, str]]:
+    """Merge mouth and facial keyframes, sorted by (time_s, viseme).
+
+    Mouth and facial visemes are disjoint sets — no duplicate-viseme risk.
+    The sort order matches ``lipsync_keyframes_from_spans`` so the caller
+    gets a single flat list ready for ``_build_lipsync_track``."""
+    out = mouth_kf + facial_kf
+    out.sort(key=lambda e: (e[0], e[1]))
+    return out
+
+
+def lipsync_keyframes_from_spans(
+    spans,
+    lang: str = "en",
+    phrase_ends: list[float] | None = None,
+    song_len_s: float | None = None,
+    facial_seed: int | None = None,
+) -> list[tuple[float, str, int, str]]:
     """(time_s, viseme, weight, graph) sparse keyframes for a LIPSYNC# MIDI track.
 
     Production path. Same audio-guided spans as `lipsync_events_from_spans`, but emits
     sparse keyframes with Onyx graph tokens (held vowels = `hold`, diphthong glides =
     `ease`, transitions = linear) instead of baking the curve into dense 30fps deltas.
     Far fewer events and closer to how Onyx itself authors the milo. Syllable windows
-    are disjoint (audio gap between gems) so each closes the mouth before the next."""
+    are disjoint (audio gap between gems) so each closes the mouth before the next.
+
+    When ``song_len_s`` is provided, facial animation keyframes (Blink, Squint) are
+    generated alongside the mouth shapes and merged into the output.  ``facial_seed``
+    makes the random blink/squint timing reproducible."""
     spans = list(spans)
     shapes = _resolve_shapes(spans, lang)
     out: list[tuple[float, str, int, str]] = []
@@ -593,7 +714,11 @@ def lipsync_keyframes_from_spans(spans, lang: str = "en"):
         if end - t <= 0:
             continue
         out.extend(_keyframes_from_points(_syllable_points_g(t, end - t, shape), gain))
-    out.sort(key=lambda e: (e[0], e[1]))
+    if song_len_s is not None and song_len_s > 0:
+        facial = generate_facial_keyframes(song_len_s, phrase_ends, facial_seed)
+        out = merge_facial_into_keyframes(out, facial)
+    else:
+        out.sort(key=lambda e: (e[0], e[1]))
     return out
 
 

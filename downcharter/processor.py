@@ -955,9 +955,16 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
         try:
             from . import audio as _audio
             if _audio.available():
-                stems = _audio.find_vocal_stems(folder)
-                if stems:
-                    va = _audio.voice_activity(stems)
+                vocal = _audio.find_vocal_audio(folder)
+                if vocal:
+                    va = _audio.voice_activity(vocal)
+                elif vocal is None:
+                    # No separated stems — try extracting vocal channels from .mogg
+                    for f in os.listdir(folder):
+                        if f.lower().endswith(".mogg"):
+                            va = _audio.voice_activity_from_mogg(
+                                os.path.join(folder, f))
+                            break
         except Exception:
             va = None
 
@@ -1060,7 +1067,21 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
     if do_lipsync and spans and tempo_map is not None and song_end > 0:
         try:
             from . import lipsync as _lip
-            keyframes = _lip.lipsync_keyframes_from_spans(spans)
+            # Extract phrase ends (seconds) from PART VOCALS for facial animation.
+            phrase_ends_s: list[float] = []
+            pv = next((t for t in new_mid.tracks
+                       if t.name.strip().upper() == "PART VOCALS"), None)
+            if pv is not None:
+                pe_ticks = _abs_phrase_ends(list(to_abs(pv)))
+                phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
+                                 for t in sorted(set(pe_ticks))]
+            song_len_s = tick_to_ms(song_end, tempo_map, tpb) / 1000.0
+            keyframes = _lip.lipsync_keyframes_from_spans(
+                spans,
+                phrase_ends=phrase_ends_s,
+                song_len_s=song_len_s,
+                facial_seed=42,  # deterministic for reproducible builds
+            )
             if keyframes:
                 tr = _build_lipsync_track(keyframes, tempo_map, tpb)
                 li = next((i for i, t in enumerate(new_mid.tracks)
