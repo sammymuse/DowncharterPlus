@@ -18,6 +18,7 @@ import re
 
 import mido
 from .midi_utils import AbsEvent, tick_to_ms, ms_to_ticks, measure_ticks_at
+from .venue_director import plan_venue, VenueDesign
 
 # ── Vocabulary (VENUE_SPEC.md) ────────────────────────────────────────────────
 
@@ -714,11 +715,13 @@ _LIGHT_MARKOV: dict[str, dict[str, float]] = {
 
 def _markov_choice(last: str | None, candidates: list[str],
                    markov_table: dict[str, dict[str, float]] | None = None,
-                   default_fallback: str = "loop_cool") -> str:
+                   default_fallback: str = "loop_cool",
+                   rng: random.Random | None = None) -> str:
     """Select from `candidates` weighted by transition probability from `last`.
 
     Uses the specified `markov_table` (defaults to `_LIGHT_MARKOV`). Falls back
     to the 1st candidate if `last` is None or has no known transitions.
+    `rng` (the design's seeded RNG) makes the draw reproducible per song.
     """
     table = markov_table or _LIGHT_MARKOV
     if last is None or not candidates:
@@ -730,7 +733,7 @@ def _markov_choice(last: str | None, candidates: list[str],
     total = sum(wlist)
     if total <= 0:
         return candidates[0]
-    r = random.random() * total
+    r = (rng or random).random() * total
     acc = 0.0
     for c, w in zip(candidates, wlist):
         acc += w
@@ -838,7 +841,8 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
                    strobe_spans: list[tuple[int, int]] | None = None,
                    audio_onsets: list[int] | None = None,
                    energy_env: list[tuple[int, str]] | None = None,
-                   drop_ticks: list[int] | None = None) -> list[AbsEvent]:
+                   drop_ticks: list[int] | None = None,
+                   design: "VenueDesign | None" = None) -> list[AbsEvent]:
     """Professional-style lightshow, DRIVEN BY THE SECTION TYPE (the primary pattern
     learned from the 20 venues). Cycles the section pool (SECTION_LIGHT_POOL) at the
     drums' rhythm and sprinkles a genre accent (theme) every _LIGHT_ACCENT_EVERY
@@ -847,6 +851,7 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
     ('Painkiller' effect). Cadence by energy (refined by audio)."""
     out: list[AbsEvent] = []
     light_events: list[tuple[int, str]] = []   # (tick, preset) to generate keyframes
+    rng = design.rng if design is not None else None
     drums = sorted(drum_onsets) if drum_onsets else []
     pause_spans = pause_spans or []
     strobe_spans = strobe_spans or []
@@ -854,7 +859,7 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
     env = sorted(energy_env) if energy_env else None
     pi = 0
     last: str | None = None
-    for s in sections:
+    for si, s in enumerate(sections):
         energy = section_energy(s)
         pool_by_kind = SECTION_LIGHT_POOL.get(s.kind, SECTION_LIGHT_POOL["default"])
         if isinstance(pool_by_kind, dict):
@@ -863,6 +868,22 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
             base = _warmth_pool(pool_by_kind, s.warmth)
         accents = ([SPECIAL_LIGHTING[s.kind]] if s.kind in SPECIAL_LIGHTING
                    else _warmth_pool(_section_lights(theme, s), s.warmth))
+        # ── Motivo por grupo (repetição estrutural, dev/repetition_stats.json:
+        # oficiais reutilizam o look — Jaccard same-group 0.53 vs 0.18, 1.º preset
+        # igual 57%). 1.ª ocorrência GRAVA a sequência; repetições REPETEM-NA.
+        # Energia divergente da 1.ª ocorrência → replay só do 1.º preset.
+        motif: list[str] | None = None
+        recording = False
+        if design is not None:
+            group = design.group_at(si)
+            if design.is_first_occurrence(si):
+                recording = True
+                group.light_motif = []
+            elif group.light_motif:
+                first_energy = section_energy(sections[group.section_idxs[0]])
+                motif = (group.light_motif if energy == first_energy
+                         else group.light_motif[:1])
+        mk = 0                          # posição no motivo em replay
         placed: list[int] = []
         # ── Gather trigger ticks from audio signals ──
         triggers = _gather_lighting_triggers(s, audio_onsets, drum_onsets, env,
@@ -872,6 +893,12 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
         if not use_triggers:
             triggers = _cadence_triggers(s, tpb, _KIND_CADENCE.get(s.kind, _KIND_CADENCE["default"]),
                                          _ENERGY_FACTOR.get(energy, 1.0))
+        # ── Âncora partilhada: o 1.º evento da secção cai no downbeat que a
+        # câmara e o pp também usam (oficiais: offset mediano 0.00 beats).
+        if design is not None:
+            anchor = design.anchors[si]
+            if s.start <= anchor < s.end:
+                triggers = [anchor] + [t for t in triggers if t > anchor]
         # ── Emit clusters at triggers ──
         i = 0
         for tick in triggers:
@@ -892,14 +919,23 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
             # ── Mini-cluster: emit 2-3 rapid changes per step ──
             local = _env_tier(env, tick) if env else energy
             cluster_gaps = _LIGHT_CLUSTER_PAT.get(local, [0.5])
+            # Clímax (último chorus): +1 flip por cluster ≈ a densidade 1.57×
+            # dos oficiais (arc_stats.json) — o pico é luz, não pyro.
+            if design is not None and si == design.climax_idx:
+                cluster_gaps = list(cluster_gaps) + [0.5]
             tt = tick
             for gi in range(len(cluster_gaps) + 1):
                 if tt >= s.end:
                     break
-                if i % _LIGHT_ACCENT_EVERY == _LIGHT_ACCENT_EVERY - 1:
+                if motif is not None and mk < len(motif):
+                    preset = motif[mk]           # replay do look do grupo
+                elif i % _LIGHT_ACCENT_EVERY == _LIGHT_ACCENT_EVERY - 1:
                     preset = accents[(i // _LIGHT_ACCENT_EVERY) % len(accents)]
                 else:
-                    preset = _markov_choice(last, base)
+                    preset = _markov_choice(last, base, rng=rng)
+                if recording:
+                    group.light_motif.append(preset)
+                mk += 1
                 out.append(_txt(tt, f"[lighting ({preset})]"))
                 light_events.append((tt, preset))
                 placed.append(tt)
@@ -1505,7 +1541,8 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
                    time_sig_map: list,
                    drum_onsets: list[int] | None = None,
                    energy_env: list | None = None,
-                   strobe_spans: list | None = None) -> list[AbsEvent]:
+                   strobe_spans: list | None = None,
+                   design: "VenueDesign | None" = None) -> list[AbsEvent]:
     """Professional-style post-proc, placed the way the 20 official venues do it
     (pp_study, dev/_venue_pp_study.py): CLUSTER-then-HOLD.
 
@@ -1521,6 +1558,7 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
     out: list[AbsEvent] = []
     env = sorted(energy_env) if energy_env else None
     walls = sorted(strobe_spans) if strobe_spans else []
+    rng = design.rng if design is not None else None
     last: str | None = None
 
     for s in sections:
@@ -1567,7 +1605,8 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
                     break
                 # Markov-weighted selection from the available filter pool,
                 # biased by the previous filter's transition probabilities.
-                pp = _markov_choice(last, palette, _PP_MARKOV, "clean_trails")
+                pp = _markov_choice(last, palette, _PP_MARKOV, "clean_trails",
+                                    rng=rng)
                 out.append(_txt(tt, f"[{pp}.pp]"))
                 last = pp
                 if gi < len(pattern):
@@ -1910,7 +1949,8 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                  inst_onsets: dict[str, list[int]] | None = None,
                  audio_onsets: list[int] | None = None,
                  energy_env: list[tuple[int, str]] | None = None,
-                 band_activity: dict[str, list[int]] | None = None) -> list[AbsEvent]:
+                 band_activity: dict[str, list[int]] | None = None,
+                 design: "VenueDesign | None" = None) -> list[AbsEvent]:
     """Places camera cuts at the rate of SECTION_PACE_S (× the theme's pace_scale),
     cycling the section pool without repeating the previous cut. Injects D_BRE on BREs.
     If `accents` is given, snaps each cut to the nearest musical accent (±1 beat) —
@@ -1921,6 +1961,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     from collections import deque
     from .cut_events import detect_events
     out: list[AbsEvent] = []
+    rng = design.rng if design is not None else None
     accents = sorted(accents) if accents else []
     # Merge MIDI accents + audio flux accents for richer snap targets
     if audio_onsets:
@@ -1983,10 +2024,10 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             if placed >= s0.start:
                 break
             level_pool = _level_filter(framing0, min_framing_level)
-            cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[0])
+            cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[0], rng=rng)
             if cut == last_cut:
                 idx += 1
-                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[idx % len(level_pool)])
+                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[idx % len(level_pool)], rng=rng)
             slots.append((placed, cut))
             last_cut, last_tick = cut, placed
             cut_level = _CAMERA_LEVELS.get(cut, 999)
@@ -2028,16 +2069,16 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             level_pool = _level_filter(pool, min_framing_level)
             if not level_pool:
                 level_pool = pool
-            cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[0])
+            cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[0], rng=rng)
             if cut == last_cut:
                 idx += 1
-                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[idx % len(level_pool)])
+                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[idx % len(level_pool)], rng=rng)
             # Anti-recency
             for _ in range(len(level_pool)):
                 if cut not in recent_coop and cut != last_cut:
                     break
                 idx += 1
-                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[idx % len(level_pool)])
+                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[idx % len(level_pool)], rng=rng)
             if placed < s.end:
                 slots.append((placed, cut))
                 recent_coop.append(cut)
@@ -2060,7 +2101,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     recent_dir: deque = deque(maxlen=4)
     last_fullband = -10 ** 9
     did_stagedive = False
-    import random
+    _rand = rng if rng is not None else random
     for e in events:
         chosen = None
         for cand in e.cuts:                          # 1st candidate that passes the guard
@@ -2068,7 +2109,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             if g is None:
                 continue
             # 42% chance of self-repeat (matching official data)
-            if accepted and g == accepted[-1][1] and random.random() < 0.42:
+            if accepted and g == accepted[-1][1] and _rand.random() < 0.42:
                 chosen = g
                 break
             if g in recent_dir and chosen is None:
@@ -2611,6 +2652,9 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     onsets = onsets or []
     if sections is None:
         sections = resolve_sections(events_track, song_end, onsets, time_sig_map, tpb)
+    # Director pass: decisões song-level (grupos de repetição, âncoras de
+    # fronteira, arco, RNG seeded do conteúdo) partilhadas por todos os sistemas.
+    design = plan_venue(sections, onsets, inst_onsets, time_sig_map, tpb, song_end)
     out: list[AbsEvent] = []
     pause_spans = find_pause_spans(onsets, time_sig_map, tpb)
     # Strobe fires on fills/consecutive snares (snare+toms), not on fast cymbals.
@@ -2623,9 +2667,11 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
         strobe_spans = _merge_spans(strobe_spans + list(audio_strobe_spans), tpb // 2)
     out += build_lighting(sections, th, tpb, time_sig_map, drum_onsets,
                           pause_spans, strobe_spans, audio_onsets=audio_onsets,
-                          energy_env=energy_env, drop_ticks=drop_ticks)
+                          energy_env=energy_env, drop_ticks=drop_ticks,
+                          design=design)
     out += build_postproc(sections, th, tpb, time_sig_map, drum_onsets,
-                          energy_env=energy_env, strobe_spans=strobe_spans)
+                          energy_env=energy_env, strobe_spans=strobe_spans,
+                          design=design)
     # Audio flux accents join the band accents as pyro candidates (real hits, incl.
     # audio-only ones); build_pyro still gates density/placement by energy + cap.
     pyro_accents = (sorted(set(accents or []) | set(audio_onsets))
@@ -2637,7 +2683,8 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     out += build_camera(sections, tempo_map, time_sig_map, tpb, bre_spans,
                         pace_scale=th["pace"], accents=accents, onsets=onsets,
                         inst_onsets=inst_onsets, audio_onsets=audio_onsets,
-                        energy_env=energy_env, band_activity=band_activity)
+                        energy_env=energy_env, band_activity=band_activity,
+                        design=design)
     if inst_onsets:
         out += build_spotlights(sections, inst_onsets, tpb)
         # Sing-along only with REAL vocals (chart/lyrics), never with the audio proxy.
