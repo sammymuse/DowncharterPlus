@@ -5040,18 +5040,24 @@ def _mood_for_level(level: int, instrument: str, sec_idx: int,
     return f"[{_MOOD_LADDER[max(0, min(level, 2))]}]"
 
 
-def build_animations(part_onsets: list[int], sections: list[Section],
-                     tpb: int, time_sig_map: list,
-                     instrument: str) -> list[AbsEvent]:
+def build_animations(part_onsets: list[int], sections: list[Section], tpb: int,
+                     time_sig_map: list,
+                     instrument: str,
+                     phrase_ends: list[int] | None = None) -> list[AbsEvent]:
     """Generate mood markers for ONE instrument. Offset of ±1/8 on transitions;
-    [idle_realtime] at song boundaries; [idle] on long downtime after the last note."""
+    [idle_realtime] at song boundaries; [idle] on long downtime after the last note.
+
+    For vocals, `phrase_ends` (tick of each phrase-end note_off from 105/106 markers)
+    anchors idle placement after the note/phrase actually ends, not 0.5 beats after the
+    onset — a held vocal note may extend 2-4 beats beyond the onset."""
     onsets = sorted(part_onsets)
     if not onsets:
         return [_txt(0, "[idle_realtime]")]
     if not sections:
         return [_txt(0, "[idle_realtime]")]
     floor = onsets[0]
-    # quarter note (1 beat) offset for anchor/idle placement
+    # 1/8-note offset for anchor/idle placement (conservative for non-vocal — note-off
+    # is close to note-on on percussion. For vocals phrase_ends overrides this.)
     quarter = max(1, tpb // 2)
     last_onset = onsets[-1]
 
@@ -5093,14 +5099,26 @@ def build_animations(part_onsets: list[int], sections: list[Section],
     # the gap to the NEXT note is long. We check: for each pair of consecutive
     # onsets, if the gap >= _IDLE_DOWNTIME_MEASURES measures, emit [idle] right
     # after the first onset (the "last note before the rest").
+    #
+    # For vocals with phrase_ends, use the phrase-end tick as the start of the idle
+    # gap instead of the onset — a held vocal note may extend 2-4 beats beyond
+    # the onset, and placing idle mid-note looks wrong.
     idle_ranges: list[tuple[int, int]] = []
     idle_ticks: set[int] = set()
     dt_measures = _IDLE_DOWNTIME.get(instrument, 4)
     for a, b in zip(onsets, onsets[1:]):
         mt = measure_ticks_at(a, time_sig_map, tpb)
         if b - a >= dt_measures * mt:
-            idle_ranges.append((a, b))
-            idle_ticks.add(a + quarter)
+            # For vocals: find the phrase end after this onset (the note's actual
+            # end time), and use that as the idle-start boundary instead of a.
+            idle_start = a
+            if instrument == "vocal" and phrase_ends:
+                for pe in phrase_ends:
+                    if a < pe < b:
+                        idle_start = pe
+                        break
+            idle_ranges.append((idle_start, b))
+            idle_ticks.add(idle_start + quarter)
 
     def _in_idle(tick: int) -> bool:
         return any(a < tick < b for a, b in idle_ranges)
@@ -5243,9 +5261,9 @@ def generate_animations(part_onsets_by_track: dict[str, list[int]],
         # official venues — generating for all variants inflates counts ~5x.
         if not _is_main_part_track(tname):
             continue
-        markers = build_animations(onsets, sections, tpb,
-                                   time_sig_map, inst)
         pe = vocal_phrase_ends if inst == "vocal" else None
+        markers = build_animations(onsets, sections, tpb,
+                                   time_sig_map, inst, phrase_ends=pe)
         markers += instrument_extras(inst, onsets, sections, tpb, pe)
         res[tname] = markers
     return res
