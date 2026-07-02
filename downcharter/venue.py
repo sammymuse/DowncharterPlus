@@ -1838,6 +1838,39 @@ _DIRECTED_DUO = {
     "D_Duo_Drums": ("drums", "vocal"),
 }
 
+# ── Fase 2: Generic → Specific overwrite ────────────────────────────────────
+# Generic ALL cuts: full-band shots that override instrument features.
+_GENERIC_ALL = frozenset({"D_All", "D_All_Cam", "D_All_LT", "D_All_Yeah"})
+# Generic DUO cuts: two-member interaction shots.
+_GENERIC_DUO = frozenset({"D_Duo_GB", "D_Duo_KG", "D_Duo_KB", "D_Duo_KV",
+                          "D_Duo_Gtr", "D_Duo_Bass", "D_Duo_Drums"})
+_GENERIC = _GENERIC_ALL | _GENERIC_DUO
+
+# Instrument → preferred specific cut (most common feature shot per instrument).
+_INST_TO_CUT: dict[str, str] = {
+    "vocal": "D_Vox_CLS",
+    "drums": "D_Drums_LT",
+    "guitar": "D_Gtr_CLS",
+    "bass": "D_Bass_CLS",
+    "keys": "D_Keys_Cam",
+}
+
+
+def _best_specific_at(tick: int,
+                      inst_onsets: dict[str, list[int]] | None) -> str | None:
+    """Return the best specific instrument cut for the musician most active at `tick`.
+
+    Priority: vocal > drums > guitar > bass > keys (matches official frequency).
+    If no instrument is playing nearby, returns None — the generic cut stands."""
+    if not inst_onsets:
+        return None
+    for inst in ("vocal", "drums", "guitar", "bass", "keys"):
+        ons = inst_onsets.get(inst if inst != "vocal" else "_vocal_real")
+        win = 192 * 2 if inst != "vocal" else 192 * 4  # wider window for vocals
+        if _playing_near(ons, tick, win):
+            return _INST_TO_CUT[inst]
+    return None
+
 
 def _playing_near(onsets: list[int] | None, tick: int, win: int) -> bool:
     """True if the instrument has any onset within ±win ticks of `tick`."""
@@ -1885,6 +1918,18 @@ def _guard_directed(cut: str, tick: int, tpb: int,
         real = inst_onsets.get("_vocal_real")
         if real is None or not _playing_near(real, tick, tpb * 4):
             return None                          # no real vocals → no crowd/sing
+    # Fase 2: Generic ALL/Duo → specific instrument override.
+    # If the generic cut has no instrument feature (ALL/Duo) but a specific
+    # instrument IS active and would make a valid cut, replace the generic
+    # with the specific. This prevents ALL/Duo from cannibalizing instrument
+    # features (top confusion: * → D_All).
+    if cut in _GENERIC:
+        specific = _best_specific_at(tick, inst_onsets)
+        if specific is not None and specific != cut:
+            # Guard the specific cut (may fail if instrument isn't playing)
+            guarded = _guard_directed(specific, tick, tpb, inst_onsets)
+            if guarded is not None:
+                return guarded
     return cut
 
 

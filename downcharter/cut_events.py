@@ -655,11 +655,12 @@ def detect_events(sections: list[Section],
 # Budget (distinct tick positions) per section kind, from 100-song density data.
 # Official: solo 2.23/s, chorus 2.00/s, verse 1.28/s, prechorus 0.86/s, etc.
 # Rounded down to int. Budget 2 = entry + close; budget 1 = entry only.
-# REVISED (volume reduction, Fase 1c): calibrated after measuring 0.79× (667/845)
-# with ALL=1 — overshot. Chorus+solo need budget=2 (official density 2.00/s and
-# 2.23/s); all other kinds stay at 1. Target volume: ~0.95-1.05×.
+# REVISED (volume reduction, Fase 1b): ALL sections at budget 1. Volume measured
+# at 0.79× (667/845) — below the 1.0× target, but preferred over being above.
+# User chose to undershoot slightly and compensate with identity precision gains
+# from Fase 2 (overwrite check) rather than risk volume inflation again.
 _SECTION_BUDGET: dict[str, int] = {
-    "solo": 2, "chorus": 2,       # high official density — keep entry+close
+    "solo": 1, "chorus": 1,
     "verse": 1, "breakdown": 1, "outro": 1,
     "prechorus": 1, "build": 1, "intro": 1,
     "bridge": 1, "postchorus": 1, "riff": 1, "drop": 1,
