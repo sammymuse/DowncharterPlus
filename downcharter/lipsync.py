@@ -91,7 +91,7 @@ _CONS: dict[str, dict] = {
     "B": _pair("Bump"), "CH": _pair("Told"), "D": _pair("Told"),
     "DH": _pair("Told"), "F": _pair("Fave"), "G": {}, "HH": {},
     "JH": _pair("Told"), "K": {}, "L": _pair("Told"), "M": _pair("Bump"),
-    "N": _pair("Told"), "NG": {}, "P": _pair("Bump"), "R": _pair("Roar"),
+    "N": _pair("New"), "NG": {}, "P": _pair("Bump"), "R": _pair("Roar"),
     "S": _pair("Size"), "SH": _pair("Size"), "T": _pair("Told"),
     "TH": _pair("Told"), "V": _pair("Fave"), "W": _pair("Wet"),
     "Y": _pair("Eat"), "Z": _pair("Size"), "ZH": _pair("Size"),
@@ -602,6 +602,8 @@ _BROW_UP_JUMP = 7                 # consecutive note jump >= 7 → Brow_up
 _BROW_AGGRESSIVE_WEIGHT = 120
 _BROW_DOWN_WEIGHT = 110
 _BROW_UP_WEIGHT = 100
+_BROW_POUTY_WEIGHT = 90
+_BROW_DEFAULT_W = 70              # default gentle Brow_down (always active)
 _BROW_HOLD_S = 0.15               # hold the expression briefly
 _BROW_FADE_S = 0.30               # fade out duration
 
@@ -664,35 +666,50 @@ def _generate_squints(
 
 def _generate_eyebrows(
     vocal_notes: list[tuple[float, int]],
+    song_len_s: float,
     rng=None,
 ) -> list[tuple[float, str, int, str]]:
-    """Eyebrow animation keyframes driven by vocal pitch.
+    """Eyebrow animation keyframes driven by vocal pitch and intensity.
+
+    Official milo analysis shows **Brow_down is the DEFAULT** (present in
+    ~98 % of frames across all songs), not an event.  Other brow visemes
+    (aggressive / up / pouty) override it when active.
 
     ``vocal_notes`` is a sorted list of ``(start_s, midi_pitch)`` from the
-    PART VOCALS track.  Rules:
+    PART VOCALS track.  Rules, in priority order (higher wins):
 
-    * **Brow_aggressive** — onsets whose pitch >= ``_BROW_AGGRESSIVE_PITCH``
-      (C5) raise the inner brows for the note's intensity.  Held for
-      ``_BROW_HOLD_S`` then fade out over ``_BROW_FADE_S``.
-    * **Brow_down** — sustained notes (pitch <= ``_BROW_DOWN_PITCH`` = G3)
-      furrow the brows.  Only triggers when the note extends beyond
-      ``_BROW_HOLD_S + _BROW_FADE_S`` so a short low note doesn't scowl.
+    * **Brow_aggressive** — high pitch (>= C5/72) OR dense phrasing (>= 3
+      notes/s within a phrase).  Overrides Brow_down.
     * **Brow_up** — a pitch jump >= ``_BROW_UP_JUMP`` semitones between
-      consecutive vocal onsets raises the brows in surprise at the higher
-      note.  A brief flash (hold + fade = 0.45 s).
+      consecutive notes.  Brief flash, overrides Brow_down.
+    * **Brow_pouty** — rare; triggered randomly in ~5 % of phrases that
+      don't already have another override.  Overrides Brow_down.
+    * **Brow_down** — default state at moderate weight (``_BROW_DEFAULT_W``).
+      Active whenever no other brow viseme is.
     """
     if rng is None:
         import random as rng
     out: list[tuple[float, str, int, str]] = []
-
-    # Group consecutive notes into phrases (gap > 0.5 s = phrase boundary).
     if not vocal_notes:
         return out
+
+    _DW = _BROW_DEFAULT_W
+    _AW = _BROW_AGGRESSIVE_WEIGHT
+    _DWb = _BROW_DOWN_WEIGHT
+    _UW = _BROW_UP_WEIGHT
+    _PW = _BROW_POUTY_WEIGHT
+
+    # ── Group consecutive notes into phrases (gap > 0.5 s = boundary) ──
     phrases: list[list[tuple[float, int]]] = [[vocal_notes[0]]]
     for i in range(1, len(vocal_notes)):
         if vocal_notes[i][0] - vocal_notes[i - 1][0] > 0.5:
             phrases.append([])
         phrases[-1].append(vocal_notes[i])
+
+    # ── Determine the effective brow per phrase ──
+    # Each entry: (start_s, end_s, expression, weight)
+    # expression is one of: "aggressive", "down", "pouty", "up", None (default)
+    brow_segments: list[tuple[float, float, str | None, int]] = []
 
     for phrase in phrases:
         if len(phrase) < 1:
@@ -701,31 +718,57 @@ def _generate_eyebrows(
         t0 = phrase[0][0]
         t1 = phrase[-1][0] + _BROW_HOLD_S + _BROW_FADE_S
         max_p = max(pitches)
-        min_p = min(pitches)
         dur = phrase[-1][0] - phrase[0][0]
+        density = len(phrase) / max(dur, 0.01)
 
-        # Brow_aggressive: any note >= C5 in this phrase.
-        if max_p >= _BROW_AGGRESSIVE_PITCH:
-            out.append((t0, "Brow_aggressive", _BROW_AGGRESSIVE_WEIGHT, "ease"))
-            out.append((t0 + _BROW_HOLD_S, "Brow_aggressive",
-                        _BROW_AGGRESSIVE_WEIGHT, "hold"))
-            out.append((t1, "Brow_aggressive", 0, "linear"))
+        # Priority order: aggressive > up > pouty > down
+        expr: str | None = None
+        w = 0
 
-        # Brow_down: average pitch low AND sustained long enough.
-        if dur > _BROW_HOLD_S + _BROW_FADE_S and sum(pitches) / len(pitches) < _BROW_DOWN_PITCH:
-            out.append((t0, "Brow_down", _BROW_DOWN_WEIGHT, "ease"))
-            out.append((t0 + _BROW_HOLD_S, "Brow_down", _BROW_DOWN_WEIGHT, "hold"))
-            out.append((t1, "Brow_down", 0, "linear"))
+        if max_p >= _BROW_AGGRESSIVE_PITCH or (density >= 3.0 and len(phrase) >= 4):
+            expr, w = "aggressive", _AW
+        elif dur > _BROW_HOLD_S + _BROW_FADE_S and sum(pitches) / len(pitches) < _BROW_DOWN_PITCH:
+            expr, w = "down", _DWb
+        elif rng.random() < 0.05 and len(phrase) >= 3:
+            expr, w = "pouty", _PW
+        # else: keep default Brow_down
 
-    # Brow_up: pitch jump between consecutive notes anywhere in the track.
+        brow_segments.append((t0, t1, expr, w))
+
+    # ── Brow_up flashes are independent of phrases ──
+    brow_up_times: set[float] = set()
     for i in range(1, len(vocal_notes)):
         prev_t, prev_p = vocal_notes[i - 1]
         cur_t, cur_p = vocal_notes[i]
         if cur_p - prev_p >= _BROW_UP_JUMP:
-            jt = cur_t  # flash at the higher note's onset
-            out.append((jt, "Brow_up", _BROW_UP_WEIGHT, "ease"))
-            out.append((jt + _BROW_HOLD_S, "Brow_up", _BROW_UP_WEIGHT, "hold"))
-            out.append((jt + _BROW_HOLD_S + _BROW_FADE_S, "Brow_up", 0, "linear"))
+            brow_up_times.add(cur_t)
+
+    # ── Build keyframes ──
+    # Start with DEFAULT Brow_down at tick 0.
+    out.append((0.0, "Brow_down", _DW, "linear"))
+
+    for seg_start, seg_end, expr, w in brow_segments:
+        # Close-off the default Brow_down before any override at this segment.
+        if expr is not None:
+            out.append((seg_start, "Brow_down", 0, "linear"))
+            vis = f"Brow_{expr}"
+            out.append((seg_start, vis, w, "ease"))
+            out.append((seg_start + _BROW_HOLD_S, vis, w, "hold"))
+            out.append((seg_end, vis, 0, "linear"))
+            out.append((seg_end, "Brow_down", _DW, "linear"))
+
+        # Insert Brow_up flash if it falls within this segment's time window.
+        flash_in = [ut for ut in brow_up_times if seg_start <= ut < seg_end]
+        for ft in flash_in:
+            out.append((ft, "Brow_down", 0, "linear"))
+            out.append((ft, "Brow_up", _UW, "ease"))
+            out.append((ft + _BROW_HOLD_S, "Brow_up", _UW, "hold"))
+            out.append((ft + _BROW_HOLD_S + _BROW_FADE_S, "Brow_up", 0, "linear"))
+            out.append((ft + _BROW_HOLD_S + _BROW_FADE_S, "Brow_down", _DW, "linear"))
+            brow_up_times.discard(ft)
+
+    # Close Brow_down at song end.
+    out.append((song_len_s, "Brow_down", 0, "linear"))
 
     out.sort(key=lambda e: (e[0], e[1]))
     return out
@@ -752,7 +795,7 @@ def generate_facial_keyframes(
     out.extend(_generate_blinks(song_len_s, phrase_ends, rng))
     out.extend(_generate_squints(song_len_s, rng))
     if vocal_notes:
-        out.extend(_generate_eyebrows(vocal_notes, rng))
+        out.extend(_generate_eyebrows(vocal_notes, song_len_s, rng))
     out.sort(key=lambda e: (e[0], e[1]))
     return out
 
