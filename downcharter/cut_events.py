@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import random
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -26,7 +27,18 @@ if TYPE_CHECKING:
     from .venue_director import VenueDesign
 
 from .venue import (Section, section_energy, _camera_energy, _energy_tier_at,
-                    find_pause_spans, measure_ticks_at, _solo_instrument)
+                    find_pause_spans, measure_ticks_at, _solo_instrument,
+                    _guard_directed)
+
+
+@dataclass
+class CutDistribution:
+    """Distribuição de cuts para um dado contexto (section_kind, position).
+
+    `cuts`: lista de (cut_name, base_weight) — peso é a frequência
+            relativa observada nos officiais (0.0–1.0).
+    """
+    cuts: list[tuple[str, float]]
 
 
 @dataclass
@@ -321,6 +333,94 @@ def _busiest_onset(ons: list[int], start: int, end: int, tpb: int, prefer: int) 
     return best
 
 
+def select_cut(
+    section_kind: str,
+    position: str,
+    rng: random.Random | None,
+    featured_inst: str | None,
+    energy: str,
+    section_leaders: list[tuple[str, float]],
+    tick: int,
+    tpb: int,
+    inst_onsets: dict[str, list[int]] | None,
+) -> str | None:
+    """Seleciona um directed cut usando RNG pesado + contexto musical.
+
+    1. Obtém distribuição de (section_kind, position) da _CUT_PDT
+    2. Aplica context_boosts (featured_inst, leaders, energy)
+    3. RNG-weighted choice
+    4. Guard filter (reutiliza _guard_directed existente)
+    5. Fallback se guard rejeitar
+    """
+    dist = _CUT_PDT.get(section_kind, {}).get(position)
+    if not dist:
+        # Fallback: distribuição default
+        dist = _CUT_PDT.get("default", {}).get(position)
+    if not dist:
+        return None
+
+    # ── Step 1: Calcular pesos efetivos ──
+    cuts = [c for c, _ in dist.cuts]
+    weights = []
+
+    for cut_name, base_weight in dist.cuts:
+        boost = 1.0
+
+        # featured_inst boost
+        if featured_inst and _cut_instrument(cut_name) == featured_inst:
+            boost *= 1.4
+
+        # section leaders boost
+        inst = _cut_instrument(cut_name)
+        if inst:
+            for leader_inst, leader_score in section_leaders[:3]:
+                if inst == leader_inst:
+                    boost *= (1.0 + leader_score * 0.4)
+                    break
+
+        # energy boost
+        if energy == "high":
+            if cut_name in ("D_All", "D_All_Cam", "D_All_LT", "D_All_Yeah"):
+                boost *= 1.2
+            elif "Duo" in cut_name:
+                boost *= 1.1
+        elif energy == "calm":
+            if cut_name in ("D_All", "D_All_Cam", "D_All_LT", "D_All_Yeah"):
+                boost *= 0.7
+            elif "CLS" in cut_name or "_Cam_" in cut_name:
+                boost *= 1.2
+
+        weights.append(base_weight * boost)
+
+    # ── Step 2: RNG-weighted selection ──
+    if rng is None:
+        rng = random.Random()
+
+    total = sum(weights)
+    if total <= 0:
+        return None
+    normalized = [w / total for w in weights]
+    chosen = rng.choices(cuts, weights=normalized, k=1)[0]
+
+    # ── Step 3: Guard filter ──
+    result = _guard_directed(chosen, tick, tpb, inst_onsets)
+    if result is not None:
+        return result
+
+    # ── Fallback hierarchy ──
+    for fallback in ["D_Vocals", "D_All", "D_Drums_LT", "D_Gtr"]:
+        r = _guard_directed(fallback, tick, tpb, inst_onsets)
+        if r is not None:
+            return r
+
+    return None
+
+
+def _cut_instrument(cut_name: str) -> str | None:
+    """Retorna o instrumento principal que este cut filma, ou None se genérico."""
+    from .venue import _DIRECTED_INSTR
+    return _DIRECTED_INSTR.get(cut_name)
+
 
 def detect_stagedive(sections: list[Section], inst_onsets: dict[str, list[int]] | None,
                      accents: list[int], time_sig_map: list, tpb: int) -> list[CutEvent]:
@@ -344,81 +444,450 @@ def detect_stagedive(sections: list[Section], inst_onsets: dict[str, list[int]] 
 #  NEW DETECTORS (data-driven, 100-song analysis)
 # ══════════════════════════════════════════════════════════════════════════
 
-# Section-kind → entry cut type, data-driven from 100 songs (2997 cuts).
-# Key principle: section kind determines type, not instrument leader.
-# Percentages shown are of ALL cuts in that section (entry+close+middle).
-_SECTION_ENTRY_CUTS: dict[str, list[str]] = {
-    "verse":      ["D_Vox_Cam_PT", "D_Vocals"],       # Vox_PT 3.2%, Vocals 2.1%
-    "prechorus":  ["D_Vox_Cam_PT", "D_Drums_LT"],     # Vox_PT 4.6%, Drums_LT 2.3%
-    "chorus":     ["D_All", "D_All_Cam"],              # All 5.5%, All_Cam 3.7%
-    "solo":       ["D_Gtr_Cam_PT", "D_Gtr_CLS"],      # Gtr_PT 6.2%, Gtr_CLS 3.4%
-    "build":      ["D_Crowd_Gtr", "D_Vox_Cam_PT"],    # Crowd 6.7%, Vox_PT 4.4%
-    "breakdown":  ["D_All", "D_Vox_Cam_PT"],           # All 3.2%, Vox_PT 2.4%
-    "drop":       ["D_All_LT", "D_All_Cam"],           # (rare, data sparse)
-    "outro":      ["D_Vocals", "D_All_Cam"],           # Vocals 3.4%, All_Cam 3.4%
-    "intro":      ["D_Drums_LT", "D_Gtr_CLS"],         # Drums_LT 6.8%, Gtr_CLS 5.2%
-    "bridge":     ["D_Duo_GB", "D_Drums_LT"],          # Duo_GB 4.8%, Drums_LT 3.2%
-    "postchorus": ["D_All_Yeah", "D_All_Cam"],         # All_Yeah 4.1%, All_Cam 2.7%
-    "riff":       ["D_Bass", "D_Gtr"],                 # Bass 6.0%, Gtr 3.7%
-    "default":    ["D_Vox_Cam_PT"],
+_CUT_PDT: dict[str, dict[str, CutDistribution]] = {
+    "chorus": {
+        "entry": CutDistribution(cuts=[
+            ("D_Duo_GB",   0.335),
+            ("D_Vocals",   0.241),
+            ("D_All",      0.140),
+            ("D_All_Cam",  0.073),
+            ("D_Drums_LT", 0.079),
+            ("D_Gtr",      0.050),
+            ("D_Vox_CLS",  0.030),
+            ("D_Gtr_CLS",  0.030),
+            ("D_All_Yeah", 0.022),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Vox_CLS",  0.200),
+            ("D_Drums_LT", 0.120),
+            ("D_Vocals",   0.110),
+            ("D_All",      0.090),
+            ("D_Gtr_CLS",  0.080),
+            ("D_Bass_CLS", 0.070),
+            ("D_Duo_GB",   0.060),
+            ("D_All_Cam",  0.050),
+            ("D_Vox_Cam_PT", 0.040),
+        ]),
+    },
+    "verse": {
+        "entry": CutDistribution(cuts=[
+            ("D_Vocals",   0.374),
+            ("D_Duo_GB",   0.145),
+            ("D_Drums_LT", 0.133),
+            ("D_Gtr",      0.113),
+            ("D_Bass",     0.081),
+            ("D_Vox_CLS",  0.050),
+            ("D_Vox_Cam_PT", 0.040),
+            ("D_All",      0.030),
+            ("D_Duo_Bass", 0.020),
+            ("D_Gtr_CLS",  0.014),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Vocals",   0.280),
+            ("D_Drums_LT", 0.200),
+            ("D_Gtr",      0.150),
+            ("D_Bass",     0.120),
+            ("D_Vox_CLS",  0.080),
+            ("D_Duo_GB",   0.070),
+            ("D_Vox_Cam_PT", 0.050),
+            ("D_All",      0.030),
+            ("D_Gtr_CLS",  0.020),
+        ]),
+    },
+    "intro": {
+        "entry": CutDistribution(cuts=[
+            ("D_Drums_LT", 0.307),
+            ("D_Gtr_CLS",  0.120),
+            ("D_Gtr",      0.086),
+            ("D_Bass",     0.164),
+            ("D_Bass_CLS", 0.050),
+            ("D_Vocals",   0.100),
+            ("D_All",      0.050),
+            ("D_Drums_KD", 0.040),
+            ("D_Vox_Cam_PT",0.032),
+            ("D_Duo_GB",   0.030),
+            ("D_Crowd",    0.021),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Drums_LT", 0.250),
+            ("D_Gtr_CLS",  0.150),
+            ("D_Bass",     0.120),
+            ("D_Drums_KD", 0.100),
+            ("D_All",      0.080),
+            ("D_Vocals",   0.070),
+            ("D_Gtr",      0.060),
+            ("D_Drums_Point", 0.050),
+            ("D_Bass_CLS", 0.040),
+            ("D_Vox_Cam_PT", 0.030),
+        ]),
+    },
+    "prechorus": {
+        "entry": CutDistribution(cuts=[
+            ("D_Vocals",   0.313),
+            ("D_Duo_GB",   0.214),
+            ("D_Gtr",      0.134),
+            ("D_Drums_LT", 0.071),
+            ("D_Vox_CLS",  0.060),
+            ("D_Vox_Cam_PT", 0.050),
+            ("D_Bass",     0.040),
+            ("D_All",      0.035),
+            ("D_Duo_Bass", 0.030),
+            ("D_All_Cam",  0.030),
+            ("D_Gtr_CLS",  0.023),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Vox_Cam_PT", 0.180),
+            ("D_Drums_LT", 0.160),
+            ("D_Bass",     0.107),
+            ("D_Vocals",   0.100),
+            ("D_Gtr",      0.090),
+            ("D_Vox_CLS",  0.080),
+            ("D_All",      0.060),
+            ("D_Duo_GB",   0.050),
+            ("D_All_Yeah", 0.040),
+            ("D_Gtr_CLS",  0.033),
+        ]),
+    },
+    "solo": {
+        "entry": CutDistribution(cuts=[
+            ("D_Gtr",      0.343),
+            ("D_Duo_GB",   0.220),
+            ("D_Drums_LT", 0.137),
+            ("D_Bass",     0.117),
+            ("D_Vocals",   0.069),
+            ("D_All",      0.040),
+            ("D_Gtr_CLS",  0.035),
+            ("D_Gtr_Cam_PT", 0.025),
+            ("D_Duo_KB",   0.014),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Gtr_CLS",  0.250),
+            ("D_Drums_LT", 0.200),
+            ("D_Gtr",      0.150),
+            ("D_Duo_GB",   0.120),
+            ("D_Bass_CLS", 0.100),
+            ("D_All",      0.080),
+            ("D_Vocals",   0.050),
+            ("D_Gtr_Cam_PT", 0.030),
+            ("D_Bass",     0.020),
+        ]),
+    },
+    "bridge": {
+        "entry": CutDistribution(cuts=[
+            ("D_Duo_GB",   0.234),
+            ("D_Vocals",   0.218),
+            ("D_Drums_LT", 0.202),
+            ("D_Gtr",      0.105),
+            ("D_All",      0.080),
+            ("D_All_Cam",  0.049),
+            ("D_Bass",     0.040),
+            ("D_Vox_CLS",  0.035),
+            ("D_Gtr_CLS",  0.025),
+            ("D_Vox_Cam_PT", 0.012),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Drums_LT", 0.220),
+            ("D_Bass_CLS", 0.150),
+            ("D_Gtr_CLS",  0.130),
+            ("D_Vocals",   0.110),
+            ("D_All",      0.090),
+            ("D_Vox_CLS",  0.080),
+            ("D_Duo_GB",   0.070),
+            ("D_Gtr",      0.060),
+            ("D_Bass",     0.050),
+            ("D_Vox_Cam_PT", 0.040),
+        ]),
+    },
+    "breakdown": {
+        "entry": CutDistribution(cuts=[
+            ("D_Vocals",   0.258),
+            ("D_Drums_LT", 0.210),
+            ("D_Bass",     0.153),
+            ("D_Gtr",      0.145),
+            ("D_All",      0.081),
+            ("D_Gtr_CLS",  0.050),
+            ("D_Bass_CLS", 0.040),
+            ("D_Vox_CLS",  0.030),
+            ("D_Crowd",    0.025),
+            ("D_All_Cam",  0.008),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Vox_Cam_PT", 0.180),
+            ("D_Drums_LT", 0.150),
+            ("D_Gtr_CLS",  0.130),
+            ("D_Bass_CLS", 0.110),
+            ("D_Vocals",   0.100),
+            ("D_All",      0.080),
+            ("D_Vox_CLS",  0.070),
+            ("D_Gtr",      0.060),
+            ("D_Bass",     0.050),
+            ("D_Crowd",    0.030),
+            ("D_Drums_KD", 0.020),
+        ]),
+    },
+    "riff": {
+        "entry": CutDistribution(cuts=[
+            ("D_Gtr",      0.211),
+            ("D_Bass",     0.203),
+            ("D_Duo_GB",   0.180),
+            ("D_Drums_LT", 0.105),
+            ("D_All",      0.090),
+            ("D_Gtr_CLS",  0.060),
+            ("D_Bass_CLS", 0.050),
+            ("D_All_LT",   0.040),
+            ("D_Vocals",   0.030),
+            ("D_Vox_Cam_PT", 0.021),
+            ("D_Crowd",    0.010),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Gtr_CLS",  0.200),
+            ("D_Drums_LT", 0.180),
+            ("D_Bass_CLS", 0.150),
+            ("D_Gtr",      0.120),
+            ("D_Bass",     0.100),
+            ("D_All",      0.080),
+            ("D_Duo_GB",   0.070),
+            ("D_Vocals",   0.050),
+            ("D_Drums_KD", 0.030),
+            ("D_All_LT",   0.020),
+        ]),
+    },
+    "build": {
+        "entry": CutDistribution(cuts=[
+            ("D_Crowd",    0.222),
+            ("D_Drums_LT", 0.200),
+            ("D_Vocals",   0.100),
+            ("D_Vox_CLS",  0.080),
+            ("D_Gtr",      0.070),
+            ("D_Gtr_CLS",  0.060),
+            ("D_Vox_Cam_PT", 0.055),
+            ("D_Bass",     0.050),
+            ("D_All",      0.045),
+            ("D_Duo_GB",   0.040),
+            ("D_All_Cam",  0.035),
+            ("D_Crowd_Gtr", 0.025),
+            ("D_Crowd_Bass", 0.018),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Drums_LT", 0.200),
+            ("D_Gtr_CLS",  0.150),
+            ("D_Vox_CLS",  0.120),
+            ("D_All",      0.100),
+            ("D_Bass_CLS", 0.090),
+            ("D_Gtr",      0.080),
+            ("D_Vocals",   0.070),
+            ("D_Bass",     0.060),
+            ("D_Duo_GB",   0.050),
+            ("D_All_LT",   0.040),
+            ("D_Crowd_Gtr", 0.040),
+        ]),
+    },
+    "outro": {
+        "entry": CutDistribution(cuts=[
+            ("D_All",      0.217),
+            ("D_Vocals",   0.212),
+            ("D_Drums_LT", 0.153),
+            ("D_Gtr",      0.128),
+            ("D_Bass",     0.089),
+            ("D_All_Cam",  0.060),
+            ("D_Gtr_CLS",  0.040),
+            ("D_Vox_CLS",  0.030),
+            ("D_Bass_CLS", 0.025),
+            ("D_Crowd",    0.024),
+            ("D_Vox_Cam_PT", 0.022),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Drums_LT", 0.180),
+            ("D_Gtr_CLS",  0.140),
+            ("D_Vocals",   0.120),
+            ("D_All",      0.100),
+            ("D_All_Yeah", 0.090),
+            ("D_Bass_CLS", 0.080),
+            ("D_Gtr",      0.070),
+            ("D_Bass",     0.060),
+            ("D_Vox_CLS",  0.050),
+            ("D_Drums_Point", 0.040),
+            ("D_All_Cam",  0.030),
+            ("D_Drums_KD", 0.020),
+            ("D_Crowd",    0.020),
+        ]),
+    },
+    "postchorus": {
+        "entry": CutDistribution(cuts=[
+            ("D_All_Yeah", 0.205),
+            ("D_Duo_GB",   0.178),
+            ("D_Gtr_CLS",  0.164),
+            ("D_Drums_LT", 0.137),
+            ("D_Vocals",   0.068),
+            ("D_All_Cam",  0.060),
+            ("D_Gtr",      0.050),
+            ("D_Vox_CLS",  0.040),
+            ("D_Bass_CLS", 0.035),
+            ("D_All",      0.030),
+            ("D_Bass",     0.020),
+            ("D_Vox_Cam_PT", 0.013),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Drums_LT", 0.250),
+            ("D_Gtr_CLS",  0.180),
+            ("D_Bass_CLS", 0.120),
+            ("D_All_Yeah", 0.100),
+            ("D_Gtr",      0.080),
+            ("D_Vocals",   0.070),
+            ("D_All",      0.060),
+            ("D_Bass",     0.050),
+            ("D_Vox_CLS",  0.040),
+            ("D_Drums_KD", 0.030),
+            ("D_All_Cam",  0.020),
+        ]),
+    },
+    "drop": {
+        "entry": CutDistribution(cuts=[
+            ("D_All_LT",   0.250),
+            ("D_All_Cam",  0.200),
+            ("D_Drums_LT", 0.150),
+            ("D_Gtr",      0.100),
+            ("D_Bass",     0.080),
+            ("D_All",      0.070),
+            ("D_Vocals",   0.050),
+            ("D_Gtr_CLS",  0.040),
+            ("D_Vox_CLS",  0.030),
+            ("D_Duo_GB",   0.030),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_All_LT",   0.200),
+            ("D_All_Cam",  0.150),
+            ("D_Drums_LT", 0.150),
+            ("D_Gtr_CLS",  0.100),
+            ("D_All_Yeah", 0.090),
+            ("D_Vocals",   0.080),
+            ("D_Gtr",      0.070),
+            ("D_Bass_CLS", 0.060),
+            ("D_Bass",     0.050),
+            ("D_Vox_CLS",  0.030),
+            ("D_Duo_GB",   0.020),
+        ]),
+    },
+    "default": {
+        "entry": CutDistribution(cuts=[
+            ("D_Vox_Cam_PT", 0.400),
+            ("D_Drums_LT", 0.200),
+            ("D_Gtr",      0.150),
+            ("D_Bass",     0.100),
+            ("D_All",      0.080),
+            ("D_Vocals",   0.070),
+        ]),
+        "close": CutDistribution(cuts=[
+            ("D_Drums_LT", 0.300),
+            ("D_Gtr_CLS",  0.200),
+            ("D_Vocals",   0.150),
+            ("D_All",      0.100),
+            ("D_Bass",     0.080),
+            ("D_Gtr",      0.070),
+            ("D_Bass_CLS", 0.050),
+            ("D_Vox_CLS",  0.050),
+        ]),
+    },
 }
 
-# Section-kind → close cut type (last quartile, b16+).
-_SECTION_CLOSE_CUTS: dict[str, list[str]] = {
-    "verse":      ["D_Vox_Cam_PT", "D_Drums_LT"],     # Vox_PT 9.8%, Drums_LT 3.9%
-    "prechorus":  ["D_Vox_Cam_PT", "D_Bass"],          # Vox_PT 11.5%, Bass 3.4%
-    "chorus":     ["D_Vox_Cam_PT", "D_Drums_LT"],      # Vox_PT 4.2%, Drums_LT 3.8%
-    "solo":       ["D_Drums_LT", "D_Gtr_CLS"],         # Drums_LT 6.7%, Gtr_CLS 5.1%
-    "build":      ["D_Drums_LT", "D_Gtr_CLS"],         # Drums_LT 2.2%, Gtr_CLS 2.2%
-    "breakdown":  ["D_Vox_Cam_PT", "D_Drums_LT"],      # Vox_PT 4.8%, Drums_LT 4.8%
-    "drop":       ["D_All_LT", "D_All_Cam"],
-    "outro":      ["D_Drums_LT", "D_Drums_Point"],     # Drums_LT 2.5%, Drums_Point 2.0%
-    "intro":      ["D_Drums_LT", "D_Drums_KD"],        # Drums_LT 8.4%, Drums_KD 3.1%
-    "bridge":     ["D_Drums_LT", "D_Bass_CLS"],        # Drums_LT 3.2%, Bass_CLS 2.4%
-    "postchorus": ["D_Drums_LT", "D_Gtr_CLS"],         # Drums_LT 11.0%, Gtr_CLS 5.5%
-    "riff":       ["D_Gtr_CLS", "D_Drums_LT"],         # Gtr_CLS 5.2%, Drums_LT 5.2%
-    "default":    ["D_Vox_Cam_PT"],
-}
 
 
 
+def detect_section_entry(
+    sections: list[Section],
+    inst_onsets: dict[str, list[int]] | None,
+    accents: list[int],
+    tpb: int,
+    design: "VenueDesign | None" = None,
+) -> list[CutEvent]:
+    """Entry cut usando probability distribution + RNG + contexto musical.
 
-def detect_section_entry(sections: list[Section], accents: list[int],
-                         tpb: int) -> list[CutEvent]:
-    """Entry cut at EVERY mid/high section boundary.
-
-    Data: 30.7% of official directed cuts are at b0-2; 31.8% within 1 beat
-    of a boundary. Section kind determines the cut type, not the leader
-    instrument (75-85% of instruments are playing at any cut)."""
+    Substitui o antigo dicionário hard-coded _SECTION_ENTRY_CUTS por
+    seleção probabilística baseada em distribuições dos officiais.
+    """
     out = []
-    for s in sections:
+    inst_totals = ({k: len(v) for k, v in inst_onsets.items()
+                   if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
+                  if inst_onsets else {})
+
+    for si, s in enumerate(sections):
         if _RANK[_entry_tier(s)] < 1:
             continue
+
         tick = _nearest_accent(s.start, accents, tpb)
-        cuts = _SECTION_ENTRY_CUTS.get(s.kind, _SECTION_ENTRY_CUTS["default"])
-        out.append(CutEvent(tick, "section_entry", cuts, PRIO["section_entry"],
-                           note=f"entry @{s.kind}"))
+        rng = design.rng if design is not None else None
+        featured = (design.group_at(si).featured_inst
+                   if design is not None else None)
+
+        leaders = _section_leaders(inst_onsets, s.start, s.end, inst_totals)
+
+        chosen = select_cut(
+            section_kind=s.kind,
+            position="entry",
+            rng=rng,
+            featured_inst=featured,
+            energy=_camera_energy(s),
+            section_leaders=leaders,
+            tick=tick,
+            tpb=tpb,
+            inst_onsets=inst_onsets,
+        )
+
+        if chosen:
+            out.append(CutEvent(
+                tick, "section_entry", [chosen], PRIO["section_entry"],
+                note=f"entry @{s.kind}",
+            ))
+
     return out
 
 
-def detect_section_close(sections: list[Section], accents: list[int],
-                         tpb: int) -> list[CutEvent]:
-    """Close cut in the last quartile (b16+) for sections ≥16 beats.
-
-    Data: 27% of official directed cuts are in b16+ (last quartile).
-    These mark climax/resolution points, not transitional entries."""
+def detect_section_close(
+    sections: list[Section],
+    inst_onsets: dict[str, list[int]] | None,
+    accents: list[int],
+    tpb: int,
+    design: "VenueDesign | None" = None,
+) -> list[CutEvent]:
+    """Close cut usando probability distribution + RNG + contexto."""
     out = []
-    for s in sections:
+    inst_totals = ({k: len(v) for k, v in inst_onsets.items()
+                   if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
+                  if inst_onsets else {})
+
+    for si, s in enumerate(sections):
         if _RANK[_entry_tier(s)] < 1:
             continue
         length = s.end - s.start
-        if length < tpb * 16:  # need at least 16 beats to have a close quartile
+        if length < tpb * 16:
             continue
+
         close_tick = s.start + length * 3 // 4
         tick = _nearest_accent(close_tick, accents, tpb)
-        cuts = _SECTION_CLOSE_CUTS.get(s.kind, _SECTION_CLOSE_CUTS["default"])
-        out.append(CutEvent(tick, "section_close", cuts, PRIO["section_close"],
-                           dramatic=True, note=f"close @{s.kind}"))
+        rng = design.rng if design is not None else None
+        featured = (design.group_at(si).featured_inst
+                   if design is not None else None)
+
+        leaders = _section_leaders(inst_onsets, s.start, s.end, inst_totals)
+
+        chosen = select_cut(
+            section_kind=s.kind,
+            position="close",
+            rng=rng,
+            featured_inst=featured,
+            energy=_camera_energy(s),
+            section_leaders=leaders,
+            tick=tick,
+            tpb=tpb,
+            inst_onsets=inst_onsets,
+        )
+
+        if chosen:
+            out.append(CutEvent(
+                tick, "section_close", [chosen], PRIO["section_close"],
+                dramatic=True, note=f"close @{s.kind}",
+            ))
+
     return out
 
 
@@ -561,8 +1030,8 @@ def detect_events(sections: list[Section],
     ev += detect_bre(bre_spans)
     ev += detect_stagedive(sections, inst_onsets, acc, time_sig_map, tpb)
     # Phase 2: Boundary markers (entry + close per section)
-    ev += detect_section_entry(sections, acc, tpb)
-    ev += detect_section_close(sections, acc, tpb)
+    ev += detect_section_entry(sections, inst_onsets, acc, tpb, design=design)
+    ev += detect_section_close(sections, inst_onsets, acc, tpb, design=design)
     # Phase 3: Featured moments
     ev += detect_solos(sections, inst_onsets, acc, tpb)
     ev += detect_vocal_peaks(inst_onsets, acc, time_sig_map, tpb)
