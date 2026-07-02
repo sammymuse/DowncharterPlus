@@ -1741,6 +1741,62 @@ _VOCAL_FRAMINGS = {"V_Near", "V_Behind", "V_Closeup", "DV_Near", "BV_Behind", "B
 # the framings of absent instruments.
 _GROUP_FRAMINGS = ["All_Near", "All_Far", "All_Behind"]
 
+# Mapa: framing cut → instrumento(s) que filma.
+# Usado pelo _playing_framing para saber se o instrumento está a tocar.
+# Single-instrument: um set com 1 elemento.
+# Multi-instrument: set com vários (basta UM estar a tocar — lógica OR).
+# Group shots: set vazio (sempre válidos, filmam o palco todo).
+_COOP_INSTR: dict[str, set[str]] = {
+    # Vocals
+    "V_Near": {"vocal"}, "V_Behind": {"vocal"}, "V_Closeup": {"vocal"},
+    # Bass
+    "B_Near": {"bass"}, "B_Behind": {"bass"}, "B_Hand": {"bass"}, "B_Head": {"bass"},
+    # Drums
+    "D_Near": {"drums"}, "D_Behind": {"drums"}, "D_Hand": {"drums"}, "D_Head": {"drums"},
+    # Keys
+    "K_Near": {"keys"}, "K_Behind": {"keys"}, "K_Hand": {"keys"}, "K_Head": {"keys"},
+    # Guitar
+    "G_Near": {"guitar"}, "G_Behind": {"guitar"}, "G_Hand": {"guitar"}, "G_Head": {"guitar"},
+    # Multi-instrument (duos)
+    "DV_Near": {"drums", "vocal"}, "BV_Near": {"bass", "vocal"},
+    "GV_Near": {"guitar", "vocal"}, "KV_Near": {"keys", "vocal"},
+    "BK_Near": {"bass", "keys"}, "BK_Behind": {"bass", "keys"},
+    "BG_Near": {"bass", "guitar"}, "BG_Behind": {"bass", "guitar"},
+    "DG_Near": {"drums", "guitar"}, "BD_Near": {"bass", "drums"},
+    "GK_Near": {"guitar", "keys"}, "GK_Behind": {"guitar", "keys"},
+    "BV_Behind": {"bass", "vocal"}, "BV_Near": {"bass", "vocal"},
+    "GV_Behind": {"guitar", "vocal"}, "KV_Behind": {"keys", "vocal"},
+    "BD_Near": {"bass", "drums"},
+    # Group shots (always valid)
+    "All_Near": set(), "All_Far": set(), "All_Behind": set(),
+    "Front_Near": set(), "Front_Behind": set(),
+}
+
+
+def _playing_framing(pool: list[str], tick: int,
+                     inst_onsets: dict[str, list[int]] | None,
+                     tpb: int) -> list[str]:
+    """Filter framing pool: keep only cuts where featured instrument(s) are playing.
+
+    Single-instrument cut → that instrument must have an onset within ±2 beats.
+    Multi-instrument cut  → AT LEAST ONE instrument must be playing (OR logic).
+    Group/All shots       → always valid (film the whole stage).
+
+    Falls back to group shots if the pool would be empty.
+    """
+    if not inst_onsets:
+        return pool
+    win = tpb * 2  # 2-beat window (same as _guard_directed for featured instruments)
+    result = []
+    for cut in pool:
+        insts = _COOP_INSTR.get(cut, set())
+        if not insts:               # group shot — sempre válido
+            result.append(cut)
+        elif any(_playing_near(inst_onsets.get(i), tick, win) for i in insts):
+            result.append(cut)
+    # Fallback: group shots (nunca vazio — _GROUP_FRAMINGS tem 3)
+    return result or [c for c in _GROUP_FRAMINGS] or ["All_Near"]
+
 
 def _safe_framing(framing: list[str], bad: set[str]) -> list[str]:
     """Remove from `framing` the cuts of absent instruments. If nothing is left (the
@@ -2070,6 +2126,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             if placed >= s0.start:
                 break
             level_pool = _level_filter(framing0, min_framing_level)
+            level_pool = _playing_framing(level_pool, placed, inst_onsets, tpb)
             cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[0], rng=rng)
             if cut == last_cut:
                 idx += 1
@@ -2116,6 +2173,8 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             level_pool = _level_filter(pool, min_framing_level)
             if not level_pool:
                 level_pool = pool
+            # Playing-state filter: remove cuts que filmam instrumentos em pausa
+            level_pool = _playing_framing(level_pool, placed, inst_onsets, tpb)
             cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[0], rng=rng)
             if cut == last_cut:
                 idx += 1
@@ -2221,6 +2280,19 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
         return False
 
     merged = [(tk, c) for tk, c in slots if not _near_directed(tk)]
+    # Ghost guard: slots do PASS 1 que filmam instrumento em pausa (sem onset
+    # nos ±2 beats) são substituídos por group shots, evitando o "parado a tocar".
+    cleaned: list[tuple[int, str]] = []
+    for tk, cut in merged:
+        if cut in CAMERA_CUTS and inst_onsets:
+            insts = _COOP_INSTR.get(cut, set())
+            if insts and not any(_playing_near(inst_onsets.get(i), tk, tpb * 2)
+                                for i in insts):
+                # Instrumento em pausa — substituir por group shot
+                cleaned.append((tk, "All_Near"))
+                continue
+        cleaned.append((tk, cut))
+    merged = cleaned
     merged += list(accepted)
     merged += companions
     merged.sort(key=lambda x: x[0])
