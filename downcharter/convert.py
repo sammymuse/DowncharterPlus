@@ -508,14 +508,14 @@ def _auto_sticking(phrase: list[tuple[int, int]]) -> list[str]:
                 # ---- same pad: scoring-based double-stroke decision ----
                 alt_hand = _flip(prev_hand)
 
-                # Pure same-pad run: all remaining notes are on the same pad,
-                # OR the note two positions back was also this pad (we're
-                # already deep in a roll).  Force single-stroke alternation
-                # (RLRL) — standard drumming pedagogy for rolls.  Scoring
-                # cannot distinguish RL from RR because same-pad transitions
-                # are direction-neutral (None).
+                # Roll detection: only snare and toms force RLRL (single-stroke
+                # rolls).  Hihat, ride and crashes are played with one consistent
+                # hand in real drumming — the scoring handles those naturally
+                # (prefers consistent hand for same-pad patterns).
+                _IS_ROLL_PAD = {_SNARE, _TOM1, _TOM2, _FLOOR}
                 same_remaining = len(rest) > 0 and all(p == x for p, _ in rest)
-                in_roll = same_remaining or (i >= 2 and pads[i - 2] == x)
+                in_roll = (x in _IS_ROLL_PAD) and (
+                    same_remaining or (i >= 2 and pads[i - 2] == x))
                 if in_roll:
                     hand = alt_hand
                 else:
@@ -535,10 +535,11 @@ def _auto_sticking(phrase: list[tuple[int, int]]) -> list[str]:
                                          and alt_hand == _RH) else 0
 
                     # Tiebreaker: prefer alternating when the scores are equal.
-                    # At phrase start (out<2): default to alt for isolated pairs.
-                    # At phrase end (rest empty): default to alt — real drummers
-                    # don't end phrases on accidental double strokes.
-                    tiebreak_alt = (score_double == score_alt and not accent_bias
+                    # Only for roll pads (snare/toms) — non-roll pads (hihat,
+                    # ride, crash) stay consistent with the dominant hand.
+                    tiebreak_alt = (x in _IS_ROLL_PAD
+                                    and score_double == score_alt
+                                    and not accent_bias
                                     and ((len(rest) <= 1 and len(out) < 2)
                                          or len(rest) == 0))
                     if tiebreak_alt:
