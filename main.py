@@ -392,7 +392,7 @@ class App(tk.Tk):
                   self._do_lipsync_trk, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
         # ── Talkies ──
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
-        self._lbl("GENERATE TALKIES  (vocal stems recommended)", body).pack(anchor="w", pady=(0, 6))
+        self._lbl("GENERATE TALKIES  (vocal stem recommended)", body).pack(anchor="w", pady=(0, 6))
         CheckTile(body, "Generate talkies from lyrics",
                   self._do_lipsync, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
