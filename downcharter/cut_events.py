@@ -406,11 +406,14 @@ def detect_section_close(sections: list[Section], accents: list[int],
     """Close cut in the last quartile (b16+) for sections ≥16 beats.
 
     Data: 27% of official directed cuts are in b16+ (last quartile).
-    These mark climax/resolution points, not transitional entries."""
+    These mark climax/resolution points, not transitional entries.
+
+    CHANGE (H3): Removed energy gate. Official data shows ~360 close cuts in
+    calm sections. Gate was eliminating ~30% of close cuts. Calm sections like
+    verse/outro still deserve resolution markers (typically Vox_Cam_PT/Drums_LT)."""
     out = []
     for s in sections:
-        if _RANK[_entry_tier(s)] < 1:
-            continue
+        # (removed: if _RANK[_entry_tier(s)] < 1: continue)
         length = s.end - s.start
         if length < tpb * 16:  # need at least 16 beats to have a close quartile
             continue
@@ -431,7 +434,10 @@ def detect_duo_cluster(sections: list[Section],
     bass_cls + guitar_cls is the #1 single-instrument pair (55x).
 
     Strategy: for sections with 3+ active instruments, generate ALL possible
-    duos from the top 3 leaders. For sections with 2, generate that single duo."""
+    duos from the top 3 leaders. For sections with 2, generate that single duo.
+
+    CHANGE (H2): Removed energy gate. Official data shows 148 DUO cuts in calm
+    sections (verse, intro, outro, bridge). Gate was eliminating ~18% of DUOs."""
     out = []
     if not inst_onsets:
         return out
@@ -439,8 +445,7 @@ def detect_duo_cluster(sections: list[Section],
               if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
     real_vox = bool(inst_onsets.get("_vocal_real"))
     for s in sections:
-        if _RANK[_entry_tier(s)] < 1:
-            continue
+        # (removed: if _RANK[_entry_tier(s)] < 1: continue)
         if s.end - s.start < tpb * 4:
             continue
         leaders = _section_leaders(inst_onsets, s.start, s.end, totals)
@@ -482,7 +487,11 @@ def detect_vocal_peaks(inst_onsets: dict[str, list[int]] | None,
     Groups vocal onsets into phrases (gap ≥ 1 measure splits phrases),
     then fires a D_Vox_CLS on the last onset of each phrase of ≥2 notes,
     throttled to ≤1 per 4 beats. Official data: vocals are the #1 category
-    for first events in a section (29%)."""
+    for first events in a section (25.7%).
+
+    CHANGE (H3b): Reduced throttle from 8→4 beats and lowered phrase
+    threshold from 3→2 notes, making vocal peaks more detectable. Aligns
+    the docstring (≤1 per 4 beats) with code (was using 8 beats)."""
     out = []
     if not inst_onsets:
         return out
@@ -491,9 +500,9 @@ def detect_vocal_peaks(inst_onsets: dict[str, list[int]] | None,
         return out
     last_emit = -10 ** 9
     for ps, last, n in _phrases(vocal, time_sig_map, tpb):
-        if n < 3:                                  # require substantial phrase
+        if n < 2:                                  # require phrase of ≥2 notes
             continue
-        if last - last_emit < tpb * 8:              # throttle: ≤1 per 8 beats
+        if last - last_emit < tpb * 4:              # throttle: ≤1 per 4 beats (aligned to docstring)
             continue
         out.append(CutEvent(_nearest_accent(last, accents, tpb), "vocal_peak",
                             ["D_Vox_CLS", "D_Vox_Cam_PT"], PRIO["vocal_peak"],
