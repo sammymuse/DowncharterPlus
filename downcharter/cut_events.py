@@ -341,7 +341,7 @@ def detect_stagedive(sections: list[Section], inst_onsets: dict[str, list[int]] 
 # ══════════════════════════════════════════════════════════════════════════
 
 # Section-kind → entry cut type, data-driven from 100 songs (2997 cuts).
-# Key principle: section kind determines type, not instrument leader.
+# Used as FALLBACK when no instrument leader is detected.
 # Percentages shown are of ALL cuts in that section (entry+close+middle).
 _SECTION_ENTRY_CUTS: dict[str, list[str]] = {
     "verse":      ["D_Vox_Cam_PT", "D_Vocals"],       # Vox_PT 3.2%, Vocals 2.1%
@@ -376,50 +376,150 @@ _SECTION_CLOSE_CUTS: dict[str, list[str]] = {
     "default":    ["D_Vox_Cam_PT"],
 }
 
+# Sections where the ensemble shot (D_All) takes priority regardless of leader.
+_ENSEMBLE_KINDS = frozenset({"chorus", "drop", "breakdown", "postchorus"})
+
+# Instrument → ordered list of directed cuts for ENTRY moments (feature close-up first).
+_INST_ENTRY_CUTS: dict[str, list[str]] = {
+    "guitar": ["D_Gtr_CLS", "D_Gtr", "D_Gtr_Cam_PT"],
+    "bass":   ["D_Bass_CLS", "D_Bass"],
+    "keys":   ["D_Keys_Cam", "D_Keys"],
+    "drums":  ["D_Drums_LT", "D_Drums"],
+    "vocal":  ["D_Vox_Cam_PT", "D_Vocals", "D_Vox_CLS"],
+}
+
+# Instrument → ordered list of directed cuts for CLOSE moments (resolution shot first).
+_INST_CLOSE_CUTS: dict[str, list[str]] = {
+    "guitar": ["D_Gtr_CLS", "D_Gtr_Cam_PT"],
+    "bass":   ["D_Bass_CLS", "D_Bass_Cam"],
+    "keys":   ["D_Keys_Cam", "D_Keys"],
+    "drums":  ["D_Drums_LT", "D_Drums_KD"],
+    "vocal":  ["D_Vox_Cam_PT", "D_Vox_CLS"],
+}
+
+
+def _build_context_cuts(kind: str, leaders: list[tuple[str, float]], real_vox: bool,
+                        base_table: dict[str, list[str]],
+                        inst_table: dict[str, list[str]]) -> list[str]:
+    """Build an ordered cut candidate list combining section kind + instrument leaders.
+
+    For ensemble sections (chorus, drop…) the section-kind base comes FIRST so
+    the full-band shot is still preferred; instrument-specific cuts follow as
+    fallback. For other sections the top instrument leader drives the ordering,
+    with the section-kind base appended as fallback.
+
+    This preserves the section-kind knowledge while surfacing the actual performer
+    being filmed — fixing the flat-distribution ceiling of deterministic-per-kind
+    selection (identity ceiling ~14% → expected gain to ~20-30% accuracy).
+    """
+    base = base_table.get(kind, base_table["default"])
+
+    if not leaders:
+        return base
+
+    # Filter out vocal if no real vocal track
+    filtered = [(inst, sc) for inst, sc in leaders if not (inst == "vocal" and not real_vox)]
+    if not filtered:
+        return base
+
+    if kind in _ENSEMBLE_KINDS:
+        # Ensemble sections: keep section-kind shot first, add leader inst as variety
+        result = list(base)
+        seen = set(result)
+        for inst, _ in filtered[:2]:
+            for cut in inst_table.get(inst, [])[:1]:
+                if cut not in seen:
+                    result.append(cut)
+                    seen.add(cut)
+        return result
+
+    # Feature sections: top leader drives order, section-kind base as fallback
+    result = []
+    seen: set[str] = set()
+    for inst, _ in filtered[:3]:
+        for cut in inst_table.get(inst, [])[:2]:
+            if cut not in seen:
+                result.append(cut)
+                seen.add(cut)
+    for cut in base:
+        if cut not in seen:
+            result.append(cut)
+            seen.add(cut)
+    return result or base
+
 
 
 
 def detect_section_entry(sections: list[Section], accents: list[int],
-                         tpb: int) -> list[CutEvent]:
+                         tpb: int,
+                         inst_onsets: dict[str, list[int]] | None = None) -> list[CutEvent]:
     """Entry cut at EVERY section boundary (including calm).
 
     Data: 30.7% of official directed cuts are at b0-2; 31.8% within 1 beat
-    of a boundary. Section kind determines the cut type, not the leader
-    instrument (75-85% of instruments are playing at any cut).
+    of a boundary.
 
     CHANGE (H1): Removed energy gate. Official data shows 37.6% of all cuts
     land in calm sections (verse, intro, outro, bridge). Gatekeeping was
-    eliminating 287+ cuts per 100 songs. The cut type tables already have
-    correct entries for calm kinds; density is controlled by _SECTION_BUDGET."""
+    eliminating 287+ cuts per 100 songs. Density is controlled by _SECTION_BUDGET.
+
+    CHANGE (H6): Context-aware type selection. Uses _section_leaders to surface
+    the instrument stepping up in each section, making the cut candidate list
+    instrument-driven rather than section-kind-deterministic. This addresses the
+    flat within-kind type distribution (no single type >11%) that capped identity
+    accuracy at ~14% with the old deterministic mapping."""
     out = []
+    totals: dict[str, int] = {}
+    real_vox = False
+    if inst_onsets:
+        totals = {k: len(v) for k, v in inst_onsets.items()
+                  if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
+        real_vox = bool(inst_onsets.get("_vocal_real"))
+
     for s in sections:
-        # (removed: if _RANK[_entry_tier(s)] < 1: continue)
+        # (removed H1: if _RANK[_entry_tier(s)] < 1: continue)
         tick = _nearest_accent(s.start, accents, tpb)
-        cuts = _SECTION_ENTRY_CUTS.get(s.kind, _SECTION_ENTRY_CUTS["default"])
+        leaders = (_section_leaders(inst_onsets, s.start, s.end, totals)
+                   if inst_onsets and totals else [])
+        cuts = _build_context_cuts(s.kind, leaders, real_vox,
+                                   _SECTION_ENTRY_CUTS, _INST_ENTRY_CUTS)
         out.append(CutEvent(tick, "section_entry", cuts, PRIO["section_entry"],
                            note=f"entry @{s.kind}"))
     return out
 
 
 def detect_section_close(sections: list[Section], accents: list[int],
-                         tpb: int) -> list[CutEvent]:
+                         tpb: int,
+                         inst_onsets: dict[str, list[int]] | None = None) -> list[CutEvent]:
     """Close cut in the last quartile (b16+) for sections ≥16 beats.
 
     Data: 27% of official directed cuts are in b16+ (last quartile).
     These mark climax/resolution points, not transitional entries.
 
     CHANGE (H3): Removed energy gate. Official data shows ~360 close cuts in
-    calm sections. Gate was eliminating ~30% of close cuts. Calm sections like
-    verse/outro still deserve resolution markers (typically Vox_Cam_PT/Drums_LT)."""
+    calm sections. Gate was eliminating ~30% of close cuts.
+
+    CHANGE (H6): Context-aware type selection. Same leader-driven approach as
+    detect_section_entry — instrument leading at close moment determines the
+    resolution shot type."""
     out = []
+    totals: dict[str, int] = {}
+    real_vox = False
+    if inst_onsets:
+        totals = {k: len(v) for k, v in inst_onsets.items()
+                  if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
+        real_vox = bool(inst_onsets.get("_vocal_real"))
+
     for s in sections:
-        # (removed: if _RANK[_entry_tier(s)] < 1: continue)
+        # (removed H3: if _RANK[_entry_tier(s)] < 1: continue)
         length = s.end - s.start
         if length < tpb * 16:  # need at least 16 beats to have a close quartile
             continue
         close_tick = s.start + length * 3 // 4
         tick = _nearest_accent(close_tick, accents, tpb)
-        cuts = _SECTION_CLOSE_CUTS.get(s.kind, _SECTION_CLOSE_CUTS["default"])
+        leaders = (_section_leaders(inst_onsets, close_tick, s.end, totals)
+                   if inst_onsets and totals else [])
+        cuts = _build_context_cuts(s.kind, leaders, real_vox,
+                                   _SECTION_CLOSE_CUTS, _INST_CLOSE_CUTS)
         out.append(CutEvent(tick, "section_close", cuts, PRIO["section_close"],
                            dramatic=True, note=f"close @{s.kind}"))
     return out
@@ -550,8 +650,8 @@ def detect_events(sections: list[Section],
     ev += detect_bre(bre_spans)
     ev += detect_stagedive(sections, inst_onsets, acc, time_sig_map, tpb)
     # Phase 2: Boundary markers (entry + close per section)
-    ev += detect_section_entry(sections, acc, tpb)
-    ev += detect_section_close(sections, acc, tpb)
+    ev += detect_section_entry(sections, acc, tpb, inst_onsets)
+    ev += detect_section_close(sections, acc, tpb, inst_onsets)
     # Phase 3: Featured moments
     ev += detect_solos(sections, inst_onsets, acc, tpb)
     ev += detect_vocal_peaks(inst_onsets, acc, time_sig_map, tpb)
@@ -572,11 +672,12 @@ def detect_events(sections: list[Section],
 # Budget (distinct tick positions) per section kind, from 100-song density data.
 # Official: solo 2.23/s, chorus 2.00/s, verse 1.28/s, prechorus 0.86/s, etc.
 # Rounded down to int. Budget 2 = entry + close; budget 1 = entry only.
-# ADJUSTED (H5): verse 1→2 (20.3% of all cuts), outro 1→2 (6.8% of all cuts).
-# These are the 2nd and 3rd densest kinds after chorus; were underdimensioned.
+# NOTE (H5 reverted): verse/outro reverted to 1. Gate removal (H1/H3) already
+# recovered the volume; bumping budget to 2 caused over-generation (1.27× official)
+# which hurt precision (3.1%). Keep density lean; identity gains via H6 type selection.
 _SECTION_BUDGET: dict[str, int] = {
     "solo": 2, "chorus": 2, "breakdown": 2,
-    "verse": 2, "outro": 2,  # ← adjusted from 1 to match official density
+    "verse": 1, "outro": 1,  # ← reverted from 2; gate removal sufficient for recovery
     "prechorus": 1, "build": 1, "intro": 1,
     "bridge": 1, "postchorus": 1, "riff": 1, "drop": 1,
 }
