@@ -2554,6 +2554,11 @@ def build_animations(part_onsets: list[int], sections: list[Section],
         sec = _section_at(sections, cand)
         if sec is not None and _ENERGY_LEVEL[_energy_tier_at(sec, cand)] != cur_level:
             return on
+        # Se o tick preemptivo cai dentro de um idle gap, o instrumento
+        # ainda está em repouso; acordar tem de ser no próprio onset.
+        for a, b in idle_ranges:
+            if a < cand < b:
+                return on
         return cand
 
     # Official pattern: [idle] is placed ~1 beat after the last note, only when
