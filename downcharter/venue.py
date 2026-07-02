@@ -573,7 +573,7 @@ _KIND_CADENCE: dict[str, float] = {
 }
 
 # Energy tier adjustment multiplier (gentler than the flat cadence was)
-_ENERGY_FACTOR = {"calm": 1.2, "mid": 1.0, "high": 0.85}
+_ENERGY_FACTOR = {"calm": 1.6, "mid": 1.35, "high": 1.15}
 
 # Base "pulse" presets per tier — the warm/cool/blackout alternation creates the
 # strobe effect. The theme flavor (auto presets) enters as an accent.
@@ -1094,9 +1094,11 @@ def build_spotlights(sections: list[Section], inst_onsets: dict[str, list[int]],
     beams at once, like the official venues → a ~balanced distribution over the 5 notes
     37-41 — drums/bass/guitar/vocal/keys). Each phrase (run of notes separated by
     ≥ `gap` of silence) lights that member's spotlight during the phrase.
-    The `gap` is wide (1 measure) so the density stays close to the official ones."""
+    The gap is set to ~1 beat so we get a natural pulse (more phrase-starts = more
+    note_on events, matching official density ~225 events/song)."""
     out: list[AbsEvent] = []
-    gap = tpb * 3                       # phrases separated by ≥ 3 beats of silence
+    gap = tpb * 2                       # ~2 beat gap → natural pulse, matches official density ~225/song
+    # gap calibration: 3b→0.60×, 2b→0.79×, 1b→2.27×. Sweet spot near 2b.
     members = [m for m in SPOT_NOTE if inst_onsets.get(m)]
     for s in sections:
         for inst in members:
