@@ -1086,7 +1086,13 @@ def _build_lipsync_track(keyframes, tempo_map, tpb):
     """A `LIPSYNC1` MIDI track of `[<viseme> <weight>[ hold|ease]]` text-commands from
     sparse keyframes (time_s, viseme, weight, graph). Times → ticks via the tempo map.
     The graph token is the Onyx curve OUT of the keyframe (default linear, omitted).
-    Opens with `[lang en]` so the renderer picks the right rules."""
+    Opens with `[lang en]` so the renderer picks the right rules.
+
+    Keyframes at syllable boundaries can collapse to the same tick after ms→tick
+    conversion, producing two events for the same viseme at the same tick (e.g.
+    ``[Cage_hi 140]`` and ``[Cage_hi 0]`` both at T).  We deduplicate: for each
+    (tick, viseme) pair, only the LAST event survives — it represents the state
+    going forward from that tick."""
     from . import audio as _audio
     abs_evts = [
         AbsEvent(0, mido.MetaMessage("track_name", name="LIPSYNC1", time=0)),
@@ -1097,6 +1103,27 @@ def _build_lipsync_track(keyframes, tempo_map, tpb):
         tok = _LIPSYNC_GRAPH_TOKEN.get(graph, "")
         abs_evts.append(AbsEvent(tick, mido.MetaMessage(
             "text", text=f"[{viseme} {weight}{tok}]", time=0)))
+
+    # Deduplicate: for each (tick, viseme) keep only the LAST event.
+    # Keyframes are already sorted by (time_s, viseme), so after tick-conversion,
+    # same-tick events are contiguous; we walk backwards and take the first
+    # occurrence of each (tick, viseme) which is the LAST in original order.
+    seen: set[tuple[int, str]] = set()
+    deduped: list[AbsEvent] = [abs_evts[0], abs_evts[1]]  # track_name + [lang en]
+    for ev in reversed(abs_evts[2:]):
+        key = (ev.abs_tick, ev.msg.text)
+        # Extract viseme name from "[viseme weight]" format
+        txt = ev.msg.text
+        if txt.startswith("[") and " " in txt:
+            vis = txt.split("[")[1].split(" ")[0]
+            pair = (ev.abs_tick, vis)
+            if pair in seen:
+                continue
+            seen.add(pair)
+        deduped.append(ev)
+    deduped.reverse()  # back to chronological
+    abs_evts = deduped
+
     tr = to_track(abs_evts)
     tr.append(mido.MetaMessage("end_of_track", time=0))
     return tr
