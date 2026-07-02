@@ -11,7 +11,7 @@ Pipeline:
   → text events sorted on the VENUE track.
 """
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import random
 import re
@@ -136,6 +136,49 @@ class Section:
     energy: str | None = None   # 'calm'/'mid'/'high' — refined by audio; None=structural
     warmth: str | None = None   # 'warm'/'cool' — timbre (audio brightness); None=neutral
     energy_spans: list | None = None   # [(start,end,tier)] sub-section energy (audio); None=use mean
+
+
+@dataclass
+class CoopDistribution:
+    """Distribuição de cuts de coop para um dado (section_kind, position)."""
+    cuts: list[tuple[str, float]]  # (cut_name, base_weight)
+
+
+@dataclass
+class CoopCooldownState:
+    """Rastreia quando cada instrumento foi filmado pela última vez no coop framing."""
+    last_cut_tick: dict[str, int] = field(default_factory=dict)
+
+    COOLDOWN_BEATS: dict[str, int] = field(default_factory=lambda: {
+        "vocal": 4, "guitar": 4, "bass": 4, "drums": 4, "keys": 4,
+    })
+
+    def update(self, cut_name: str, tick: int, _COOP_INSTR_ref: dict) -> None:
+        """Regista que o(s) instrumento(s) do cut foram filmados em `tick`."""
+        insts = _COOP_INSTR_ref.get(cut_name, set())
+        for inst in insts:
+            self.last_cut_tick[inst] = tick
+
+    def is_available(self, cut_name: str, tick: int, tpb: int,
+                     _COOP_INSTR_ref: dict) -> bool:
+        """True se o cut pode ser usado (instrumento não está em cooldown)."""
+        insts = _COOP_INSTR_ref.get(cut_name, set())
+        if not insts:  # group shots sempre disponíveis
+            return True
+        for inst in insts:
+            last = self.last_cut_tick.get(inst, -10**9)
+            cd = self.COOLDOWN_BEATS.get(inst, 4)
+            if tick - last < cd * tpb:
+                return False
+        return True
+
+    def filter_pool(self, pool: list[str], tick: int, tpb: int,
+                    _COOP_INSTR_ref: dict) -> list[str]:
+        """Filtra o pool removendo cuts em cooldown."""
+        result = [c for c in pool if self.is_available(c, tick, tpb, _COOP_INSTR_ref)]
+        if not result:
+            return [c for c in pool if not _COOP_INSTR_ref.get(c, set())]
+        return result
 
 
 def section_energy(s: "Section") -> str:
@@ -1686,6 +1729,682 @@ SECTION_PACE_S = {
     "drop": 1.3, "breakdown": 1.2, "riff": 1.1, "outro": 1.7, "default": 1.5,
 }
 
+# ── Coop Framing Probability Distribution Table ──────────────────────────────────
+# Distribuições de probabilidade para coop framing cuts por (section_kind, position).
+# Cada entrada mapeia nomes de cut para pesos base (base_weights) que o select_coop_cut
+# usa como ponto de partida para a weighted choice, depois de aplicar cooldown e boosts
+# de contexto musical (featured instrument, energy, position).
+_COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
+    "verse": {
+        "entry": CoopDistribution(cuts=[
+            ("V_Near",      0.22),
+            ("B_Near",      0.14),
+            ("G_Near",      0.10),
+            ("D_Hand",      0.09),
+            ("B_Hand",      0.08),
+            ("K_Near",      0.07),
+            ("BV_Near",     0.06),
+            ("DV_Near",     0.05),
+            ("All_Near",    0.05),
+            ("V_Closeup",   0.04),
+            ("G_Hand",      0.03),
+            ("D_Near",      0.03),
+            ("BG_Near",     0.02),
+            ("BK_Near",     0.01),
+            ("All_Far",     0.01),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("B_Near",      0.16),
+            ("V_Near",      0.14),
+            ("G_Near",      0.11),
+            ("D_Hand",      0.10),
+            ("K_Near",      0.08),
+            ("BV_Near",     0.07),
+            ("All_Near",    0.06),
+            ("V_Closeup",   0.05),
+            ("B_Hand",      0.05),
+            ("BG_Near",     0.04),
+            ("G_Hand",      0.03),
+            ("DV_Near",     0.03),
+            ("Front_Near",  0.03),
+            ("All_Far",     0.02),
+            ("All_Behind",  0.02),
+            ("BK_Near",     0.01),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("B_Near",      0.15),
+            ("All_Far",     0.12),
+            ("V_Closeup",   0.11),
+            ("G_Near",      0.10),
+            ("D_Near",      0.09),
+            ("All_Near",    0.08),
+            ("BV_Near",     0.07),
+            ("K_Near",      0.06),
+            ("Front_Near",  0.05),
+            ("V_Near",      0.05),
+            ("B_Hand",      0.04),
+            ("D_Hand",      0.03),
+            ("BG_Near",     0.02),
+            ("All_Behind",  0.02),
+            ("GK_Near",     0.01),
+        ]),
+    },
+    "chorus": {
+        "entry": CoopDistribution(cuts=[
+            ("V_Near",      0.18),
+            ("B_Near",      0.12),
+            ("All_Near",    0.11),
+            ("D_Hand",      0.10),
+            ("G_Near",      0.08),
+            ("K_Near",      0.07),
+            ("V_Closeup",   0.06),
+            ("BG_Near",     0.05),
+            ("Front_Near",  0.05),
+            ("All_Far",     0.04),
+            ("D_Near",      0.04),
+            ("KV_Near",     0.03),
+            ("BV_Near",     0.03),
+            ("GK_Near",     0.02),
+            ("All_Behind",  0.02),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("V_Closeup",   0.14),
+            ("D_Hand",      0.12),
+            ("B_Near",      0.10),
+            ("All_Near",    0.09),
+            ("G_Near",      0.08),
+            ("BV_Near",     0.07),
+            ("K_Near",      0.06),
+            ("V_Near",      0.06),
+            ("BG_Near",     0.05),
+            ("Front_Near",  0.05),
+            ("D_Near",      0.04),
+            ("All_Far",     0.04),
+            ("KV_Near",     0.03),
+            ("GK_Near",     0.03),
+            ("All_Behind",  0.02),
+            ("BD_Near",     0.02),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("All_Far",     0.15),
+            ("All_Behind",  0.12),
+            ("Front_Near",  0.10),
+            ("V_Closeup",   0.10),
+            ("D_Near",      0.09),
+            ("All_Near",    0.08),
+            ("B_Near",      0.07),
+            ("G_Near",      0.06),
+            ("K_Near",      0.05),
+            ("BV_Near",     0.04),
+            ("BG_Near",     0.04),
+            ("D_Hand",      0.04),
+            ("V_Near",      0.03),
+            ("KV_Near",     0.02),
+            ("GK_Near",     0.01),
+        ]),
+    },
+    "intro": {
+        "entry": CoopDistribution(cuts=[
+            ("All_Far",     0.20),
+            ("D_Near",      0.15),
+            ("B_Near",      0.12),
+            ("All_Behind",  0.10),
+            ("G_Near",      0.08),
+            ("Front_Near",  0.08),
+            ("K_Hand",      0.06),
+            ("G_Hand",      0.05),
+            ("V_Closeup",   0.05),
+            ("All_Near",    0.04),
+            ("D_Head",      0.03),
+            ("B_Behind",    0.02),
+            ("G_Behind",    0.02),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("All_Far",     0.18),
+            ("D_Near",      0.14),
+            ("B_Near",      0.11),
+            ("G_Near",      0.10),
+            ("All_Behind",  0.09),
+            ("Front_Near",  0.08),
+            ("K_Hand",      0.06),
+            ("All_Near",    0.06),
+            ("V_Closeup",   0.05),
+            ("G_Hand",      0.04),
+            ("D_Head",      0.03),
+            ("B_Behind",    0.02),
+            ("G_Behind",    0.02),
+            ("D_Hand",      0.02),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("All_Near",    0.16),
+            ("B_Near",      0.14),
+            ("V_Near",      0.12),
+            ("D_Hand",      0.10),
+            ("G_Near",      0.09),
+            ("All_Far",     0.08),
+            ("K_Near",      0.07),
+            ("Front_Near",  0.06),
+            ("All_Behind",  0.05),
+            ("V_Closeup",   0.04),
+            ("BG_Near",     0.03),
+            ("D_Near",      0.03),
+            ("B_Hand",      0.02),
+            ("G_Hand",      0.01),
+        ]),
+    },
+    "prechorus": {
+        "entry": CoopDistribution(cuts=[
+            ("B_Near",      0.15),
+            ("K_Hand",      0.12),
+            ("V_Near",      0.12),
+            ("All_Near",    0.10),
+            ("D_Hand",      0.09),
+            ("G_Near",      0.08),
+            ("BG_Near",     0.07),
+            ("V_Closeup",   0.06),
+            ("B_Head",      0.05),
+            ("K_Near",      0.05),
+            ("D_Behind",    0.04),
+            ("All_Far",     0.03),
+            ("G_Hand",      0.02),
+            ("All_Behind",  0.02),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("B_Near",      0.14),
+            ("V_Near",      0.13),
+            ("D_Hand",      0.11),
+            ("All_Near",    0.10),
+            ("G_Near",      0.09),
+            ("BG_Near",     0.08),
+            ("K_Near",      0.07),
+            ("V_Closeup",   0.06),
+            ("B_Hand",      0.05),
+            ("D_Near",      0.04),
+            ("All_Far",     0.04),
+            ("Front_Near",  0.03),
+            ("K_Hand",      0.03),
+            ("All_Behind",  0.02),
+            ("G_Hand",      0.01),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("V_Near",      0.16),
+            ("V_Closeup",   0.14),
+            ("D_Hand",      0.13),
+            ("All_Near",    0.11),
+            ("B_Near",      0.10),
+            ("G_Near",      0.09),
+            ("All_Far",     0.07),
+            ("BG_Near",     0.05),
+            ("BV_Near",     0.04),
+            ("Front_Near",  0.04),
+            ("K_Near",      0.03),
+            ("D_Near",      0.02),
+            ("All_Behind",  0.02),
+        ]),
+    },
+    "bridge": {
+        "entry": CoopDistribution(cuts=[
+            ("B_Near",      0.15),
+            ("B_Hand",      0.10),
+            ("K_Near",      0.10),
+            ("K_Hand",      0.08),
+            ("D_Near",      0.08),
+            ("BK_Near",     0.07),
+            ("KV_Near",     0.06),
+            ("B_Head",      0.05),
+            ("K_Head",      0.05),
+            ("G_Near",      0.05),
+            ("D_Behind",    0.04),
+            ("BV_Near",     0.04),
+            ("BG_Near",     0.03),
+            ("All_Near",    0.03),
+            ("All_Far",     0.02),
+            ("All_Behind",  0.02),
+            ("GK_Near",     0.02),
+            ("G_Hand",      0.01),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("B_Near",      0.13),
+            ("K_Near",      0.11),
+            ("D_Near",      0.10),
+            ("B_Hand",      0.09),
+            ("BK_Near",     0.08),
+            ("K_Hand",      0.07),
+            ("G_Near",      0.07),
+            ("BV_Near",     0.06),
+            ("KV_Near",     0.05),
+            ("B_Head",      0.04),
+            ("K_Head",      0.04),
+            ("All_Near",    0.04),
+            ("D_Behind",    0.03),
+            ("BG_Near",     0.03),
+            ("All_Far",     0.02),
+            ("All_Behind",  0.02),
+            ("GK_Near",     0.02),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("All_Far",     0.16),
+            ("All_Behind",  0.12),
+            ("B_Near",      0.11),
+            ("K_Near",      0.10),
+            ("D_Near",      0.09),
+            ("G_Near",      0.08),
+            ("All_Near",    0.07),
+            ("BK_Near",     0.06),
+            ("BV_Near",     0.05),
+            ("K_Hand",      0.04),
+            ("V_Closeup",   0.04),
+            ("B_Hand",      0.03),
+            ("D_Hand",      0.02),
+            ("BG_Near",     0.02),
+        ]),
+    },
+    "solo": {
+        "entry": CoopDistribution(cuts=[
+            ("G_Near",      0.35),
+            ("D_Near",      0.12),
+            ("B_Near",      0.10),
+            ("All_Near",    0.08),
+            ("G_Hand",      0.08),
+            ("G_Head",      0.06),
+            ("All_Far",     0.05),
+            ("All_Behind",  0.04),
+            ("B_Hand",      0.03),
+            ("D_Hand",      0.03),
+            ("BG_Near",     0.02),
+            ("V_Closeup",   0.02),
+            ("K_Near",      0.02),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("G_Near",      0.30),
+            ("G_Hand",      0.15),
+            ("D_Near",      0.10),
+            ("All_Near",    0.08),
+            ("G_Head",      0.07),
+            ("B_Near",      0.06),
+            ("All_Far",     0.05),
+            ("All_Behind",  0.04),
+            ("BG_Near",     0.04),
+            ("B_Hand",      0.03),
+            ("D_Hand",      0.03),
+            ("V_Closeup",   0.02),
+            ("K_Near",      0.02),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("G_Hand",      0.22),
+            ("All_Far",     0.18),
+            ("All_Near",    0.12),
+            ("G_Near",      0.10),
+            ("D_Near",      0.08),
+            ("All_Behind",  0.06),
+            ("G_Head",      0.06),
+            ("B_Near",      0.04),
+            ("BG_Near",     0.04),
+            ("B_Hand",      0.03),
+            ("D_Hand",      0.03),
+            ("V_Closeup",   0.02),
+        ]),
+    },
+    "breakdown": {
+        "entry": CoopDistribution(cuts=[
+            ("D_Hand",      0.16),
+            ("D_Near",      0.13),
+            ("B_Near",      0.12),
+            ("D_Head",      0.08),
+            ("BK_Near",     0.07),
+            ("DG_Near",     0.06),
+            ("All_Behind",  0.06),
+            ("G_Hand",      0.06),
+            ("B_Head",      0.05),
+            ("K_Near",      0.05),
+            ("All_Near",    0.04),
+            ("G_Near",      0.04),
+            ("B_Hand",      0.03),
+            ("All_Far",     0.02),
+            ("GK_Near",     0.02),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("D_Hand",      0.15),
+            ("D_Near",      0.12),
+            ("B_Near",      0.11),
+            ("D_Head",      0.08),
+            ("BK_Near",     0.07),
+            ("DG_Near",     0.06),
+            ("All_Behind",  0.06),
+            ("G_Hand",      0.06),
+            ("K_Near",      0.06),
+            ("B_Head",      0.04),
+            ("All_Near",    0.04),
+            ("G_Near",      0.04),
+            ("B_Hand",      0.03),
+            ("All_Far",     0.03),
+            ("GK_Near",     0.02),
+            ("BG_Near",     0.01),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("All_Near",    0.15),
+            ("D_Near",      0.13),
+            ("B_Near",      0.11),
+            ("D_Hand",      0.10),
+            ("K_Near",      0.08),
+            ("G_Near",      0.07),
+            ("All_Far",     0.06),
+            ("BK_Near",     0.05),
+            ("DG_Near",     0.05),
+            ("B_Hand",      0.04),
+            ("All_Behind",  0.04),
+            ("D_Head",      0.03),
+            ("B_Head",      0.03),
+            ("G_Hand",      0.02),
+            ("BG_Near",     0.02),
+        ]),
+    },
+    "build": {
+        "entry": CoopDistribution(cuts=[
+            ("D_Near",      0.18),
+            ("D_Hand",      0.14),
+            ("B_Near",      0.12),
+            ("K_Near",      0.09),
+            ("BD_Near",     0.07),
+            ("All_Near",    0.07),
+            ("D_Head",      0.06),
+            ("B_Hand",      0.05),
+            ("G_Near",      0.05),
+            ("All_Behind",  0.04),
+            ("D_Behind",    0.03),
+            ("All_Far",     0.03),
+            ("BG_Near",     0.02),
+            ("BV_Near",     0.02),
+            ("G_Hand",      0.02),
+            ("GK_Near",     0.01),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("D_Hand",      0.18),
+            ("D_Near",      0.15),
+            ("B_Near",      0.11),
+            ("K_Near",      0.09),
+            ("BD_Near",     0.07),
+            ("All_Near",    0.07),
+            ("D_Head",      0.06),
+            ("G_Near",      0.05),
+            ("B_Hand",      0.05),
+            ("All_Behind",  0.04),
+            ("D_Behind",    0.04),
+            ("All_Far",     0.03),
+            ("BG_Near",     0.02),
+            ("BV_Near",     0.02),
+            ("G_Hand",      0.02),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("D_Hand",      0.20),
+            ("D_Near",      0.16),
+            ("All_Near",    0.12),
+            ("B_Near",      0.10),
+            ("D_Head",      0.08),
+            ("BD_Near",     0.07),
+            ("K_Near",      0.06),
+            ("All_Behind",  0.05),
+            ("G_Near",      0.05),
+            ("All_Far",     0.04),
+            ("B_Hand",      0.03),
+            ("D_Behind",    0.02),
+            ("BG_Near",     0.02),
+        ]),
+    },
+    "riff": {
+        "entry": CoopDistribution(cuts=[
+            ("G_Hand",      0.20),
+            ("G_Near",      0.15),
+            ("B_Near",      0.12),
+            ("D_Hand",      0.10),
+            ("K_Near",      0.08),
+            ("GK_Near",     0.07),
+            ("BG_Near",     0.06),
+            ("G_Head",      0.05),
+            ("G_Behind",    0.04),
+            ("D_Near",      0.04),
+            ("B_Hand",      0.03),
+            ("D_Head",      0.02),
+            ("All_Near",    0.02),
+            ("All_Far",     0.01),
+            ("All_Behind",  0.01),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("G_Hand",      0.18),
+            ("G_Near",      0.14),
+            ("B_Near",      0.11),
+            ("D_Hand",      0.10),
+            ("K_Near",      0.08),
+            ("GK_Near",     0.07),
+            ("BG_Near",     0.06),
+            ("G_Head",      0.05),
+            ("G_Behind",    0.04),
+            ("D_Near",      0.04),
+            ("B_Hand",      0.03),
+            ("All_Near",    0.03),
+            ("D_Head",      0.02),
+            ("All_Far",     0.02),
+            ("All_Behind",  0.02),
+            ("BV_Near",     0.01),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("G_Hand",      0.15),
+            ("All_Far",     0.14),
+            ("G_Near",      0.12),
+            ("B_Near",      0.10),
+            ("All_Near",    0.09),
+            ("D_Hand",      0.08),
+            ("K_Near",      0.07),
+            ("GK_Near",     0.05),
+            ("BG_Near",     0.05),
+            ("G_Head",      0.04),
+            ("All_Behind",  0.03),
+            ("D_Near",      0.03),
+            ("B_Hand",      0.02),
+            ("BV_Near",     0.02),
+        ]),
+    },
+    "outro": {
+        "entry": CoopDistribution(cuts=[
+            ("All_Far",     0.22),
+            ("All_Behind",  0.15),
+            ("B_Near",      0.10),
+            ("D_Near",      0.09),
+            ("K_Near",      0.08),
+            ("V_Closeup",   0.08),
+            ("All_Near",    0.07),
+            ("Front_Behind", 0.05),
+            ("G_Behind",    0.04),
+            ("B_Head",      0.03),
+            ("D_Behind",    0.03),
+            ("V_Near",      0.02),
+            ("G_Near",      0.02),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("All_Far",     0.20),
+            ("All_Behind",  0.14),
+            ("All_Near",    0.12),
+            ("B_Near",      0.09),
+            ("D_Near",      0.08),
+            ("K_Near",      0.07),
+            ("V_Closeup",   0.07),
+            ("Front_Behind", 0.05),
+            ("G_Behind",    0.04),
+            ("B_Head",      0.04),
+            ("D_Behind",    0.03),
+            ("V_Near",      0.02),
+            ("G_Near",      0.02),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("All_Far",     0.25),
+            ("All_Behind",  0.20),
+            ("All_Near",    0.15),
+            ("Front_Behind", 0.10),
+            ("B_Near",      0.08),
+            ("D_Near",      0.06),
+            ("K_Near",      0.05),
+            ("V_Closeup",   0.04),
+            ("G_Behind",    0.03),
+            ("B_Head",      0.02),
+            ("D_Behind",    0.02),
+        ]),
+    },
+    "postchorus": {
+        "entry": CoopDistribution(cuts=[
+            ("B_Near",      0.15),
+            ("All_Behind",  0.12),
+            ("V_Near",      0.11),
+            ("D_Near",      0.10),
+            ("All_Near",    0.09),
+            ("K_Near",      0.08),
+            ("V_Closeup",   0.07),
+            ("G_Near",      0.06),
+            ("B_Hand",      0.05),
+            ("Front_Behind", 0.05),
+            ("D_Hand",      0.04),
+            ("All_Far",     0.03),
+            ("BG_Near",     0.02),
+            ("BV_Near",     0.02),
+            ("G_Hand",      0.01),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("B_Near",      0.14),
+            ("All_Behind",  0.12),
+            ("V_Closeup",   0.11),
+            ("D_Hand",      0.10),
+            ("All_Near",    0.09),
+            ("G_Near",      0.08),
+            ("K_Near",      0.07),
+            ("V_Near",      0.06),
+            ("B_Hand",      0.05),
+            ("Front_Behind", 0.04),
+            ("D_Near",      0.04),
+            ("All_Far",     0.03),
+            ("BG_Near",     0.03),
+            ("BV_Near",     0.02),
+            ("G_Hand",      0.02),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("All_Far",     0.18),
+            ("All_Behind",  0.15),
+            ("Front_Behind", 0.10),
+            ("All_Near",    0.10),
+            ("B_Near",      0.09),
+            ("V_Closeup",   0.08),
+            ("D_Near",      0.07),
+            ("G_Near",      0.06),
+            ("K_Near",      0.05),
+            ("V_Near",      0.04),
+            ("B_Hand",      0.03),
+            ("D_Hand",      0.02),
+            ("BG_Near",     0.02),
+            ("G_Hand",      0.01),
+        ]),
+    },
+    "drop": {
+        "entry": CoopDistribution(cuts=[
+            ("All_Near",    0.18),
+            ("D_Hand",      0.14),
+            ("B_Near",      0.11),
+            ("K_Near",      0.09),
+            ("V_Near",      0.08),
+            ("All_Behind",  0.07),
+            ("D_Near",      0.07),
+            ("All_Far",     0.06),
+            ("G_Near",      0.05),
+            ("B_Hand",      0.04),
+            ("D_Head",      0.03),
+            ("BG_Near",     0.03),
+            ("BV_Near",     0.02),
+            ("G_Hand",      0.01),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("All_Near",    0.16),
+            ("D_Hand",      0.14),
+            ("B_Near",      0.11),
+            ("All_Behind",  0.10),
+            ("K_Near",      0.08),
+            ("V_Near",      0.07),
+            ("D_Near",      0.07),
+            ("All_Far",     0.06),
+            ("G_Near",      0.05),
+            ("B_Hand",      0.04),
+            ("D_Head",      0.03),
+            ("BG_Near",     0.03),
+            ("Front_Near",  0.02),
+            ("G_Hand",      0.02),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("All_Far",     0.18),
+            ("All_Behind",  0.14),
+            ("All_Near",    0.12),
+            ("D_Near",      0.10),
+            ("B_Near",      0.09),
+            ("K_Near",      0.08),
+            ("G_Near",      0.06),
+            ("V_Closeup",   0.06),
+            ("D_Hand",      0.05),
+            ("B_Hand",      0.04),
+            ("BG_Near",     0.02),
+            ("G_Hand",      0.01),
+        ]),
+    },
+    "default": {
+        "entry": CoopDistribution(cuts=[
+            ("V_Near",      0.18),
+            ("B_Near",      0.14),
+            ("All_Near",    0.10),
+            ("D_Hand",      0.09),
+            ("G_Near",      0.08),
+            ("K_Near",      0.07),
+            ("V_Closeup",   0.06),
+            ("B_Hand",      0.05),
+            ("D_Near",      0.05),
+            ("BG_Near",     0.04),
+            ("Front_Near",  0.04),
+            ("All_Far",     0.03),
+            ("All_Behind",  0.03),
+            ("BV_Near",     0.02),
+            ("G_Hand",      0.02),
+        ]),
+        "mid": CoopDistribution(cuts=[
+            ("B_Near",      0.16),
+            ("V_Near",      0.14),
+            ("All_Near",    0.10),
+            ("D_Hand",      0.09),
+            ("G_Near",      0.08),
+            ("K_Near",      0.07),
+            ("V_Closeup",   0.06),
+            ("B_Hand",      0.05),
+            ("D_Near",      0.05),
+            ("BG_Near",     0.04),
+            ("All_Far",     0.04),
+            ("All_Behind",  0.03),
+            ("BV_Near",     0.03),
+            ("Front_Near",  0.03),
+            ("G_Hand",      0.02),
+            ("K_Hand",      0.01),
+        ]),
+        "close": CoopDistribution(cuts=[
+            ("All_Far",     0.15),
+            ("All_Behind",  0.12),
+            ("V_Closeup",   0.12),
+            ("All_Near",    0.10),
+            ("B_Near",      0.09),
+            ("G_Near",      0.08),
+            ("D_Near",      0.07),
+            ("K_Near",      0.06),
+            ("V_Near",      0.05),
+            ("B_Hand",      0.04),
+            ("D_Hand",      0.03),
+            ("BG_Near",     0.03),
+            ("Front_Near",  0.02),
+            ("BV_Near",     0.01),
+            ("G_Hand",      0.01),
+        ]),
+    },
+}
+
 # Cut pool per section type (mix of standard + directed). The generator cycles
 # avoiding repeating the previous cut. Directed items add dramatic variety.
 #
@@ -2049,6 +2768,109 @@ def _level_filter(candidates: list[str], min_level: int) -> list[str]:
     return filtered if filtered else candidates
 
 
+def _coop_instrument(cut_name: str) -> str | None:
+    """Retorna o instrumento principal que este cut filma, ou None se multi/group."""
+    insts = _COOP_INSTR.get(cut_name, set())
+    if len(insts) == 1:
+        return next(iter(insts))
+    return None
+
+
+def select_coop_cut(
+    section_kind: str,
+    position: str,
+    rng: random.Random,
+    featured_inst: str | None,
+    energy: str,
+    section_leaders: list[tuple[str, float]],
+    tick: int,
+    tpb: int,
+    inst_onsets: dict[str, list[int]] | None,
+    cooldown_state: CoopCooldownState,
+    level_pool: list[str],
+) -> str | None:
+    """Seleciona um coop cut usando RNG pesado + contexto musical.
+
+    1. Obtém distribuição de (section_kind, position) da _COOP_PDT
+    2. Aplica cooldown filter
+    3. Calcula context_boosts (featured_inst, energy, position)
+    4. RNG-weighted choice
+    5. Fallback para level_pool se falhar
+    """
+    dist = _COOP_PDT.get(section_kind, {}).get(position)
+    if not dist:
+        dist = _COOP_PDT.get("default", {}).get(position)
+
+    if not dist or not dist.cuts:
+        return rng.choice(level_pool) if level_pool else None
+
+    # Filtrar cuts que estão no level_pool (válidos para este momento)
+    valid_set = set(level_pool)
+    weighted_cuts = [(c, w) for c, w in dist.cuts if c in valid_set]
+
+    if not weighted_cuts:
+        return rng.choice(level_pool) if level_pool else None
+
+    # Aplicar cooldown
+    cooldown_ok = []
+    cooldown_weights = []
+    for cut_name, base_weight in weighted_cuts:
+        if cooldown_state.is_available(cut_name, tick, tpb, _COOP_INSTR):
+            cooldown_ok.append(cut_name)
+            cooldown_weights.append(base_weight)
+
+    if not cooldown_ok:
+        group_available = [c for c in level_pool if not _COOP_INSTR.get(c, set())]
+        if group_available:
+            return rng.choice(group_available)
+        return "All_Near" if "All_Near" in valid_set else (level_pool[0] if level_pool else None)
+
+    # Calcular boosts
+    final_weights = []
+    for cut_name in cooldown_ok:
+        idx = cooldown_ok.index(cut_name)
+        base_weight = cooldown_weights[idx]
+        boost = 1.0
+
+        # featured_inst boost
+        if featured_inst:
+            insts = _COOP_INSTR.get(cut_name, set())
+            if featured_inst in insts:
+                boost *= 1.4
+
+        # energy boost
+        if energy == "high":
+            if cut_name in ("D_Hand", "V_Closeup", "B_Hand", "G_Hand", "K_Hand", "D_Head"):
+                boost *= 1.3
+            elif cut_name in ("All_Far", "All_Behind"):
+                boost *= 0.7
+        elif energy == "calm":
+            if cut_name in ("All_Far", "All_Behind", "All_Near", "Front_Near"):
+                boost *= 1.3
+            elif cut_name in ("D_Hand", "V_Closeup", "B_Hand", "G_Hand", "K_Hand"):
+                boost *= 0.7
+
+        # position boost
+        if position == "entry":
+            if cut_name.endswith("_Near"):
+                boost *= 1.1
+        elif position == "close":
+            if cut_name in ("All_Far", "All_Behind", "Front_Near", "Front_Behind"):
+                boost *= 1.2
+            elif cut_name == "V_Closeup":
+                boost *= 1.1
+
+        final_weights.append(base_weight * boost)
+
+    # RNG-weighted choice
+    total = sum(final_weights)
+    if total <= 0:
+        return rng.choice(cooldown_ok) if cooldown_ok else None
+
+    normalized = [w / total for w in final_weights]
+    return rng.choices(cooldown_ok, weights=normalized, k=1)[0]
+
+
 def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                  tpb: int, bre_spans: list[tuple[int, int]] | None = None,
                  pace_scale: float = 1.0,
@@ -2067,7 +2889,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     sections (few notes) the pace is stretched to the real note spacing (avoids
     over-cutting in slow ballads/post-metal)."""
     from collections import deque
-    from .cut_events import detect_events
+    from .cut_events import detect_events, _section_leaders
     out: list[AbsEvent] = []
     rng = design.rng if design is not None else None
     accents = sorted(accents) if accents else []
@@ -2157,6 +2979,8 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             feat = (design.group_at(si).featured_inst if design is not None
                     else _featured_instrument(inst_onsets, s.start, s.end, inst_totals))
             pool = _bias_pool(pool, feat)
+        else:
+            feat = None
         pace_ms = SECTION_PACE_S.get(s.kind, 3.0) * 1000.0 * pace_scale
         # Audio nudge: a quieter-than-structural section cuts slower.
         _E = {"calm": 0, "mid": 1, "high": 2}
@@ -2170,6 +2994,13 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 density_floor = min(g, max_floor)
         idx = 0
         t = s.start
+        # Cooldown state reset por secção
+        cd_state = CoopCooldownState()
+        # Pré-calcular líderes da secção
+        leaders = (_section_leaders(inst_onsets, s.start, s.end, inst_totals)
+                   if inst_onsets else [])
+        sec_duration = s.end - s.start
+
         while t < s.end:
             step = max(ms_to_ticks(pace_ms, t, tempo_map, tpb), density_floor)
             placed = _snap_to_music(t, accents, tpb, floor=last_tick + min_gap)
@@ -2181,18 +3012,62 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 level_pool = pool
             # Playing-state filter: remove cuts que filmam instrumentos em pausa
             level_pool = _playing_framing(level_pool, placed, inst_onsets, tpb)
-            cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[0], rng=rng)
-            if cut == last_cut:
-                idx += 1
-                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[idx % len(level_pool)], rng=rng)
-            # Anti-recency
+            if not level_pool:
+                level_pool = pool
+
+            # Posição na secção
+            if sec_duration > 0:
+                frac = (placed - s.start) / sec_duration
+                if frac < 0.25:
+                    position = "entry"
+                elif frac < 0.75:
+                    position = "mid"
+                else:
+                    position = "close"
+            else:
+                position = "entry"
+
+            # Probabilistic selection
+            cut = select_coop_cut(
+                section_kind=s.kind,
+                position=position,
+                rng=rng if rng else random,
+                featured_inst=feat,
+                energy=energy,
+                section_leaders=leaders,
+                tick=placed,
+                tpb=tpb,
+                inst_onsets=inst_onsets,
+                cooldown_state=cd_state,
+                level_pool=level_pool,
+            )
+
+            # Anti-recency (se falhar, markov cycling de fallback)
+            if cut is None:
+                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV,
+                                     level_pool[0], rng=rng)
+
             for _ in range(len(level_pool)):
                 if cut not in recent_coop and cut != last_cut:
                     break
                 idx += 1
-                cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[idx % len(level_pool)], rng=rng)
+                if rng:
+                    cut = select_coop_cut(
+                        section_kind=s.kind, position=position,
+                        rng=rng, featured_inst=feat, energy=energy,
+                        section_leaders=leaders, tick=placed, tpb=tpb,
+                        inst_onsets=inst_onsets, cooldown_state=cd_state,
+                        level_pool=level_pool)
+                    if cut is None:
+                        cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV,
+                                             level_pool[idx % len(level_pool)], rng=rng)
+                else:
+                    cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV,
+                                         level_pool[idx % len(level_pool)], rng=rng)
+
             if placed < s.end:
                 slots.append((placed, cut))
+                cd_state.update(cut, placed, _COOP_INSTR)
                 recent_coop.append(cut)
                 cut_level = _CAMERA_LEVELS.get(cut, 999)
                 if cut_level < min_framing_level:
