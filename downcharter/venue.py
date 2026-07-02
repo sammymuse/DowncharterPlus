@@ -2303,18 +2303,59 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     merged += companions
     merged.sort(key=lambda x: x[0])
 
+    # Cooldown por tipo de directed cut (beats): após um directed cut,
+    # não colocar framing cuts durante este período para dar tempo
+    # à animação de câmara (sweep/zoom/closeup) de completar.
+    # Valores baseados na análise de 100 officiais (41.3% dos directed
+    # cuts estão 2-4b do nearest coop, 50.6% dos inter-directed ≤1b).
+    _DIRECTED_COOLDOWN = {
+        # Full band — animações longas
+        "D_All": 4, "D_All_Cam": 4, "D_All_LT": 4, "D_All_Yeah": 4,
+        "D_Stagedive": 6, "D_Crowdsurf": 6,
+        "D_BRE": 4, "D_BRE_Jump": 4,
+        # Bateria — fills percussivos médios
+        "D_Drums_LT": 3, "D_Drums_KD": 2, "D_Drums_Point": 2,
+        # Closeups — zooms rápidos
+        "D_Gtr_CLS": 2, "D_Bass_CLS": 2, "D_Vocals_CLS": 2,
+        "D_Drums_CLS": 2, "D_Keys": 2,
+        # Apontar câmara — pan (rápido), tilt (lento)
+        "D_Gtr_Cam_PR": 2, "D_Gtr_Cam_PT": 3,
+        "D_Vocals_Cam_PR": 2, "D_Vocals_Cam_PT": 3,
+        "D_Bass_Cam": 2, "D_Keys_Cam": 2,
+        # Plateia
+        "D_Crowd": 3, "D_Crowd_Gtr": 3, "D_Crowd_Bass": 3,
+        # Duos — interação 2 personagens
+        "D_Duo_Gtr": 3, "D_Duo_Bass": 3, "D_Duo_Drums": 3,
+        "D_Duo_GB": 3, "D_Duo_KV": 3, "D_Duo_KB": 3, "D_Duo_KG": 3,
+        # Gestos NP — parado a fazer pose, rápido
+        "D_Gtr_NP": 2, "D_Bass_NP": 2, "D_Drums_NP": 2,
+        "D_Keys_NP": 2, "D_Vox_NP": 2,
+    }
+    _DEFAULT_COOLDOWN = 2
+
     prev_tick = -10 ** 9
     prev_cut: str | None = None
+    last_dir_tick: int = -10 ** 9
+    last_dir_cooldown_ticks: int = 0
     for tk, cut in merged:
         if cut == prev_cut:
             continue
         if tk - prev_tick < min_gap:
             if tk != prev_tick:          # allow same-tick different-category companions
                 continue
+        # Cooldown: framing cuts são suprimidos se ainda estamos a deixar
+        # a animação do último directed cut reproduzir. Directed cuts
+        # nunca se bloqueiam a si próprios (podem empilhar-se).
+        if cut not in DIRECTED_CUTS and tk < last_dir_tick + last_dir_cooldown_ticks:
+            continue
         ev = _cut_event(tk, cut)
         if ev is not None:
             out.append(ev)
             prev_tick, prev_cut = tk, cut
+            if cut in DIRECTED_CUTS:
+                cd_beats = _DIRECTED_COOLDOWN.get(cut, _DEFAULT_COOLDOWN)
+                last_dir_tick = tk
+                last_dir_cooldown_ticks = cd_beats * tpb
     return out
 
 
