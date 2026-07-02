@@ -930,7 +930,8 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
     abs_evts = [e for e in to_abs(track) if e.msg.type != "end_of_track"]
 
     # already charted (pitched gems in the vocal range)? then we don't touch it.
-    if any(e.msg.type == "note_on" and getattr(e.msg, "velocity", 0) > 0
+    # But when write_gems=False (lipsync-only), we still need spans from lyrics.
+    if write_gems and any(e.msg.type == "note_on" and getattr(e.msg, "velocity", 0) > 0
            and 36 <= e.msg.note <= 84 for e in abs_evts):
         return
 
