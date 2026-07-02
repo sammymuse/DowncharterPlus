@@ -2500,18 +2500,23 @@ _COOP_INSTR: dict[str, set[str]] = {
 
 def _playing_framing(pool: list[str], tick: int,
                      inst_onsets: dict[str, list[int]] | None,
-                     tpb: int) -> list[str]:
+                     tpb: int,
+                     idle_threshold: int = 4) -> list[str]:
     """Filter framing pool: keep only cuts where featured instrument(s) are playing.
 
-    Single-instrument cut → that instrument must have an onset within ±2 beats.
+    Single-instrument cut → that instrument must have an onset within ±N beats.
     Multi-instrument cut  → AT LEAST ONE instrument must be playing (OR logic).
     Group/All shots       → always valid (film the whole stage).
+
+    `idle_threshold` controls how many beats of silence count as 'idle'
+    (default 4 beats = 1 measure, matching the animation idle logic better
+    than the old 2-beat window).
 
     Falls back to group shots if the pool would be empty.
     """
     if not inst_onsets:
         return pool
-    win = tpb * 2  # 2-beat window (same as _guard_directed for featured instruments)
+    win = tpb * idle_threshold
     result = []
     for cut in pool:
         insts = _COOP_INSTR.get(cut, set())
@@ -3167,7 +3172,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     for tk, cut in merged:
         if cut in CAMERA_CUTS and inst_onsets:
             insts = _COOP_INSTR.get(cut, set())
-            if insts and not any(_playing_near(inst_onsets.get(i), tk, tpb * 2)
+            if insts and not any(_playing_near(inst_onsets.get(i), tk, tpb * 4)
                                 for i in insts):
                 # Instrumento em pausa — substituir por group shot
                 cleaned.append((tk, "All_Near"))
