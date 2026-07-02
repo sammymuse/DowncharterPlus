@@ -370,14 +370,17 @@ def normalize_source_midi(mid: mido.MidiFile) -> dict:
 #   * Simultaneous hits split between the hands (lower kit position → LH, higher
 #     → RH); special chords (two cymbals → both crashes; red+yellow-tom → snare
 #     flam) match Onyx.
-#   * Single hits within 0.25 s of each other form a "phrase" whose sticking
-#     alternates hands, leading with the hand that keeps the drummer from crossing
-#     over on the next hit (double-strokes are delayed to the latest moment).
+#   * Single hits within one eighth note (±1 beat at moderate tempos) form a
+#     "phrase" whose sticking alternates hands, using full-phrase lookahead to
+#     avoid crossovers. Velocity from the source MIDI is preserved: ghost notes
+#     (vel=1) use soft-hit animation variants; accents (vel=127) bias toward
+#     the dominant hand (RH).
 #
 # The full RB3 animation note map (per Onyx `parseDrumAnimation`):
-#   24 kick(RF) · 26/27 snare LH/RH · 30/31 hihat LH/RH · 34/36 crash1 LH/RH ·
-#   38 crash2 RH · 42/43 ride RH/LH · 44 crash2 LH · 46/47 tom1 LH/RH ·
-#   48/49 tom2 LH/RH · 50/51 floortom LH/RH
+#   24 kick(RF) · 26/28 snare hard/soft LH · 27/29 snare hard/soft RH ·
+#   30/31 hihat LH/RH · 34/35 crash1 hard/soft LH · 36/37 crash1 hard/soft RH ·
+#   38/39 crash2 hard/soft RH · 42/43 ride RH/LH · 44/45 crash2 hard/soft LH ·
+#   46/47 tom1 LH/RH · 48/49 tom2 LH/RH · 50/51 floortom LH/RH
 _TOM_MARKERS = (110, 111, 112)
 
 # Anim pads, ordered left→right across the kit (used for hand assignment and the
@@ -385,17 +388,24 @@ _TOM_MARKERS = (110, 111, 112)
 _SNARE, _HIHAT, _CRASH1, _TOM1, _TOM2, _FLOOR, _CRASH2, _RIDE = range(8)
 _LH, _RH = "LH", "RH"
 
-# (pad, hand) → RB3 animation note. Hard hits only (we don't author ghost notes).
+# (pad, hand, is_soft) → RB3 animation note. Soft variants (velocity = ghost)
+# exist for snare (28/29), crash1 (35/37), crash2 (39/45).  All other pads use
+# the hard variant regardless of velocity.
 _ANIM_NOTE = {
-    (_SNARE, _LH): 26,  (_SNARE, _RH): 27,
-    (_HIHAT, _LH): 30,  (_HIHAT, _RH): 31,
-    (_CRASH1, _LH): 34, (_CRASH1, _RH): 36,
-    (_TOM1, _LH): 46,   (_TOM1, _RH): 47,
-    (_TOM2, _LH): 48,   (_TOM2, _RH): 49,
-    (_FLOOR, _LH): 50,  (_FLOOR, _RH): 51,
-    (_CRASH2, _LH): 44, (_CRASH2, _RH): 38,
-    (_RIDE, _LH): 43,   (_RIDE, _RH): 42,
+    (_SNARE, _LH, False): 26, (_SNARE, _RH, False): 27,
+    (_SNARE, _LH, True):  28, (_SNARE, _RH, True):  29,
+    (_HIHAT, _LH, False): 30, (_HIHAT, _RH, False): 31,
+    (_CRASH1, _LH, False): 34, (_CRASH1, _RH, False): 36,
+    (_CRASH1, _LH, True):  35, (_CRASH1, _RH, True):  37,
+    (_TOM1, _LH, False): 46,   (_TOM1, _RH, False): 47,
+    (_TOM2, _LH, False): 48,   (_TOM2, _RH, False): 49,
+    (_FLOOR, _LH, False): 50,  (_FLOOR, _RH, False): 51,
+    (_CRASH2, _LH, False): 44, (_CRASH2, _RH, False): 38,
+    (_CRASH2, _LH, True):  45, (_CRASH2, _RH, True):  39,
+    (_RIDE, _LH, False): 43,   (_RIDE, _RH, False): 42,
 }
+# Pads that have soft-hit animation variants.
+_SOFT_CAPABLE = {_SNARE, _CRASH1, _CRASH2}
 _ANIM_KICK = 24
 
 
@@ -415,36 +425,128 @@ def _normal_direction(x: int, y: int):
     return None
 
 
-def _auto_sticking(pads: list[int]) -> list[str]:
-    """Assign LH/RH to a phrase of single hits (Onyx `autoSticking`)."""
-    out: list[str] = []
-    prev = None                       # None | (hand, pad)
-    for i, x in enumerate(pads):
-        rest = pads[i + 1:]
-        if prev is None:
-            # Look ahead: first non-None direction decides the starting hand so the
-            # run lands correctly; flip if an even number of "free" moves precede it.
-            dirs = [_normal_direction(a, b) for a, b in zip(pads[i:], rest)]
-            n, h = 0, None
-            for d in dirs:
-                if d is None:
-                    n += 1
-                else:
-                    h = d
-                    break
-            if h is None:
-                hand = _RH
+def _simulate_sticking_fwd(
+    pads: list[tuple[int, int]], start_hand: str,
+) -> list[str]:
+    """Simulate the greedy sticking for a (pad, vel) phrase, starting with a
+    given hand at the first note.  Returns a hand for each note in order."""
+    hands: list[str] = []
+    cur_hand = start_hand
+    for i, (pad, vel) in enumerate(pads):
+        if i == 0:
+            hands.append(cur_hand)
+            continue
+        prev_pad = pads[i - 1][0]
+        if pad == prev_pad:
+            # Same pad: one-step lookahead for the double-stroke rule.
+            nxt = [p for p, _ in pads[i + 1: i + 2]]
+            if nxt and _flip(cur_hand) == _normal_direction(pad, nxt[0]):
+                cur_hand = cur_hand       # double stroke
             else:
-                hand = _flip(h) if n % 2 == 0 else h
+                cur_hand = _flip(cur_hand)  # alternate
+        else:
+            cur_hand = _flip(cur_hand)    # moving pads always switches hands
+        hands.append(cur_hand)
+    return hands
+
+
+def _score_sticking(hands: list[str], pads: list[int]) -> int:
+    """Score a hand sequence: +1 per natural (non-crossing) transition,
+    +1 per double stroke that avoids a crossover. Higher = better."""
+    score = 0
+    for i in range(len(hands) - 1):
+        d = _normal_direction(pads[i], pads[i + 1])
+        if d is None or hands[i + 1] == d:
+            score += 1      # neutral or natural direction
+        # bonus: the dominant-hand (RH) lands on accent positions
+        if hands[i] == _RH and (i == 0 or pads[i] != pads[i - 1]):
+            score += 1      # fresh RH placement is generally good
+    return score
+
+
+def _auto_sticking(phrase: list[tuple[int, int]]) -> list[str]:
+    """Assign LH/RH to a phrase of single hits.
+
+    Each element is (pad, velocity).  The algorithm uses full-phrase lookahead
+    to choose the best starting hand and double-stroke placement, preferring
+    the path with fewer crossovers.  Accents (vel 127) bias toward the
+    dominant hand (RH) on snare/crash.
+    """
+    pads = [p for p, _ in phrase]
+    vels = [v for _, v in phrase]
+    n = len(phrase)
+    if n == 0:
+        return []
+    if n == 1:
+        # Single note: dominant hand for accent on snare/crash, else RH.
+        if vels[0] >= 120 and pads[0] in (_SNARE, _CRASH1, _CRASH2):
+            return [_RH]
+        return [_RH]
+
+    out: list[str] = []
+    prev: tuple[str, int] | None = None
+
+    for i, (x, vel) in enumerate(phrase):
+        rest = phrase[i + 1:]
+        rest_pads = [p for p, _ in rest]
+
+        if prev is None:
+            # ---- first note: pick starting hand via full-phrase simulation ----
+            # Try both RH and LH starts; pick the one with better overall flow.
+            seq_rh = _simulate_sticking_fwd(phrase[i:], _RH)
+            seq_lh = _simulate_sticking_fwd(phrase[i:], _LH)
+            pads_i = pads[i:]
+            score_rh = _score_sticking(seq_rh, pads_i)
+            score_lh = _score_sticking(seq_lh, pads_i)
+
+            # Accent bias: if first note is an accent on snare/crash, tilt RH.
+            accent_bonus = 2 if (vel >= 120 and x in (_SNARE, _CRASH1, _CRASH2)) else 0
+            hand = _RH if (score_rh + accent_bonus) >= score_lh else _LH
         else:
             prev_hand, prev_pad = prev
             if x == prev_pad:
-                # Same pad: keep the hand (double stroke) only if that sets us up to
-                # NOT cross over on the next hit; otherwise alternate.
-                if rest and _flip(prev_hand) == _normal_direction(x, rest[0]):
-                    hand = prev_hand
+                # ---- same pad: scoring-based double-stroke decision ----
+                alt_hand = _flip(prev_hand)
+
+                # Pure same-pad run: all remaining notes are on the same pad,
+                # OR the note two positions back was also this pad (we're
+                # already deep in a roll).  Force single-stroke alternation
+                # (RLRL) — standard drumming pedagogy for rolls.  Scoring
+                # cannot distinguish RL from RR because same-pad transitions
+                # are direction-neutral (None).
+                same_remaining = len(rest) > 0 and all(p == x for p, _ in rest)
+                in_roll = same_remaining or (i >= 2 and pads[i - 2] == x)
+                if in_roll:
+                    hand = alt_hand
                 else:
-                    hand = _flip(prev_hand)
+                    # Simulate the remaining phrase starting with each option.
+                    seq_double = _simulate_sticking_fwd(
+                        [(x, vel)] + rest, prev_hand)
+                    seq_alt = _simulate_sticking_fwd(
+                        [(x, vel)] + rest, alt_hand)
+
+                    pads_remaining = [x] + rest_pads
+                    score_double = _score_sticking(seq_double, pads_remaining)
+                    score_alt = _score_sticking(seq_alt, pads_remaining)
+
+                    # Accent bias on the current note tilts toward RH.
+                    accent_bias = 1 if (vel >= 120
+                                         and x in (_SNARE, _CRASH1, _CRASH2)
+                                         and alt_hand == _RH) else 0
+
+                    # Tiebreaker: prefer alternating when the scores are equal.
+                    # At phrase start (out<2): default to alt for isolated pairs.
+                    # At phrase end (rest empty): default to alt — real drummers
+                    # don't end phrases on accidental double strokes.
+                    tiebreak_alt = (score_double == score_alt and not accent_bias
+                                    and ((len(rest) <= 1 and len(out) < 2)
+                                         or len(rest) == 0))
+                    if tiebreak_alt:
+                        hand = alt_hand
+                    elif score_double >= (score_alt + accent_bias):
+                        hand = prev_hand   # keep (double stroke)
+                    else:
+                        hand = alt_hand    # alternate
             else:
                 hand = _flip(prev_hand)   # moving pads always switches hands
         out.append(hand)
@@ -460,8 +562,10 @@ def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
     out = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
     tpb = mid.ticks_per_beat
     anim_len = max(1, tpb // 8)
-    tempo_map = build_tempo_map(mid)
-    close_ms = 250.0                  # Onyx closeTime = 0.25 s
+    # Phrase threshold: one eighth note.  Musical subdivision derived from
+    # tempo (via TPB), not an arbitrary ms value — consistent with the
+    # project's rule: "regras derivadas matematicamente (frações de beat)".
+    close_ticks = tpb // 2
     added = 0
 
     for track in mid.tracks:
@@ -501,12 +605,14 @@ def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
         def _is_tom(marker: int, tick: int) -> bool:
             return any(a <= tick < b for a, b in spans[marker])
 
-        # Collect Expert gems per tick (one set of lanes per onset).
-        gems_at: dict[int, set] = {}
+        # Collect Expert gems per tick, preserving velocity.
+        # gems_at[tick] = {(lane, velocity), ...}
+        gems_at: dict[int, set[tuple[str, int]]] = {}
         for tick, m in abs_msgs:
             if not (m.type == "note_on" and m.velocity > 0):
                 continue
             n = m.note
+            vel = m.velocity
             if n in (DRUM_KICK_EXPERT, DRUM_KICK_2X):
                 lane = "kick"
             elif n == 97:
@@ -519,7 +625,7 @@ def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
                 lane = "green_tom" if _is_tom(112, tick) else "green_cym"
             else:
                 continue
-            gems_at.setdefault(tick, set()).add(lane)
+            gems_at.setdefault(tick, set()).add((lane, vel))
 
         # Per-onset → list of anim pads (Onyx `autoDrumAnimation`). Kicks are
         # emitted directly as note 24; everything else feeds the sticking pass.
@@ -529,9 +635,13 @@ def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
             "green_tom": _FLOOR,
         }
         kicks: list[int] = []
-        events: list[tuple] = []      # ("pair", tick, lo, hi) | ("single", tick, pad)
+        # events: ("pair", tick, lo, hi, vel) | ("single", tick, pad, vel)
+        events: list[tuple] = []
         for tick in sorted(gems_at):
-            lanes = gems_at[tick]
+            entries = gems_at[tick]
+            lanes = {l for l, _ in entries}       # set of lane names only
+            # Use the highest velocity on this tick for the animation note.
+            vel = max(v for _, v in entries)
             if "kick" in lanes:
                 kicks.append(tick)
             # Special chords (match Onyx ordering).
@@ -545,53 +655,61 @@ def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
             if not pads:
                 continue
             if len(pads) >= 2:
-                events.append(("pair", tick, min(pads), max(pads)))
+                events.append(("pair", tick, min(pads), max(pads), vel))
             else:
-                events.append(("single", tick, pads[0]))
+                events.append(("single", tick, pads[0], vel))
 
         # Walk the event stream; flush single-hit phrases through _auto_sticking.
-        anim: list[tuple[int, int]] = []   # (tick, note)
+        # Each anim entry: (tick, note, velocity)
+        anim: list[tuple[int, int, int]] = []
 
-        def _emit(tick: int, pad: int, hand: str) -> None:
-            anim.append((tick, _ANIM_NOTE[(pad, hand)]))
+        def _anim_note(pad: int, hand: str, vel: int) -> int:
+            """Select the animation note for (pad, hand, velocity).
+            Ghost notes (vel=1) on soft-capable pads use the soft variant."""
+            is_soft = vel <= 1 and pad in _SOFT_CAPABLE
+            return _ANIM_NOTE[(pad, hand, is_soft)]
 
-        buffer: list[tuple[int, int]] = []   # (tick, pad)
+        def _emit(tick: int, pad: int, hand: str, vel: int) -> None:
+            anim.append((tick, _anim_note(pad, hand, vel), vel))
+
+        # buffer: (tick, pad, velocity)
+        buffer: list[tuple[int, int, int]] = []
 
         def _flush() -> None:
             if not buffer:
                 return
-            hands = _auto_sticking([p for _, p in buffer])
-            for (btick, pad), hand in zip(buffer, hands):
-                _emit(btick, pad, hand)
+            phrase = [(p, v) for _, p, v in buffer]
+            hands = _auto_sticking(phrase)
+            for (btick, pad, vel), hand in zip(buffer, hands):
+                _emit(btick, pad, hand, vel)
             buffer.clear()
 
         prev_tick = None
         for ev in events:
             if ev[0] == "pair":
                 _flush()
-                _, tick, lo, hi = ev
-                _emit(tick, lo, _LH)
-                _emit(tick, hi, _RH)
+                _, tick, lo, hi, vel = ev
+                _emit(tick, lo, _LH, vel)
+                _emit(tick, hi, _RH, vel)
                 prev_tick = tick
             else:
-                _, tick, pad = ev
+                _, tick, pad, vel = ev
                 if buffer and prev_tick is not None and \
-                        (tick_to_ms(tick, tempo_map, tpb)
-                         - tick_to_ms(prev_tick, tempo_map, tpb)) <= close_ms:
-                    buffer.append((tick, pad))
+                        abs(tick - prev_tick) <= close_ticks:
+                    buffer.append((tick, pad, vel))
                 else:
                     _flush()
-                    buffer.append((tick, pad))
+                    buffer.append((tick, pad, vel))
                 prev_tick = tick
         _flush()
 
         for tick in kicks:
-            anim.append((tick, _ANIM_KICK))
+            anim.append((tick, _ANIM_KICK, 96))
 
         # Merge gems + animation note pairs, drop the old end-of-track, re-time.
         merged = [(tick, m) for tick, m in abs_msgs if m.type != "end_of_track"]
-        for tick, note in anim:
-            merged.append((tick, mido.Message("note_on", note=note, velocity=96, time=0)))
+        for tick, note, vel in anim:
+            merged.append((tick, mido.Message("note_on", note=note, velocity=vel, time=0)))
             merged.append((tick + anim_len, mido.Message("note_off", note=note, velocity=0, time=0)))
             added += 1
         merged.sort(key=lambda tm: tm[0])
