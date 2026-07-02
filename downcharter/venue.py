@@ -1735,674 +1735,2275 @@ SECTION_PACE_S = {
 # usa como ponto de partida para a weighted choice, depois de aplicar cooldown e boosts
 # de contexto musical (featured instrument, energy, position).
 _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
-    "verse": {
-        "entry": CoopDistribution(cuts=[
-            ("V_Near",      0.22),
-            ("B_Near",      0.14),
-            ("G_Near",      0.10),
-            ("D_Hand",      0.09),
-            ("B_Hand",      0.08),
-            ("K_Near",      0.07),
-            ("BV_Near",     0.06),
-            ("DV_Near",     0.05),
-            ("All_Near",    0.05),
-            ("V_Closeup",   0.04),
-            ("G_Hand",      0.03),
-            ("D_Near",      0.03),
-            ("BG_Near",     0.02),
-            ("BK_Near",     0.01),
-            ("All_Far",     0.01),
-        ]),
-        "mid": CoopDistribution(cuts=[
-            ("B_Near",      0.16),
-            ("V_Near",      0.14),
-            ("G_Near",      0.11),
-            ("D_Hand",      0.10),
-            ("K_Near",      0.08),
-            ("BV_Near",     0.07),
-            ("All_Near",    0.06),
-            ("V_Closeup",   0.05),
-            ("B_Hand",      0.05),
-            ("BG_Near",     0.04),
-            ("G_Hand",      0.03),
-            ("DV_Near",     0.03),
-            ("Front_Near",  0.03),
-            ("All_Far",     0.02),
-            ("All_Behind",  0.02),
-            ("BK_Near",     0.01),
-        ]),
-        "close": CoopDistribution(cuts=[
-            ("B_Near",      0.15),
-            ("All_Far",     0.12),
-            ("V_Closeup",   0.11),
-            ("G_Near",      0.10),
-            ("D_Near",      0.09),
-            ("All_Near",    0.08),
-            ("BV_Near",     0.07),
-            ("K_Near",      0.06),
-            ("Front_Near",  0.05),
-            ("V_Near",      0.05),
-            ("B_Hand",      0.04),
-            ("D_Hand",      0.03),
-            ("BG_Near",     0.02),
-            ("All_Behind",  0.02),
-            ("GK_Near",     0.01),
-        ]),
-    },
+
     "chorus": {
+
         "entry": CoopDistribution(cuts=[
-            ("V_Near",      0.18),
-            ("B_Near",      0.12),
-            ("All_Near",    0.11),
-            ("D_Hand",      0.10),
-            ("G_Near",      0.08),
-            ("K_Near",      0.07),
-            ("V_Closeup",   0.06),
-            ("BG_Near",     0.05),
-            ("Front_Near",  0.05),
-            ("All_Far",     0.04),
-            ("D_Near",      0.04),
-            ("KV_Near",     0.03),
-            ("BV_Near",     0.03),
-            ("GK_Near",     0.02),
-            ("All_Behind",  0.02),
+
+            ("V_Closeup", 0.0715),
+
+            ("V_Near", 0.0658),
+
+            ("D_Near", 0.0617),
+
+            ("D_Closeup_Hand", 0.0617),
+
+            ("B_Near", 0.0463),
+
+            ("BV_Near", 0.0422),
+
+            ("All_Far", 0.0414),
+
+            ("All_Near", 0.0406),
+
+            ("Front_Near", 0.0390),
+
+            ("BG_Near", 0.0382),
+
+            ("D_Closeup_Head", 0.0374),
+
+            ("G_Near", 0.0341),
+
+            ("K_Near", 0.0341),
+
+            ("D_Behind", 0.0341),
+
+            ("G_Closeup_Hand", 0.0292),
+
+            ("GK_Near", 0.0260),
+
+            ("BK_Near", 0.0260),
+
+            ("GV_Near", 0.0260),
+
+            ("Front_Behind", 0.0236),
+
+            ("All_Behind", 0.0227),
+
+            ("K_Closeup_Hand", 0.0203),
+
+            ("V_Behind", 0.0195),
+
+            ("KV_Near", 0.0171),
+
+            ("G_Closeup_Head", 0.0162),
+
+            ("DV_Near", 0.0162),
+
+            ("BG_Behind", 0.0138),
+
+            ("K_Closeup_Head", 0.0130),
+
+            ("BK_Behind", 0.0130),
+
+            ("GK_Behind", 0.0122),
+
+            ("BD_Near", 0.0114),
+
+            ("DG_Near", 0.0114),
+
+            ("B_Behind", 0.0106),
+
+            ("K_Behind", 0.0081),
+
+            ("BV_Behind", 0.0065),
+
+            ("G_Behind", 0.0049),
+
+            ("GV_Behind", 0.0041),
+
         ]),
+
         "mid": CoopDistribution(cuts=[
-            ("V_Closeup",   0.14),
-            ("D_Hand",      0.12),
-            ("B_Near",      0.10),
-            ("All_Near",    0.09),
-            ("G_Near",      0.08),
-            ("BV_Near",     0.07),
-            ("K_Near",      0.06),
-            ("V_Near",      0.06),
-            ("BG_Near",     0.05),
-            ("Front_Near",  0.05),
-            ("D_Near",      0.04),
-            ("All_Far",     0.04),
-            ("KV_Near",     0.03),
-            ("GK_Near",     0.03),
-            ("All_Behind",  0.02),
-            ("BD_Near",     0.02),
+
+            ("D_Closeup_Hand", 0.0682),
+
+            ("V_Closeup", 0.0618),
+
+            ("D_Near", 0.0609),
+
+            ("V_Near", 0.0505),
+
+            ("B_Near", 0.0459),
+
+            ("Front_Near", 0.0391),
+
+            ("G_Closeup_Hand", 0.0391),
+
+            ("All_Near", 0.0377),
+
+            ("All_Far", 0.0373),
+
+            ("D_Behind", 0.0359),
+
+            ("All_Behind", 0.0332),
+
+            ("BG_Near", 0.0332),
+
+            ("G_Near", 0.0309),
+
+            ("BV_Near", 0.0309),
+
+            ("D_Closeup_Head", 0.0305),
+
+            ("K_Closeup_Hand", 0.0300),
+
+            ("K_Near", 0.0246),
+
+            ("BK_Near", 0.0241),
+
+            ("GV_Near", 0.0227),
+
+            ("Front_Behind", 0.0227),
+
+            ("GK_Near", 0.0227),
+
+            ("V_Behind", 0.0218),
+
+            ("BD_Near", 0.0218),
+
+            ("B_Behind", 0.0191),
+
+            ("DG_Near", 0.0177),
+
+            ("BG_Behind", 0.0177),
+
+            ("KV_Near", 0.0173),
+
+            ("BK_Behind", 0.0150),
+
+            ("K_Behind", 0.0146),
+
+            ("GK_Behind", 0.0136),
+
+            ("DV_Near", 0.0132),
+
+            ("G_Closeup_Head", 0.0105),
+
+            ("K_Closeup_Head", 0.0105),
+
+            ("G_Behind", 0.0095),
+
+            ("BV_Behind", 0.0091),
+
+            ("GV_Behind", 0.0064),
+
         ]),
+
         "close": CoopDistribution(cuts=[
-            ("All_Far",     0.15),
-            ("All_Behind",  0.12),
-            ("Front_Near",  0.10),
-            ("V_Closeup",   0.10),
-            ("D_Near",      0.09),
-            ("All_Near",    0.08),
-            ("B_Near",      0.07),
-            ("G_Near",      0.06),
-            ("K_Near",      0.05),
-            ("BV_Near",     0.04),
-            ("BG_Near",     0.04),
-            ("D_Hand",      0.04),
-            ("V_Near",      0.03),
-            ("KV_Near",     0.02),
-            ("GK_Near",     0.01),
+
+            ("V_Closeup", 0.0755),
+
+            ("D_Closeup_Hand", 0.0561),
+
+            ("V_Near", 0.0542),
+
+            ("All_Near", 0.0542),
+
+            ("B_Near", 0.0542),
+
+            ("Front_Near", 0.0484),
+
+            ("All_Far", 0.0474),
+
+            ("D_Near", 0.0445),
+
+            ("G_Closeup_Hand", 0.0416),
+
+            ("G_Near", 0.0407),
+
+            ("D_Closeup_Head", 0.0358),
+
+            ("All_Behind", 0.0319),
+
+            ("Front_Behind", 0.0310),
+
+            ("D_Behind", 0.0300),
+
+            ("K_Closeup_Hand", 0.0271),
+
+            ("BK_Near", 0.0261),
+
+            ("K_Near", 0.0261),
+
+            ("BG_Near", 0.0242),
+
+            ("BV_Near", 0.0232),
+
+            ("GV_Near", 0.0223),
+
+            ("BD_Near", 0.0203),
+
+            ("GK_Near", 0.0194),
+
+            ("DG_Near", 0.0174),
+
+            ("V_Behind", 0.0165),
+
+            ("G_Closeup_Head", 0.0155),
+
+            ("BG_Behind", 0.0145),
+
+            ("GK_Behind", 0.0126),
+
+            ("B_Behind", 0.0126),
+
+            ("DV_Near", 0.0116),
+
+            ("BK_Behind", 0.0116),
+
+            ("K_Closeup_Head", 0.0097),
+
+            ("KV_Near", 0.0087),
+
+            ("G_Behind", 0.0087),
+
+            ("K_Behind", 0.0087),
+
+            ("GV_Behind", 0.0087),
+
+            ("BV_Behind", 0.0087),
+
         ]),
+
     },
+
+    "verse": {
+
+        "entry": CoopDistribution(cuts=[
+
+            ("V_Near", 0.1077),
+
+            ("V_Closeup", 0.0974),
+
+            ("D_Near", 0.0515),
+
+            ("B_Near", 0.0487),
+
+            ("Front_Near", 0.0440),
+
+            ("D_Closeup_Hand", 0.0440),
+
+            ("BV_Near", 0.0384),
+
+            ("GV_Near", 0.0356),
+
+            ("D_Closeup_Head", 0.0328),
+
+            ("All_Near", 0.0309),
+
+            ("BG_Near", 0.0290),
+
+            ("G_Near", 0.0290),
+
+            ("D_Behind", 0.0281),
+
+            ("Front_Behind", 0.0272),
+
+            ("GK_Near", 0.0243),
+
+            ("G_Closeup_Hand", 0.0234),
+
+            ("BK_Near", 0.0234),
+
+            ("All_Behind", 0.0206),
+
+            ("K_Near", 0.0197),
+
+            ("B_Behind", 0.0187),
+
+            ("BV_Behind", 0.0178),
+
+            ("V_Behind", 0.0178),
+
+            ("DG_Near", 0.0169),
+
+            ("All_Far", 0.0169),
+
+            ("K_Closeup_Hand", 0.0159),
+
+            ("BD_Near", 0.0150),
+
+            ("BG_Behind", 0.0140),
+
+            ("DV_Near", 0.0140),
+
+            ("KV_Near", 0.0140),
+
+            ("GK_Behind", 0.0140),
+
+            ("G_Behind", 0.0131),
+
+            ("G_Closeup_Head", 0.0131),
+
+            ("K_Behind", 0.0131),
+
+            ("BK_Behind", 0.0112),
+
+            ("K_Closeup_Head", 0.0103),
+
+            ("GV_Behind", 0.0084),
+
+        ]),
+
+        "mid": CoopDistribution(cuts=[
+
+            ("V_Near", 0.0860),
+
+            ("V_Closeup", 0.0723),
+
+            ("D_Closeup_Hand", 0.0592),
+
+            ("B_Near", 0.0517),
+
+            ("D_Near", 0.0465),
+
+            ("Front_Near", 0.0456),
+
+            ("BV_Near", 0.0366),
+
+            ("G_Near", 0.0357),
+
+            ("G_Closeup_Hand", 0.0343),
+
+            ("All_Near", 0.0329),
+
+            ("D_Closeup_Head", 0.0319),
+
+            ("D_Behind", 0.0315),
+
+            ("BG_Near", 0.0296),
+
+            ("All_Far", 0.0272),
+
+            ("K_Near", 0.0272),
+
+            ("BK_Near", 0.0240),
+
+            ("GK_Near", 0.0230),
+
+            ("GV_Near", 0.0225),
+
+            ("V_Behind", 0.0225),
+
+            ("Front_Behind", 0.0211),
+
+            ("BD_Near", 0.0197),
+
+            ("All_Behind", 0.0188),
+
+            ("G_Closeup_Head", 0.0178),
+
+            ("DG_Near", 0.0178),
+
+            ("DV_Near", 0.0178),
+
+            ("BG_Behind", 0.0174),
+
+            ("B_Behind", 0.0169),
+
+            ("K_Closeup_Hand", 0.0169),
+
+            ("KV_Near", 0.0164),
+
+            ("BK_Behind", 0.0155),
+
+            ("GK_Behind", 0.0146),
+
+            ("K_Behind", 0.0132),
+
+            ("BV_Behind", 0.0117),
+
+            ("K_Closeup_Head", 0.0113),
+
+            ("GV_Behind", 0.0066),
+
+            ("G_Behind", 0.0061),
+
+        ]),
+
+        "close": CoopDistribution(cuts=[
+
+            ("V_Closeup", 0.0739),
+
+            ("D_Closeup_Hand", 0.0721),
+
+            ("D_Closeup_Head", 0.0597),
+
+            ("V_Near", 0.0597),
+
+            ("BV_Near", 0.0499),
+
+            ("Front_Near", 0.0490),
+
+            ("D_Near", 0.0463),
+
+            ("B_Near", 0.0401),
+
+            ("All_Near", 0.0392),
+
+            ("GV_Near", 0.0356),
+
+            ("G_Closeup_Hand", 0.0356),
+
+            ("All_Behind", 0.0312),
+
+            ("All_Far", 0.0303),
+
+            ("Front_Behind", 0.0294),
+
+            ("BK_Near", 0.0294),
+
+            ("D_Behind", 0.0276),
+
+            ("BG_Near", 0.0267),
+
+            ("KV_Near", 0.0240),
+
+            ("V_Behind", 0.0240),
+
+            ("K_Near", 0.0240),
+
+            ("GK_Near", 0.0240),
+
+            ("K_Closeup_Hand", 0.0187),
+
+            ("G_Near", 0.0178),
+
+            ("G_Closeup_Head", 0.0151),
+
+            ("DV_Near", 0.0142),
+
+            ("BD_Near", 0.0125),
+
+            ("B_Behind", 0.0116),
+
+            ("DG_Near", 0.0116),
+
+            ("K_Behind", 0.0107),
+
+            ("K_Closeup_Head", 0.0089),
+
+            ("BG_Behind", 0.0089),
+
+            ("GK_Behind", 0.0089),
+
+            ("BV_Behind", 0.0089),
+
+            ("BK_Behind", 0.0080),
+
+            ("G_Behind", 0.0071),
+
+            ("GV_Behind", 0.0053),
+
+        ]),
+
+    },
+
     "intro": {
+
         "entry": CoopDistribution(cuts=[
-            ("All_Far",     0.20),
-            ("D_Near",      0.15),
-            ("B_Near",      0.12),
-            ("All_Behind",  0.10),
-            ("G_Near",      0.08),
-            ("Front_Near",  0.08),
-            ("K_Hand",      0.06),
-            ("G_Hand",      0.05),
-            ("V_Closeup",   0.05),
-            ("All_Near",    0.04),
-            ("D_Head",      0.03),
-            ("B_Behind",    0.02),
-            ("G_Behind",    0.02),
+
+            ("All_Far", 0.0765),
+
+            ("D_Near", 0.0765),
+
+            ("B_Near", 0.0765),
+
+            ("G_Near", 0.0765),
+
+            ("D_Closeup_Hand", 0.0656),
+
+            ("BG_Near", 0.0492),
+
+            ("V_Closeup", 0.0437),
+
+            ("K_Near", 0.0437),
+
+            ("All_Near", 0.0328),
+
+            ("G_Closeup_Hand", 0.0328),
+
+            ("K_Closeup_Hand", 0.0328),
+
+            ("Front_Near", 0.0273),
+
+            ("V_Near", 0.0273),
+
+            ("GK_Near", 0.0273),
+
+            ("All_Behind", 0.0273),
+
+            ("D_Closeup_Head", 0.0273),
+
+            ("DG_Near", 0.0273),
+
+            ("B_Behind", 0.0273),
+
+            ("Front_Behind", 0.0273),
+
+            ("BK_Near", 0.0273),
+
+            ("BD_Near", 0.0219),
+
+            ("D_Behind", 0.0219),
+
+            ("K_Behind", 0.0164),
+
+            ("G_Behind", 0.0164),
+
+            ("BV_Near", 0.0109),
+
+            ("GK_Behind", 0.0109),
+
+            ("BG_Behind", 0.0109),
+
+            ("BK_Behind", 0.0109),
+
+            ("V_Behind", 0.0109),
+
+            ("KV_Near", 0.0055),
+
+            ("G_Closeup_Head", 0.0055),
+
+            ("GV_Behind", 0.0055),
+
         ]),
+
         "mid": CoopDistribution(cuts=[
-            ("All_Far",     0.18),
-            ("D_Near",      0.14),
-            ("B_Near",      0.11),
-            ("G_Near",      0.10),
-            ("All_Behind",  0.09),
-            ("Front_Near",  0.08),
-            ("K_Hand",      0.06),
-            ("All_Near",    0.06),
-            ("V_Closeup",   0.05),
-            ("G_Hand",      0.04),
-            ("D_Head",      0.03),
-            ("B_Behind",    0.02),
-            ("G_Behind",    0.02),
-            ("D_Hand",      0.02),
+
+            ("B_Near", 0.0746),
+
+            ("G_Near", 0.0610),
+
+            ("V_Near", 0.0610),
+
+            ("D_Behind", 0.0576),
+
+            ("D_Closeup_Hand", 0.0542),
+
+            ("D_Near", 0.0508),
+
+            ("All_Near", 0.0441),
+
+            ("All_Behind", 0.0373),
+
+            ("D_Closeup_Head", 0.0373),
+
+            ("G_Closeup_Hand", 0.0373),
+
+            ("K_Closeup_Hand", 0.0339),
+
+            ("V_Closeup", 0.0339),
+
+            ("BG_Near", 0.0305),
+
+            ("K_Near", 0.0305),
+
+            ("GK_Behind", 0.0305),
+
+            ("BG_Behind", 0.0305),
+
+            ("BK_Behind", 0.0305),
+
+            ("B_Behind", 0.0271),
+
+            ("GK_Near", 0.0237),
+
+            ("K_Closeup_Head", 0.0237),
+
+            ("All_Far", 0.0237),
+
+            ("Front_Near", 0.0203),
+
+            ("BK_Near", 0.0203),
+
+            ("K_Behind", 0.0169),
+
+            ("Front_Behind", 0.0169),
+
+            ("G_Closeup_Head", 0.0169),
+
+            ("GV_Near", 0.0136),
+
+            ("BV_Near", 0.0136),
+
+            ("G_Behind", 0.0136),
+
+            ("BD_Near", 0.0102),
+
+            ("V_Behind", 0.0102),
+
+            ("DV_Near", 0.0068),
+
+            ("DG_Near", 0.0034),
+
+            ("KV_Near", 0.0034),
+
         ]),
+
         "close": CoopDistribution(cuts=[
-            ("All_Near",    0.16),
-            ("B_Near",      0.14),
-            ("V_Near",      0.12),
-            ("D_Hand",      0.10),
-            ("G_Near",      0.09),
-            ("All_Far",     0.08),
-            ("K_Near",      0.07),
-            ("Front_Near",  0.06),
-            ("All_Behind",  0.05),
-            ("V_Closeup",   0.04),
-            ("BG_Near",     0.03),
-            ("D_Near",      0.03),
-            ("B_Hand",      0.02),
-            ("G_Hand",      0.01),
+
+            ("V_Near", 0.0920),
+
+            ("D_Behind", 0.0675),
+
+            ("All_Near", 0.0552),
+
+            ("V_Closeup", 0.0552),
+
+            ("D_Closeup_Hand", 0.0491),
+
+            ("B_Near", 0.0491),
+
+            ("G_Closeup_Hand", 0.0429),
+
+            ("BG_Near", 0.0429),
+
+            ("DG_Near", 0.0429),
+
+            ("Front_Near", 0.0368),
+
+            ("G_Near", 0.0368),
+
+            ("All_Behind", 0.0368),
+
+            ("All_Far", 0.0307),
+
+            ("GK_Near", 0.0307),
+
+            ("D_Closeup_Head", 0.0307),
+
+            ("D_Near", 0.0307),
+
+            ("Front_Behind", 0.0307),
+
+            ("K_Closeup_Hand", 0.0245),
+
+            ("BK_Near", 0.0245),
+
+            ("BD_Near", 0.0245),
+
+            ("BG_Behind", 0.0245),
+
+            ("K_Near", 0.0245),
+
+            ("BK_Behind", 0.0184),
+
+            ("GK_Behind", 0.0184),
+
+            ("G_Closeup_Head", 0.0184),
+
+            ("B_Behind", 0.0123),
+
+            ("KV_Near", 0.0061),
+
+            ("G_Behind", 0.0061),
+
+            ("K_Behind", 0.0061),
+
+            ("K_Closeup_Head", 0.0061),
+
+            ("BV_Near", 0.0061),
+
+            ("GV_Near", 0.0061),
+
+            ("DV_Near", 0.0061),
+
+            ("V_Behind", 0.0061),
+
         ]),
+
     },
+
     "prechorus": {
+
         "entry": CoopDistribution(cuts=[
-            ("B_Near",      0.15),
-            ("K_Hand",      0.12),
-            ("V_Near",      0.12),
-            ("All_Near",    0.10),
-            ("D_Hand",      0.09),
-            ("G_Near",      0.08),
-            ("BG_Near",     0.07),
-            ("V_Closeup",   0.06),
-            ("B_Head",      0.05),
-            ("K_Near",      0.05),
-            ("D_Behind",    0.04),
-            ("All_Far",     0.03),
-            ("G_Hand",      0.02),
-            ("All_Behind",  0.02),
+
+            ("V_Near", 0.0815),
+
+            ("V_Closeup", 0.0687),
+
+            ("D_Closeup_Hand", 0.0601),
+
+            ("All_Far", 0.0515),
+
+            ("GV_Near", 0.0472),
+
+            ("G_Closeup_Hand", 0.0472),
+
+            ("All_Behind", 0.0472),
+
+            ("G_Near", 0.0472),
+
+            ("D_Near", 0.0429),
+
+            ("BG_Near", 0.0429),
+
+            ("Front_Near", 0.0429),
+
+            ("BV_Near", 0.0386),
+
+            ("K_Closeup_Hand", 0.0386),
+
+            ("B_Near", 0.0386),
+
+            ("GK_Near", 0.0300),
+
+            ("D_Behind", 0.0300),
+
+            ("BK_Near", 0.0258),
+
+            ("All_Near", 0.0258),
+
+            ("D_Closeup_Head", 0.0258),
+
+            ("V_Behind", 0.0258),
+
+            ("G_Behind", 0.0172),
+
+            ("BD_Near", 0.0172),
+
+            ("DV_Near", 0.0172),
+
+            ("K_Near", 0.0172),
+
+            ("Front_Behind", 0.0129),
+
+            ("KV_Near", 0.0129),
+
+            ("DG_Near", 0.0086),
+
+            ("K_Behind", 0.0086),
+
+            ("K_Closeup_Head", 0.0086),
+
+            ("GK_Behind", 0.0043),
+
+            ("BK_Behind", 0.0043),
+
+            ("BG_Behind", 0.0043),
+
+            ("G_Closeup_Head", 0.0043),
+
+            ("B_Behind", 0.0043),
+
         ]),
+
         "mid": CoopDistribution(cuts=[
-            ("B_Near",      0.14),
-            ("V_Near",      0.13),
-            ("D_Hand",      0.11),
-            ("All_Near",    0.10),
-            ("G_Near",      0.09),
-            ("BG_Near",     0.08),
-            ("K_Near",      0.07),
-            ("V_Closeup",   0.06),
-            ("B_Hand",      0.05),
-            ("D_Near",      0.04),
-            ("All_Far",     0.04),
-            ("Front_Near",  0.03),
-            ("K_Hand",      0.03),
-            ("All_Behind",  0.02),
-            ("G_Hand",      0.01),
+
+            ("V_Closeup", 0.0766),
+
+            ("V_Near", 0.0744),
+
+            ("D_Near", 0.0700),
+
+            ("D_Closeup_Hand", 0.0678),
+
+            ("D_Behind", 0.0525),
+
+            ("B_Near", 0.0460),
+
+            ("G_Near", 0.0460),
+
+            ("Front_Near", 0.0416),
+
+            ("All_Near", 0.0394),
+
+            ("All_Behind", 0.0328),
+
+            ("BD_Near", 0.0306),
+
+            ("V_Behind", 0.0306),
+
+            ("All_Far", 0.0284),
+
+            ("G_Closeup_Hand", 0.0263),
+
+            ("K_Closeup_Hand", 0.0263),
+
+            ("BV_Near", 0.0241),
+
+            ("D_Closeup_Head", 0.0219),
+
+            ("BG_Near", 0.0219),
+
+            ("Front_Behind", 0.0219),
+
+            ("KV_Near", 0.0197),
+
+            ("DG_Near", 0.0197),
+
+            ("BK_Near", 0.0197),
+
+            ("GK_Near", 0.0175),
+
+            ("B_Behind", 0.0175),
+
+            ("DV_Near", 0.0153),
+
+            ("K_Near", 0.0153),
+
+            ("G_Closeup_Head", 0.0131),
+
+            ("K_Behind", 0.0131),
+
+            ("G_Behind", 0.0131),
+
+            ("GV_Behind", 0.0131),
+
+            ("GV_Near", 0.0088),
+
+            ("BV_Behind", 0.0088),
+
+            ("BG_Behind", 0.0088),
+
+            ("GK_Behind", 0.0066),
+
+            ("BK_Behind", 0.0066),
+
+            ("K_Closeup_Head", 0.0044),
+
         ]),
+
         "close": CoopDistribution(cuts=[
-            ("V_Near",      0.16),
-            ("V_Closeup",   0.14),
-            ("D_Hand",      0.13),
-            ("All_Near",    0.11),
-            ("B_Near",      0.10),
-            ("G_Near",      0.09),
-            ("All_Far",     0.07),
-            ("BG_Near",     0.05),
-            ("BV_Near",     0.04),
-            ("Front_Near",  0.04),
-            ("K_Near",      0.03),
-            ("D_Near",      0.02),
-            ("All_Behind",  0.02),
+
+            ("V_Near", 0.0950),
+
+            ("D_Closeup_Hand", 0.0724),
+
+            ("V_Closeup", 0.0633),
+
+            ("B_Near", 0.0588),
+
+            ("BV_Near", 0.0452),
+
+            ("D_Near", 0.0452),
+
+            ("All_Near", 0.0452),
+
+            ("Front_Near", 0.0407),
+
+            ("All_Far", 0.0362),
+
+            ("G_Near", 0.0362),
+
+            ("Front_Behind", 0.0317),
+
+            ("BK_Near", 0.0271),
+
+            ("All_Behind", 0.0271),
+
+            ("K_Near", 0.0271),
+
+            ("GK_Near", 0.0271),
+
+            ("D_Closeup_Head", 0.0271),
+
+            ("BG_Near", 0.0271),
+
+            ("G_Closeup_Hand", 0.0271),
+
+            ("K_Closeup_Hand", 0.0226),
+
+            ("DG_Near", 0.0226),
+
+            ("G_Closeup_Head", 0.0226),
+
+            ("D_Behind", 0.0226),
+
+            ("DV_Near", 0.0226),
+
+            ("K_Behind", 0.0181),
+
+            ("BD_Near", 0.0181),
+
+            ("KV_Near", 0.0136),
+
+            ("GV_Behind", 0.0136),
+
+            ("V_Behind", 0.0136),
+
+            ("GV_Near", 0.0136),
+
+            ("K_Closeup_Head", 0.0090),
+
+            ("B_Behind", 0.0090),
+
+            ("BG_Behind", 0.0045),
+
+            ("GK_Behind", 0.0045),
+
+            ("BK_Behind", 0.0045),
+
+            ("BV_Behind", 0.0045),
+
         ]),
+
     },
-    "bridge": {
-        "entry": CoopDistribution(cuts=[
-            ("B_Near",      0.15),
-            ("B_Hand",      0.10),
-            ("K_Near",      0.10),
-            ("K_Hand",      0.08),
-            ("D_Near",      0.08),
-            ("BK_Near",     0.07),
-            ("KV_Near",     0.06),
-            ("B_Head",      0.05),
-            ("K_Head",      0.05),
-            ("G_Near",      0.05),
-            ("D_Behind",    0.04),
-            ("BV_Near",     0.04),
-            ("BG_Near",     0.03),
-            ("All_Near",    0.03),
-            ("All_Far",     0.02),
-            ("All_Behind",  0.02),
-            ("GK_Near",     0.02),
-            ("G_Hand",      0.01),
-        ]),
-        "mid": CoopDistribution(cuts=[
-            ("B_Near",      0.13),
-            ("K_Near",      0.11),
-            ("D_Near",      0.10),
-            ("B_Hand",      0.09),
-            ("BK_Near",     0.08),
-            ("K_Hand",      0.07),
-            ("G_Near",      0.07),
-            ("BV_Near",     0.06),
-            ("KV_Near",     0.05),
-            ("B_Head",      0.04),
-            ("K_Head",      0.04),
-            ("All_Near",    0.04),
-            ("D_Behind",    0.03),
-            ("BG_Near",     0.03),
-            ("All_Far",     0.02),
-            ("All_Behind",  0.02),
-            ("GK_Near",     0.02),
-        ]),
-        "close": CoopDistribution(cuts=[
-            ("All_Far",     0.16),
-            ("All_Behind",  0.12),
-            ("B_Near",      0.11),
-            ("K_Near",      0.10),
-            ("D_Near",      0.09),
-            ("G_Near",      0.08),
-            ("All_Near",    0.07),
-            ("BK_Near",     0.06),
-            ("BV_Near",     0.05),
-            ("K_Hand",      0.04),
-            ("V_Closeup",   0.04),
-            ("B_Hand",      0.03),
-            ("D_Hand",      0.02),
-            ("BG_Near",     0.02),
-        ]),
-    },
+
     "solo": {
+
         "entry": CoopDistribution(cuts=[
-            ("G_Near",      0.35),
-            ("D_Near",      0.12),
-            ("B_Near",      0.10),
-            ("All_Near",    0.08),
-            ("G_Hand",      0.08),
-            ("G_Head",      0.06),
-            ("All_Far",     0.05),
-            ("All_Behind",  0.04),
-            ("B_Hand",      0.03),
-            ("D_Hand",      0.03),
-            ("BG_Near",     0.02),
-            ("V_Closeup",   0.02),
-            ("K_Near",      0.02),
+
+            ("D_Near", 0.0805),
+
+            ("G_Closeup_Hand", 0.0728),
+
+            ("D_Closeup_Hand", 0.0690),
+
+            ("G_Near", 0.0651),
+
+            ("BG_Near", 0.0536),
+
+            ("BK_Near", 0.0498),
+
+            ("GK_Near", 0.0460),
+
+            ("All_Near", 0.0460),
+
+            ("All_Far", 0.0460),
+
+            ("Front_Near", 0.0421),
+
+            ("K_Closeup_Hand", 0.0383),
+
+            ("V_Closeup", 0.0383),
+
+            ("All_Behind", 0.0345),
+
+            ("B_Near", 0.0345),
+
+            ("D_Behind", 0.0268),
+
+            ("DG_Near", 0.0230),
+
+            ("Front_Behind", 0.0230),
+
+            ("B_Behind", 0.0192),
+
+            ("BD_Near", 0.0192),
+
+            ("D_Closeup_Head", 0.0192),
+
+            ("V_Near", 0.0153),
+
+            ("V_Behind", 0.0153),
+
+            ("G_Closeup_Head", 0.0153),
+
+            ("BV_Near", 0.0153),
+
+            ("KV_Near", 0.0115),
+
+            ("BV_Behind", 0.0115),
+
+            ("K_Closeup_Head", 0.0115),
+
+            ("BG_Behind", 0.0115),
+
+            ("G_Behind", 0.0115),
+
+            ("K_Behind", 0.0077),
+
+            ("GK_Behind", 0.0077),
+
+            ("BK_Behind", 0.0077),
+
+            ("K_Near", 0.0077),
+
+            ("GV_Near", 0.0038),
+
         ]),
+
         "mid": CoopDistribution(cuts=[
-            ("G_Near",      0.30),
-            ("G_Hand",      0.15),
-            ("D_Near",      0.10),
-            ("All_Near",    0.08),
-            ("G_Head",      0.07),
-            ("B_Near",      0.06),
-            ("All_Far",     0.05),
-            ("All_Behind",  0.04),
-            ("BG_Near",     0.04),
-            ("B_Hand",      0.03),
-            ("D_Hand",      0.03),
-            ("V_Closeup",   0.02),
-            ("K_Near",      0.02),
+
+            ("D_Closeup_Hand", 0.0746),
+
+            ("G_Closeup_Hand", 0.0730),
+
+            ("D_Near", 0.0697),
+
+            ("K_Near", 0.0597),
+
+            ("B_Near", 0.0514),
+
+            ("G_Near", 0.0464),
+
+            ("BG_Near", 0.0448),
+
+            ("Front_Near", 0.0448),
+
+            ("V_Closeup", 0.0431),
+
+            ("V_Near", 0.0348),
+
+            ("All_Far", 0.0332),
+
+            ("BK_Near", 0.0315),
+
+            ("GK_Near", 0.0299),
+
+            ("B_Behind", 0.0299),
+
+            ("D_Behind", 0.0299),
+
+            ("K_Closeup_Hand", 0.0282),
+
+            ("All_Behind", 0.0249),
+
+            ("All_Near", 0.0232),
+
+            ("BD_Near", 0.0232),
+
+            ("BV_Near", 0.0199),
+
+            ("D_Closeup_Head", 0.0199),
+
+            ("G_Behind", 0.0199),
+
+            ("Front_Behind", 0.0182),
+
+            ("DG_Near", 0.0166),
+
+            ("BG_Behind", 0.0149),
+
+            ("KV_Near", 0.0149),
+
+            ("G_Closeup_Head", 0.0133),
+
+            ("GV_Near", 0.0116),
+
+            ("V_Behind", 0.0100),
+
+            ("BV_Behind", 0.0100),
+
+            ("GK_Behind", 0.0083),
+
+            ("BK_Behind", 0.0083),
+
+            ("K_Behind", 0.0066),
+
+            ("K_Closeup_Head", 0.0050),
+
+            ("DV_Near", 0.0033),
+
+            ("GV_Behind", 0.0033),
+
         ]),
+
         "close": CoopDistribution(cuts=[
-            ("G_Hand",      0.22),
-            ("All_Far",     0.18),
-            ("All_Near",    0.12),
-            ("G_Near",      0.10),
-            ("D_Near",      0.08),
-            ("All_Behind",  0.06),
-            ("G_Head",      0.06),
-            ("B_Near",      0.04),
-            ("BG_Near",     0.04),
-            ("B_Hand",      0.03),
-            ("D_Hand",      0.03),
-            ("V_Closeup",   0.02),
+
+            ("V_Near", 0.0789),
+
+            ("D_Closeup_Hand", 0.0639),
+
+            ("D_Near", 0.0639),
+
+            ("B_Near", 0.0602),
+
+            ("G_Closeup_Hand", 0.0564),
+
+            ("Front_Near", 0.0526),
+
+            ("G_Near", 0.0414),
+
+            ("BD_Near", 0.0414),
+
+            ("G_Behind", 0.0414),
+
+            ("All_Near", 0.0376),
+
+            ("D_Behind", 0.0376),
+
+            ("BV_Near", 0.0338),
+
+            ("BK_Near", 0.0301),
+
+            ("BG_Near", 0.0301),
+
+            ("All_Far", 0.0263),
+
+            ("GK_Near", 0.0263),
+
+            ("D_Closeup_Head", 0.0263),
+
+            ("K_Near", 0.0263),
+
+            ("GV_Near", 0.0226),
+
+            ("Front_Behind", 0.0226),
+
+            ("GK_Behind", 0.0188),
+
+            ("BK_Behind", 0.0188),
+
+            ("BG_Behind", 0.0188),
+
+            ("B_Behind", 0.0188),
+
+            ("KV_Near", 0.0150),
+
+            ("DV_Near", 0.0150),
+
+            ("K_Closeup_Hand", 0.0150),
+
+            ("G_Closeup_Head", 0.0113),
+
+            ("All_Behind", 0.0113),
+
+            ("V_Closeup", 0.0113),
+
+            ("DG_Near", 0.0075),
+
+            ("BV_Behind", 0.0075),
+
+            ("K_Behind", 0.0075),
+
+            ("GV_Behind", 0.0038),
+
         ]),
+
     },
+
+    "bridge": {
+
+        "entry": CoopDistribution(cuts=[
+
+            ("V_Near", 0.1765),
+
+            ("D_Closeup_Hand", 0.0686),
+
+            ("G_Closeup_Hand", 0.0588),
+
+            ("BV_Near", 0.0490),
+
+            ("D_Near", 0.0490),
+
+            ("D_Behind", 0.0392),
+
+            ("DV_Near", 0.0392),
+
+            ("D_Closeup_Head", 0.0392),
+
+            ("KV_Near", 0.0392),
+
+            ("Front_Near", 0.0392),
+
+            ("Front_Behind", 0.0294),
+
+            ("K_Closeup_Hand", 0.0294),
+
+            ("All_Near", 0.0294),
+
+            ("GV_Near", 0.0294),
+
+            ("G_Near", 0.0294),
+
+            ("V_Closeup", 0.0294),
+
+            ("BD_Near", 0.0294),
+
+            ("G_Closeup_Head", 0.0294),
+
+            ("BG_Near", 0.0196),
+
+            ("K_Near", 0.0196),
+
+            ("All_Far", 0.0196),
+
+            ("K_Closeup_Head", 0.0196),
+
+            ("All_Behind", 0.0098),
+
+            ("DG_Near", 0.0098),
+
+            ("B_Near", 0.0098),
+
+            ("GK_Behind", 0.0098),
+
+            ("BK_Behind", 0.0098),
+
+            ("BG_Behind", 0.0098),
+
+            ("BK_Near", 0.0098),
+
+            ("GK_Near", 0.0098),
+
+            ("V_Behind", 0.0098),
+
+        ]),
+
+        "mid": CoopDistribution(cuts=[
+
+            ("All_Near", 0.0825),
+
+            ("G_Closeup_Hand", 0.0619),
+
+            ("V_Closeup", 0.0619),
+
+            ("D_Near", 0.0567),
+
+            ("K_Closeup_Hand", 0.0515),
+
+            ("Front_Near", 0.0464),
+
+            ("V_Near", 0.0464),
+
+            ("BG_Near", 0.0412),
+
+            ("D_Behind", 0.0361),
+
+            ("G_Near", 0.0361),
+
+            ("B_Near", 0.0361),
+
+            ("D_Closeup_Hand", 0.0361),
+
+            ("BK_Near", 0.0309),
+
+            ("GK_Near", 0.0309),
+
+            ("All_Far", 0.0258),
+
+            ("DV_Near", 0.0258),
+
+            ("K_Near", 0.0258),
+
+            ("V_Behind", 0.0206),
+
+            ("Front_Behind", 0.0206),
+
+            ("DG_Near", 0.0206),
+
+            ("BK_Behind", 0.0206),
+
+            ("BG_Behind", 0.0206),
+
+            ("GV_Near", 0.0206),
+
+            ("All_Behind", 0.0155),
+
+            ("BV_Near", 0.0155),
+
+            ("BD_Near", 0.0155),
+
+            ("GK_Behind", 0.0155),
+
+            ("KV_Near", 0.0155),
+
+            ("G_Closeup_Head", 0.0155),
+
+            ("G_Behind", 0.0103),
+
+            ("D_Closeup_Head", 0.0103),
+
+            ("B_Behind", 0.0103),
+
+            ("GV_Behind", 0.0052),
+
+            ("BV_Behind", 0.0052),
+
+            ("K_Behind", 0.0052),
+
+            ("K_Closeup_Head", 0.0052),
+
+        ]),
+
+        "close": CoopDistribution(cuts=[
+
+            ("V_Closeup", 0.2617),
+
+            ("V_Near", 0.0561),
+
+            ("BG_Near", 0.0467),
+
+            ("D_Closeup_Head", 0.0467),
+
+            ("K_Closeup_Hand", 0.0467),
+
+            ("G_Near", 0.0467),
+
+            ("BV_Near", 0.0374),
+
+            ("Front_Near", 0.0374),
+
+            ("KV_Near", 0.0280),
+
+            ("D_Closeup_Hand", 0.0280),
+
+            ("V_Behind", 0.0280),
+
+            ("D_Near", 0.0280),
+
+            ("GV_Near", 0.0280),
+
+            ("BK_Near", 0.0187),
+
+            ("GK_Behind", 0.0187),
+
+            ("Front_Behind", 0.0187),
+
+            ("All_Behind", 0.0187),
+
+            ("G_Closeup_Head", 0.0187),
+
+            ("B_Near", 0.0187),
+
+            ("K_Behind", 0.0187),
+
+            ("B_Behind", 0.0187),
+
+            ("G_Closeup_Hand", 0.0187),
+
+            ("All_Near", 0.0187),
+
+            ("K_Near", 0.0187),
+
+            ("All_Far", 0.0187),
+
+            ("GK_Near", 0.0093),
+
+            ("BK_Behind", 0.0093),
+
+            ("BG_Behind", 0.0093),
+
+            ("D_Behind", 0.0093),
+
+            ("DV_Near", 0.0093),
+
+            ("GV_Behind", 0.0093),
+
+        ]),
+
+    },
+
     "breakdown": {
+
         "entry": CoopDistribution(cuts=[
-            ("D_Hand",      0.16),
-            ("D_Near",      0.13),
-            ("B_Near",      0.12),
-            ("D_Head",      0.08),
-            ("BK_Near",     0.07),
-            ("DG_Near",     0.06),
-            ("All_Behind",  0.06),
-            ("G_Hand",      0.06),
-            ("B_Head",      0.05),
-            ("K_Near",      0.05),
-            ("All_Near",    0.04),
-            ("G_Near",      0.04),
-            ("B_Hand",      0.03),
-            ("All_Far",     0.02),
-            ("GK_Near",     0.02),
+
+            ("V_Closeup", 0.1200),
+
+            ("B_Near", 0.1000),
+
+            ("D_Closeup_Hand", 0.1000),
+
+            ("V_Near", 0.0600),
+
+            ("Front_Near", 0.0600),
+
+            ("G_Near", 0.0600),
+
+            ("All_Far", 0.0400),
+
+            ("D_Behind", 0.0400),
+
+            ("G_Closeup_Hand", 0.0400),
+
+            ("BG_Near", 0.0400),
+
+            ("BV_Near", 0.0400),
+
+            ("GV_Near", 0.0400),
+
+            ("All_Near", 0.0200),
+
+            ("K_Near", 0.0200),
+
+            ("K_Closeup_Hand", 0.0200),
+
+            ("D_Closeup_Head", 0.0200),
+
+            ("G_Behind", 0.0200),
+
+            ("BG_Behind", 0.0200),
+
+            ("B_Behind", 0.0200),
+
+            ("BK_Near", 0.0200),
+
+            ("GK_Near", 0.0200),
+
+            ("BD_Near", 0.0200),
+
+            ("D_Near", 0.0200),
+
+            ("All_Behind", 0.0200),
+
+            ("KV_Near", 0.0200),
+
         ]),
+
         "mid": CoopDistribution(cuts=[
-            ("D_Hand",      0.15),
-            ("D_Near",      0.12),
-            ("B_Near",      0.11),
-            ("D_Head",      0.08),
-            ("BK_Near",     0.07),
-            ("DG_Near",     0.06),
-            ("All_Behind",  0.06),
-            ("G_Hand",      0.06),
-            ("K_Near",      0.06),
-            ("B_Head",      0.04),
-            ("All_Near",    0.04),
-            ("G_Near",      0.04),
-            ("B_Hand",      0.03),
-            ("All_Far",     0.03),
-            ("GK_Near",     0.02),
-            ("BG_Near",     0.01),
+
+            ("V_Closeup", 0.1327),
+
+            ("V_Near", 0.1239),
+
+            ("D_Near", 0.0619),
+
+            ("D_Closeup_Hand", 0.0619),
+
+            ("All_Far", 0.0531),
+
+            ("All_Near", 0.0442),
+
+            ("GV_Near", 0.0354),
+
+            ("BV_Near", 0.0354),
+
+            ("B_Near", 0.0354),
+
+            ("Front_Near", 0.0354),
+
+            ("G_Near", 0.0354),
+
+            ("BG_Near", 0.0354),
+
+            ("Front_Behind", 0.0265),
+
+            ("K_Closeup_Hand", 0.0177),
+
+            ("K_Near", 0.0177),
+
+            ("D_Behind", 0.0177),
+
+            ("G_Closeup_Hand", 0.0177),
+
+            ("D_Closeup_Head", 0.0177),
+
+            ("All_Behind", 0.0177),
+
+            ("BK_Behind", 0.0177),
+
+            ("BG_Behind", 0.0177),
+
+            ("GK_Behind", 0.0177),
+
+            ("BD_Near", 0.0177),
+
+            ("B_Behind", 0.0177),
+
+            ("BV_Behind", 0.0088),
+
+            ("V_Behind", 0.0088),
+
+            ("G_Closeup_Head", 0.0088),
+
+            ("DV_Near", 0.0088),
+
+            ("KV_Near", 0.0088),
+
+            ("BK_Near", 0.0088),
+
+            ("GK_Near", 0.0088),
+
+            ("G_Behind", 0.0088),
+
+            ("DG_Near", 0.0088),
+
+            ("K_Behind", 0.0088),
+
         ]),
+
         "close": CoopDistribution(cuts=[
-            ("All_Near",    0.15),
-            ("D_Near",      0.13),
-            ("B_Near",      0.11),
-            ("D_Hand",      0.10),
-            ("K_Near",      0.08),
-            ("G_Near",      0.07),
-            ("All_Far",     0.06),
-            ("BK_Near",     0.05),
-            ("DG_Near",     0.05),
-            ("B_Hand",      0.04),
-            ("All_Behind",  0.04),
-            ("D_Head",      0.03),
-            ("B_Head",      0.03),
-            ("G_Hand",      0.02),
-            ("BG_Near",     0.02),
+
+            ("V_Near", 0.1795),
+
+            ("D_Closeup_Hand", 0.1026),
+
+            ("Front_Behind", 0.0769),
+
+            ("D_Behind", 0.0769),
+
+            ("G_Closeup_Hand", 0.0769),
+
+            ("D_Near", 0.0513),
+
+            ("BD_Near", 0.0513),
+
+            ("Front_Near", 0.0513),
+
+            ("All_Near", 0.0513),
+
+            ("B_Near", 0.0513),
+
+            ("All_Far", 0.0513),
+
+            ("All_Behind", 0.0256),
+
+            ("BV_Near", 0.0256),
+
+            ("DV_Near", 0.0256),
+
+            ("D_Closeup_Head", 0.0256),
+
+            ("G_Near", 0.0256),
+
+            ("K_Behind", 0.0256),
+
+            ("B_Behind", 0.0256),
+
         ]),
+
     },
-    "build": {
-        "entry": CoopDistribution(cuts=[
-            ("D_Near",      0.18),
-            ("D_Hand",      0.14),
-            ("B_Near",      0.12),
-            ("K_Near",      0.09),
-            ("BD_Near",     0.07),
-            ("All_Near",    0.07),
-            ("D_Head",      0.06),
-            ("B_Hand",      0.05),
-            ("G_Near",      0.05),
-            ("All_Behind",  0.04),
-            ("D_Behind",    0.03),
-            ("All_Far",     0.03),
-            ("BG_Near",     0.02),
-            ("BV_Near",     0.02),
-            ("G_Hand",      0.02),
-            ("GK_Near",     0.01),
-        ]),
-        "mid": CoopDistribution(cuts=[
-            ("D_Hand",      0.18),
-            ("D_Near",      0.15),
-            ("B_Near",      0.11),
-            ("K_Near",      0.09),
-            ("BD_Near",     0.07),
-            ("All_Near",    0.07),
-            ("D_Head",      0.06),
-            ("G_Near",      0.05),
-            ("B_Hand",      0.05),
-            ("All_Behind",  0.04),
-            ("D_Behind",    0.04),
-            ("All_Far",     0.03),
-            ("BG_Near",     0.02),
-            ("BV_Near",     0.02),
-            ("G_Hand",      0.02),
-        ]),
-        "close": CoopDistribution(cuts=[
-            ("D_Hand",      0.20),
-            ("D_Near",      0.16),
-            ("All_Near",    0.12),
-            ("B_Near",      0.10),
-            ("D_Head",      0.08),
-            ("BD_Near",     0.07),
-            ("K_Near",      0.06),
-            ("All_Behind",  0.05),
-            ("G_Near",      0.05),
-            ("All_Far",     0.04),
-            ("B_Hand",      0.03),
-            ("D_Behind",    0.02),
-            ("BG_Near",     0.02),
-        ]),
-    },
+
     "riff": {
+
         "entry": CoopDistribution(cuts=[
-            ("G_Hand",      0.20),
-            ("G_Near",      0.15),
-            ("B_Near",      0.12),
-            ("D_Hand",      0.10),
-            ("K_Near",      0.08),
-            ("GK_Near",     0.07),
-            ("BG_Near",     0.06),
-            ("G_Head",      0.05),
-            ("G_Behind",    0.04),
-            ("D_Near",      0.04),
-            ("B_Hand",      0.03),
-            ("D_Head",      0.02),
-            ("All_Near",    0.02),
-            ("All_Far",     0.01),
-            ("All_Behind",  0.01),
+
+            ("D_Near", 0.0852),
+
+            ("D_Closeup_Hand", 0.0852),
+
+            ("G_Closeup_Hand", 0.0704),
+
+            ("All_Near", 0.0593),
+
+            ("V_Closeup", 0.0556),
+
+            ("V_Near", 0.0407),
+
+            ("B_Near", 0.0407),
+
+            ("D_Closeup_Head", 0.0370),
+
+            ("BV_Near", 0.0296),
+
+            ("GV_Near", 0.0296),
+
+            ("BD_Near", 0.0296),
+
+            ("DG_Near", 0.0296),
+
+            ("Front_Behind", 0.0296),
+
+            ("BG_Near", 0.0296),
+
+            ("Front_Near", 0.0259),
+
+            ("BK_Behind", 0.0259),
+
+            ("BG_Behind", 0.0259),
+
+            ("All_Far", 0.0259),
+
+            ("GK_Behind", 0.0222),
+
+            ("BK_Near", 0.0222),
+
+            ("GK_Near", 0.0222),
+
+            ("G_Near", 0.0222),
+
+            ("All_Behind", 0.0222),
+
+            ("B_Behind", 0.0222),
+
+            ("K_Behind", 0.0222),
+
+            ("D_Behind", 0.0148),
+
+            ("KV_Near", 0.0148),
+
+            ("DV_Near", 0.0148),
+
+            ("K_Near", 0.0148),
+
+            ("K_Closeup_Hand", 0.0111),
+
+            ("G_Behind", 0.0074),
+
+            ("K_Closeup_Head", 0.0037),
+
+            ("BV_Behind", 0.0037),
+
+            ("GV_Behind", 0.0037),
+
         ]),
+
         "mid": CoopDistribution(cuts=[
-            ("G_Hand",      0.18),
-            ("G_Near",      0.14),
-            ("B_Near",      0.11),
-            ("D_Hand",      0.10),
-            ("K_Near",      0.08),
-            ("GK_Near",     0.07),
-            ("BG_Near",     0.06),
-            ("G_Head",      0.05),
-            ("G_Behind",    0.04),
-            ("D_Near",      0.04),
-            ("B_Hand",      0.03),
-            ("All_Near",    0.03),
-            ("D_Head",      0.02),
-            ("All_Far",     0.02),
-            ("All_Behind",  0.02),
-            ("BV_Near",     0.01),
+
+            ("D_Near", 0.0902),
+
+            ("V_Closeup", 0.0843),
+
+            ("D_Closeup_Hand", 0.0784),
+
+            ("V_Near", 0.0647),
+
+            ("B_Near", 0.0529),
+
+            ("G_Closeup_Hand", 0.0510),
+
+            ("Front_Near", 0.0431),
+
+            ("G_Near", 0.0353),
+
+            ("BG_Near", 0.0333),
+
+            ("All_Near", 0.0333),
+
+            ("G_Behind", 0.0275),
+
+            ("D_Closeup_Head", 0.0275),
+
+            ("BK_Near", 0.0255),
+
+            ("Front_Behind", 0.0255),
+
+            ("D_Behind", 0.0255),
+
+            ("BG_Behind", 0.0235),
+
+            ("BV_Near", 0.0235),
+
+            ("K_Near", 0.0216),
+
+            ("BD_Near", 0.0216),
+
+            ("GK_Near", 0.0196),
+
+            ("B_Behind", 0.0196),
+
+            ("All_Behind", 0.0196),
+
+            ("DV_Near", 0.0176),
+
+            ("BK_Behind", 0.0176),
+
+            ("GK_Behind", 0.0176),
+
+            ("DG_Near", 0.0176),
+
+            ("K_Closeup_Hand", 0.0157),
+
+            ("V_Behind", 0.0137),
+
+            ("BV_Behind", 0.0118),
+
+            ("GV_Near", 0.0098),
+
+            ("KV_Near", 0.0078),
+
+            ("All_Far", 0.0078),
+
+            ("G_Closeup_Head", 0.0059),
+
+            ("K_Behind", 0.0039),
+
+            ("K_Closeup_Head", 0.0039),
+
+            ("GV_Behind", 0.0020),
+
         ]),
+
         "close": CoopDistribution(cuts=[
-            ("G_Hand",      0.15),
-            ("All_Far",     0.14),
-            ("G_Near",      0.12),
-            ("B_Near",      0.10),
-            ("All_Near",    0.09),
-            ("D_Hand",      0.08),
-            ("K_Near",      0.07),
-            ("GK_Near",     0.05),
-            ("BG_Near",     0.05),
-            ("G_Head",      0.04),
-            ("All_Behind",  0.03),
-            ("D_Near",      0.03),
-            ("B_Hand",      0.02),
-            ("BV_Near",     0.02),
+
+            ("V_Closeup", 0.1278),
+
+            ("V_Near", 0.1145),
+
+            ("D_Closeup_Hand", 0.0705),
+
+            ("All_Near", 0.0661),
+
+            ("B_Near", 0.0529),
+
+            ("D_Behind", 0.0485),
+
+            ("G_Closeup_Hand", 0.0485),
+
+            ("D_Near", 0.0352),
+
+            ("BG_Near", 0.0352),
+
+            ("V_Behind", 0.0308),
+
+            ("K_Near", 0.0308),
+
+            ("G_Near", 0.0308),
+
+            ("Front_Near", 0.0308),
+
+            ("All_Behind", 0.0264),
+
+            ("GK_Near", 0.0264),
+
+            ("BK_Near", 0.0264),
+
+            ("D_Closeup_Head", 0.0220),
+
+            ("All_Far", 0.0220),
+
+            ("Front_Behind", 0.0176),
+
+            ("KV_Near", 0.0132),
+
+            ("BV_Near", 0.0132),
+
+            ("BD_Near", 0.0132),
+
+            ("G_Closeup_Head", 0.0132),
+
+            ("K_Closeup_Hand", 0.0132),
+
+            ("GV_Behind", 0.0088),
+
+            ("BV_Behind", 0.0088),
+
+            ("GV_Near", 0.0088),
+
+            ("DV_Near", 0.0088),
+
+            ("BG_Behind", 0.0088),
+
+            ("B_Behind", 0.0088),
+
+            ("DG_Near", 0.0044),
+
+            ("G_Behind", 0.0044),
+
+            ("BK_Behind", 0.0044),
+
+            ("GK_Behind", 0.0044),
+
         ]),
+
     },
+
+    "build": {
+
+        "entry": CoopDistribution(cuts=[
+
+            ("B_Near", 0.0833),
+
+            ("BG_Near", 0.0714),
+
+            ("V_Near", 0.0714),
+
+            ("Front_Near", 0.0595),
+
+            ("All_Near", 0.0595),
+
+            ("D_Near", 0.0595),
+
+            ("K_Closeup_Hand", 0.0595),
+
+            ("All_Behind", 0.0476),
+
+            ("D_Closeup_Head", 0.0476),
+
+            ("GK_Near", 0.0357),
+
+            ("BK_Near", 0.0357),
+
+            ("D_Closeup_Hand", 0.0357),
+
+            ("V_Closeup", 0.0357),
+
+            ("G_Near", 0.0357),
+
+            ("K_Near", 0.0357),
+
+            ("G_Closeup_Hand", 0.0238),
+
+            ("BV_Behind", 0.0238),
+
+            ("V_Behind", 0.0238),
+
+            ("BD_Near", 0.0238),
+
+            ("G_Behind", 0.0238),
+
+            ("DG_Near", 0.0119),
+
+            ("BV_Near", 0.0119),
+
+            ("BK_Behind", 0.0119),
+
+            ("GK_Behind", 0.0119),
+
+            ("BG_Behind", 0.0119),
+
+            ("All_Far", 0.0119),
+
+            ("G_Closeup_Head", 0.0119),
+
+            ("K_Behind", 0.0119),
+
+            ("B_Behind", 0.0119),
+
+        ]),
+
+        "mid": CoopDistribution(cuts=[
+
+            ("B_Near", 0.0822),
+
+            ("D_Near", 0.0685),
+
+            ("G_Near", 0.0616),
+
+            ("BG_Near", 0.0548),
+
+            ("BK_Near", 0.0548),
+
+            ("V_Near", 0.0548),
+
+            ("GK_Near", 0.0479),
+
+            ("D_Behind", 0.0411),
+
+            ("All_Near", 0.0411),
+
+            ("D_Closeup_Hand", 0.0411),
+
+            ("Front_Near", 0.0411),
+
+            ("BK_Behind", 0.0342),
+
+            ("BG_Behind", 0.0342),
+
+            ("GK_Behind", 0.0342),
+
+            ("K_Near", 0.0342),
+
+            ("K_Closeup_Hand", 0.0342),
+
+            ("V_Closeup", 0.0342),
+
+            ("BD_Near", 0.0274),
+
+            ("G_Closeup_Hand", 0.0274),
+
+            ("KV_Near", 0.0205),
+
+            ("All_Behind", 0.0205),
+
+            ("V_Behind", 0.0137),
+
+            ("D_Closeup_Head", 0.0137),
+
+            ("DV_Near", 0.0137),
+
+            ("All_Far", 0.0137),
+
+            ("BV_Near", 0.0137),
+
+            ("Front_Behind", 0.0137),
+
+            ("DG_Near", 0.0068),
+
+            ("K_Behind", 0.0068),
+
+            ("B_Behind", 0.0068),
+
+            ("K_Closeup_Head", 0.0068),
+
+        ]),
+
+        "close": CoopDistribution(cuts=[
+
+            ("D_Closeup_Head", 0.0794),
+
+            ("V_Near", 0.0635),
+
+            ("D_Behind", 0.0635),
+
+            ("D_Near", 0.0635),
+
+            ("KV_Near", 0.0476),
+
+            ("V_Closeup", 0.0476),
+
+            ("D_Closeup_Hand", 0.0476),
+
+            ("G_Behind", 0.0476),
+
+            ("B_Behind", 0.0476),
+
+            ("DV_Near", 0.0317),
+
+            ("G_Closeup_Hand", 0.0317),
+
+            ("BD_Near", 0.0317),
+
+            ("DG_Near", 0.0317),
+
+            ("K_Closeup_Hand", 0.0317),
+
+            ("Front_Near", 0.0317),
+
+            ("All_Near", 0.0317),
+
+            ("BK_Near", 0.0317),
+
+            ("BG_Behind", 0.0317),
+
+            ("GV_Near", 0.0159),
+
+            ("V_Behind", 0.0159),
+
+            ("GV_Behind", 0.0159),
+
+            ("BV_Behind", 0.0159),
+
+            ("All_Far", 0.0159),
+
+            ("B_Near", 0.0159),
+
+            ("K_Near", 0.0159),
+
+            ("Front_Behind", 0.0159),
+
+            ("G_Near", 0.0159),
+
+            ("GK_Near", 0.0159),
+
+            ("BG_Near", 0.0159),
+
+            ("GK_Behind", 0.0159),
+
+            ("BV_Near", 0.0159),
+
+        ]),
+
+    },
+
     "outro": {
+
         "entry": CoopDistribution(cuts=[
-            ("All_Far",     0.22),
-            ("All_Behind",  0.15),
-            ("B_Near",      0.10),
-            ("D_Near",      0.09),
-            ("K_Near",      0.08),
-            ("V_Closeup",   0.08),
-            ("All_Near",    0.07),
-            ("Front_Behind", 0.05),
-            ("G_Behind",    0.04),
-            ("B_Head",      0.03),
-            ("D_Behind",    0.03),
-            ("V_Near",      0.02),
-            ("G_Near",      0.02),
+
+            ("All_Far", 0.1642),
+
+            ("V_Closeup", 0.1194),
+
+            ("V_Near", 0.1045),
+
+            ("D_Closeup_Hand", 0.0746),
+
+            ("Front_Near", 0.0597),
+
+            ("All_Near", 0.0597),
+
+            ("All_Behind", 0.0597),
+
+            ("D_Closeup_Head", 0.0597),
+
+            ("BV_Near", 0.0299),
+
+            ("Front_Behind", 0.0299),
+
+            ("DG_Near", 0.0299),
+
+            ("BG_Near", 0.0299),
+
+            ("G_Near", 0.0299),
+
+            ("BG_Behind", 0.0149),
+
+            ("BK_Behind", 0.0149),
+
+            ("GK_Behind", 0.0149),
+
+            ("D_Near", 0.0149),
+
+            ("D_Behind", 0.0149),
+
+            ("G_Closeup_Hand", 0.0149),
+
+            ("DV_Near", 0.0149),
+
+            ("KV_Near", 0.0149),
+
+            ("GK_Near", 0.0149),
+
+            ("BK_Near", 0.0149),
+
         ]),
+
         "mid": CoopDistribution(cuts=[
-            ("All_Far",     0.20),
-            ("All_Behind",  0.14),
-            ("All_Near",    0.12),
-            ("B_Near",      0.09),
-            ("D_Near",      0.08),
-            ("K_Near",      0.07),
-            ("V_Closeup",   0.07),
-            ("Front_Behind", 0.05),
-            ("G_Behind",    0.04),
-            ("B_Head",      0.04),
-            ("D_Behind",    0.03),
-            ("V_Near",      0.02),
-            ("G_Near",      0.02),
+
+            ("D_Closeup_Hand", 0.0882),
+
+            ("V_Near", 0.0735),
+
+            ("V_Closeup", 0.0735),
+
+            ("All_Far", 0.0735),
+
+            ("G_Closeup_Hand", 0.0735),
+
+            ("BK_Near", 0.0588),
+
+            ("BG_Near", 0.0588),
+
+            ("GK_Near", 0.0588),
+
+            ("Front_Near", 0.0294),
+
+            ("G_Behind", 0.0294),
+
+            ("K_Closeup_Head", 0.0294),
+
+            ("D_Closeup_Head", 0.0294),
+
+            ("BG_Behind", 0.0294),
+
+            ("GK_Behind", 0.0294),
+
+            ("BK_Behind", 0.0294),
+
+            ("B_Near", 0.0294),
+
+            ("D_Near", 0.0294),
+
+            ("GV_Near", 0.0294),
+
+            ("K_Closeup_Hand", 0.0294),
+
+            ("K_Near", 0.0147),
+
+            ("BD_Near", 0.0147),
+
+            ("V_Behind", 0.0147),
+
+            ("Front_Behind", 0.0147),
+
+            ("All_Near", 0.0147),
+
+            ("G_Near", 0.0147),
+
+            ("D_Behind", 0.0147),
+
+            ("All_Behind", 0.0147),
+
         ]),
+
         "close": CoopDistribution(cuts=[
-            ("All_Far",     0.25),
-            ("All_Behind",  0.20),
-            ("All_Near",    0.15),
-            ("Front_Behind", 0.10),
-            ("B_Near",      0.08),
-            ("D_Near",      0.06),
-            ("K_Near",      0.05),
-            ("V_Closeup",   0.04),
-            ("G_Behind",    0.03),
-            ("B_Head",      0.02),
-            ("D_Behind",    0.02),
+
+            ("All_Far", 0.1538),
+
+            ("V_Near", 0.0769),
+
+            ("Front_Behind", 0.0769),
+
+            ("D_Behind", 0.0769),
+
+            ("G_Closeup_Head", 0.0769),
+
+            ("D_Near", 0.0769),
+
+            ("Front_Near", 0.0385),
+
+            ("BK_Near", 0.0385),
+
+            ("BG_Near", 0.0385),
+
+            ("GK_Near", 0.0385),
+
+            ("K_Closeup_Head", 0.0385),
+
+            ("GV_Near", 0.0385),
+
+            ("BV_Behind", 0.0385),
+
+            ("BD_Near", 0.0385),
+
+            ("D_Closeup_Head", 0.0385),
+
+            ("V_Closeup", 0.0385),
+
+            ("G_Near", 0.0385),
+
+            ("B_Near", 0.0385),
+
         ]),
+
     },
+
     "postchorus": {
+
         "entry": CoopDistribution(cuts=[
-            ("B_Near",      0.15),
-            ("All_Behind",  0.12),
-            ("V_Near",      0.11),
-            ("D_Near",      0.10),
-            ("All_Near",    0.09),
-            ("K_Near",      0.08),
-            ("V_Closeup",   0.07),
-            ("G_Near",      0.06),
-            ("B_Hand",      0.05),
-            ("Front_Behind", 0.05),
-            ("D_Hand",      0.04),
-            ("All_Far",     0.03),
-            ("BG_Near",     0.02),
-            ("BV_Near",     0.02),
-            ("G_Hand",      0.01),
+
+            ("V_Closeup", 0.1455),
+
+            ("BG_Near", 0.0909),
+
+            ("GK_Near", 0.0727),
+
+            ("G_Closeup_Hand", 0.0545),
+
+            ("BK_Near", 0.0545),
+
+            ("Front_Near", 0.0545),
+
+            ("K_Closeup_Head", 0.0364),
+
+            ("K_Near", 0.0364),
+
+            ("B_Near", 0.0364),
+
+            ("All_Far", 0.0364),
+
+            ("D_Behind", 0.0364),
+
+            ("D_Near", 0.0364),
+
+            ("BV_Near", 0.0364),
+
+            ("All_Behind", 0.0364),
+
+            ("D_Closeup_Head", 0.0182),
+
+            ("BK_Behind", 0.0182),
+
+            ("BG_Behind", 0.0182),
+
+            ("GK_Behind", 0.0182),
+
+            ("B_Behind", 0.0182),
+
+            ("GV_Near", 0.0182),
+
+            ("K_Closeup_Hand", 0.0182),
+
+            ("DG_Near", 0.0182),
+
+            ("BD_Near", 0.0182),
+
+            ("GV_Behind", 0.0182),
+
+            ("G_Closeup_Head", 0.0182),
+
+            ("D_Closeup_Hand", 0.0182),
+
+            ("V_Near", 0.0182),
+
         ]),
+
         "mid": CoopDistribution(cuts=[
-            ("B_Near",      0.14),
-            ("All_Behind",  0.12),
-            ("V_Closeup",   0.11),
-            ("D_Hand",      0.10),
-            ("All_Near",    0.09),
-            ("G_Near",      0.08),
-            ("K_Near",      0.07),
-            ("V_Near",      0.06),
-            ("B_Hand",      0.05),
-            ("Front_Behind", 0.04),
-            ("D_Near",      0.04),
-            ("All_Far",     0.03),
-            ("BG_Near",     0.03),
-            ("BV_Near",     0.02),
-            ("G_Hand",      0.02),
+
+            ("D_Near", 0.0945),
+
+            ("D_Closeup_Hand", 0.0709),
+
+            ("V_Near", 0.0709),
+
+            ("All_Far", 0.0630),
+
+            ("D_Behind", 0.0551),
+
+            ("Front_Near", 0.0472),
+
+            ("V_Closeup", 0.0472),
+
+            ("D_Closeup_Head", 0.0472),
+
+            ("BK_Near", 0.0315),
+
+            ("BG_Near", 0.0315),
+
+            ("All_Near", 0.0315),
+
+            ("G_Near", 0.0315),
+
+            ("B_Near", 0.0315),
+
+            ("GV_Near", 0.0315),
+
+            ("B_Behind", 0.0236),
+
+            ("All_Behind", 0.0236),
+
+            ("K_Closeup_Hand", 0.0236),
+
+            ("G_Closeup_Hand", 0.0236),
+
+            ("GK_Behind", 0.0236),
+
+            ("K_Behind", 0.0236),
+
+            ("BD_Near", 0.0236),
+
+            ("DV_Near", 0.0157),
+
+            ("G_Behind", 0.0157),
+
+            ("GK_Near", 0.0157),
+
+            ("Front_Behind", 0.0157),
+
+            ("BG_Behind", 0.0157),
+
+            ("BK_Behind", 0.0157),
+
+            ("K_Near", 0.0157),
+
+            ("BV_Near", 0.0157),
+
+            ("DG_Near", 0.0079),
+
+            ("G_Closeup_Head", 0.0079),
+
+            ("K_Closeup_Head", 0.0079),
+
         ]),
+
         "close": CoopDistribution(cuts=[
-            ("All_Far",     0.18),
-            ("All_Behind",  0.15),
-            ("Front_Behind", 0.10),
-            ("All_Near",    0.10),
-            ("B_Near",      0.09),
-            ("V_Closeup",   0.08),
-            ("D_Near",      0.07),
-            ("G_Near",      0.06),
-            ("K_Near",      0.05),
-            ("V_Near",      0.04),
-            ("B_Hand",      0.03),
-            ("D_Hand",      0.02),
-            ("BG_Near",     0.02),
-            ("G_Hand",      0.01),
+
+            ("All_Behind", 0.1429),
+
+            ("D_Closeup_Hand", 0.1224),
+
+            ("All_Far", 0.0612),
+
+            ("V_Behind", 0.0612),
+
+            ("G_Closeup_Hand", 0.0612),
+
+            ("V_Near", 0.0612),
+
+            ("BD_Near", 0.0612),
+
+            ("BK_Near", 0.0408),
+
+            ("GK_Near", 0.0408),
+
+            ("BG_Near", 0.0408),
+
+            ("DG_Near", 0.0408),
+
+            ("K_Closeup_Hand", 0.0408),
+
+            ("V_Closeup", 0.0204),
+
+            ("B_Behind", 0.0204),
+
+            ("G_Behind", 0.0204),
+
+            ("G_Near", 0.0204),
+
+            ("B_Near", 0.0204),
+
+            ("D_Near", 0.0204),
+
+            ("D_Closeup_Head", 0.0204),
+
+            ("Front_Near", 0.0204),
+
+            ("K_Near", 0.0204),
+
+            ("BV_Near", 0.0204),
+
+            ("GV_Near", 0.0204),
+
         ]),
+
     },
-    "drop": {
-        "entry": CoopDistribution(cuts=[
-            ("All_Near",    0.18),
-            ("D_Hand",      0.14),
-            ("B_Near",      0.11),
-            ("K_Near",      0.09),
-            ("V_Near",      0.08),
-            ("All_Behind",  0.07),
-            ("D_Near",      0.07),
-            ("All_Far",     0.06),
-            ("G_Near",      0.05),
-            ("B_Hand",      0.04),
-            ("D_Head",      0.03),
-            ("BG_Near",     0.03),
-            ("BV_Near",     0.02),
-            ("G_Hand",      0.01),
-        ]),
-        "mid": CoopDistribution(cuts=[
-            ("All_Near",    0.16),
-            ("D_Hand",      0.14),
-            ("B_Near",      0.11),
-            ("All_Behind",  0.10),
-            ("K_Near",      0.08),
-            ("V_Near",      0.07),
-            ("D_Near",      0.07),
-            ("All_Far",     0.06),
-            ("G_Near",      0.05),
-            ("B_Hand",      0.04),
-            ("D_Head",      0.03),
-            ("BG_Near",     0.03),
-            ("Front_Near",  0.02),
-            ("G_Hand",      0.02),
-        ]),
-        "close": CoopDistribution(cuts=[
-            ("All_Far",     0.18),
-            ("All_Behind",  0.14),
-            ("All_Near",    0.12),
-            ("D_Near",      0.10),
-            ("B_Near",      0.09),
-            ("K_Near",      0.08),
-            ("G_Near",      0.06),
-            ("V_Closeup",   0.06),
-            ("D_Hand",      0.05),
-            ("B_Hand",      0.04),
-            ("BG_Near",     0.02),
-            ("G_Hand",      0.01),
-        ]),
-    },
-    "default": {
-        "entry": CoopDistribution(cuts=[
-            ("V_Near",      0.18),
-            ("B_Near",      0.14),
-            ("All_Near",    0.10),
-            ("D_Hand",      0.09),
-            ("G_Near",      0.08),
-            ("K_Near",      0.07),
-            ("V_Closeup",   0.06),
-            ("B_Hand",      0.05),
-            ("D_Near",      0.05),
-            ("BG_Near",     0.04),
-            ("Front_Near",  0.04),
-            ("All_Far",     0.03),
-            ("All_Behind",  0.03),
-            ("BV_Near",     0.02),
-            ("G_Hand",      0.02),
-        ]),
-        "mid": CoopDistribution(cuts=[
-            ("B_Near",      0.16),
-            ("V_Near",      0.14),
-            ("All_Near",    0.10),
-            ("D_Hand",      0.09),
-            ("G_Near",      0.08),
-            ("K_Near",      0.07),
-            ("V_Closeup",   0.06),
-            ("B_Hand",      0.05),
-            ("D_Near",      0.05),
-            ("BG_Near",     0.04),
-            ("All_Far",     0.04),
-            ("All_Behind",  0.03),
-            ("BV_Near",     0.03),
-            ("Front_Near",  0.03),
-            ("G_Hand",      0.02),
-            ("K_Hand",      0.01),
-        ]),
-        "close": CoopDistribution(cuts=[
-            ("All_Far",     0.15),
-            ("All_Behind",  0.12),
-            ("V_Closeup",   0.12),
-            ("All_Near",    0.10),
-            ("B_Near",      0.09),
-            ("G_Near",      0.08),
-            ("D_Near",      0.07),
-            ("K_Near",      0.06),
-            ("V_Near",      0.05),
-            ("B_Hand",      0.04),
-            ("D_Hand",      0.03),
-            ("BG_Near",     0.03),
-            ("Front_Near",  0.02),
-            ("BV_Near",     0.01),
-            ("G_Hand",      0.01),
-        ]),
-    },
+
+    # drop: no data
+
 }
 
 # Cut pool per section type (mix of standard + directed). The generator cycles

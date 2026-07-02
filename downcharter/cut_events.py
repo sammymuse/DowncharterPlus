@@ -494,349 +494,947 @@ def detect_stagedive(sections: list[Section], inst_onsets: dict[str, list[int]] 
 # ══════════════════════════════════════════════════════════════════════════
 
 _CUT_PDT: dict[str, dict[str, CutDistribution]] = {
+
     "chorus": {
+
         "entry": CutDistribution(cuts=[
-            ("D_Duo_GB",   0.335),
-            ("D_Vocals",   0.241),
-            ("D_All",      0.140),
-            ("D_All_Cam",  0.073),
-            ("D_Drums_LT", 0.079),
-            ("D_Gtr",      0.050),
-            ("D_Vox_CLS",  0.030),
-            ("D_Gtr_CLS",  0.030),
-            ("D_All_Yeah", 0.022),
+
+            ("D_Vox_Cam_PT", 0.1461),
+
+            ("D_Duo_Gtr", 0.0812),
+
+            ("D_All_Cam", 0.0714),
+
+            ("D_Drums_LT", 0.0649),
+
+            ("D_Gtr_CLS", 0.0617),
+
+            ("D_Vox_CLS", 0.0519),
+
+            ("D_Duo_GB", 0.0487),
+
+            ("D_All_Yeah", 0.0487),
+
+            ("D_Duo_Bass", 0.0455),
+
+            ("D_Vocals", 0.0357),
+
+            ("D_Duo_KB", 0.0325),
+
+            ("D_All", 0.0292),
+
+            ("D_Duo_Drums", 0.0292),
+
+            ("D_Gtr_Cam_PT", 0.0260),
+
+            ("D_Duo_KV", 0.0260),
+
+            ("D_Drums_KD", 0.0227),
+
+            ("D_Vox_Cam_PR", 0.0227),
+
+            ("D_All_LT", 0.0195),
+
+            ("D_Bass_CLS", 0.0195),
+
+            ("D_Crowd", 0.0195),
+
+            ("D_Keys", 0.0162),
+
+            ("D_Keys_Cam", 0.0162),
+
+            ("D_Bass", 0.0162),
+
+            ("D_Gtr", 0.0130),
+
+            ("D_Drums_Point", 0.0097),
+
+            ("D_Bass_Cam", 0.0065),
+
+            ("D_Crowd_Bass", 0.0065),
+
+            ("D_Bass_NP", 0.0065),
+
+            ("D_Gtr_Cam_PR", 0.0032),
+
+            ("D_Keys_NP", 0.0032),
+
         ]),
+
         "close": CutDistribution(cuts=[
-            ("D_Vox_CLS",  0.200),
-            ("D_Drums_LT", 0.120),
-            ("D_Vocals",   0.110),
-            ("D_All",      0.090),
-            ("D_Gtr_CLS",  0.080),
-            ("D_Bass_CLS", 0.070),
-            ("D_Duo_GB",   0.060),
-            ("D_All_Cam",  0.050),
-            ("D_Vox_Cam_PT", 0.040),
+
+            ("D_Vox_Cam_PT", 0.1169),
+
+            ("D_Drums_LT", 0.0844),
+
+            ("D_All_Cam", 0.0714),
+
+            ("D_Duo_Bass", 0.0617),
+
+            ("D_Duo_GB", 0.0584),
+
+            ("D_All_Yeah", 0.0487),
+
+            ("D_Vox_CLS", 0.0487),
+
+            ("D_Bass_CLS", 0.0455),
+
+            ("D_Vocals", 0.0422),
+
+            ("D_Duo_KB", 0.0422),
+
+            ("D_All", 0.0390),
+
+            ("D_Gtr_CLS", 0.0357),
+
+            ("D_Drums_KD", 0.0292),
+
+            ("D_Duo_Gtr", 0.0292),
+
+            ("D_Vox_Cam_PR", 0.0292),
+
+            ("D_Gtr_Cam_PT", 0.0292),
+
+            ("D_All_LT", 0.0260),
+
+            ("D_Bass_Cam", 0.0260),
+
+            ("D_Drums_Point", 0.0260),
+
+            ("D_Crowd", 0.0227),
+
+            ("D_Duo_KV", 0.0195),
+
+            ("D_Duo_Drums", 0.0162),
+
+            ("D_Bass", 0.0162),
+
+            ("D_Crowd_Bass", 0.0130),
+
+            ("D_Gtr_NP", 0.0065),
+
+            ("D_Gtr_Cam_PR", 0.0032),
+
+            ("D_Keys_Cam", 0.0032),
+
+            ("D_Crowd_Gtr", 0.0032),
+
+            ("D_Keys", 0.0032),
+
+            ("D_Bass_NP", 0.0032),
+
         ]),
+
     },
+
     "verse": {
+
         "entry": CutDistribution(cuts=[
-            ("D_Vocals",   0.374),
-            ("D_Duo_GB",   0.145),
-            ("D_Drums_LT", 0.133),
-            ("D_Gtr",      0.113),
-            ("D_Bass",     0.081),
-            ("D_Vox_CLS",  0.050),
-            ("D_Vox_Cam_PT", 0.040),
-            ("D_All",      0.030),
-            ("D_Duo_Bass", 0.020),
-            ("D_Gtr_CLS",  0.014),
+
+            ("D_Vox_Cam_PT", 0.1752),
+
+            ("D_All", 0.0730),
+
+            ("D_Vocals", 0.0657),
+
+            ("D_Gtr_CLS", 0.0620),
+
+            ("D_Vox_Cam_PR", 0.0584),
+
+            ("D_All_Cam", 0.0547),
+
+            ("D_Vox_CLS", 0.0511),
+
+            ("D_Drums_LT", 0.0511),
+
+            ("D_Duo_Gtr", 0.0474),
+
+            ("D_Duo_KV", 0.0401),
+
+            ("D_Duo_Bass", 0.0328),
+
+            ("D_Crowd", 0.0292),
+
+            ("D_Gtr_Cam_PT", 0.0292),
+
+            ("D_All_LT", 0.0255),
+
+            ("D_Bass_CLS", 0.0219),
+
+            ("D_Drums_Point", 0.0219),
+
+            ("D_Drums_KD", 0.0182),
+
+            ("D_Gtr", 0.0182),
+
+            ("D_Duo_Drums", 0.0182),
+
+            ("D_Bass_Cam", 0.0182),
+
+            ("D_Duo_GB", 0.0182),
+
+            ("D_Duo_KB", 0.0146),
+
+            ("D_Keys", 0.0146),
+
+            ("D_Bass", 0.0109),
+
+            ("D_All_Yeah", 0.0073),
+
+            ("D_Bass_NP", 0.0073),
+
+            ("D_Keys_Cam", 0.0073),
+
+            ("D_Gtr_NP", 0.0036),
+
+            ("D_Gtr_Cam_PR", 0.0036),
+
         ]),
+
         "close": CutDistribution(cuts=[
-            ("D_Vocals",   0.280),
-            ("D_Drums_LT", 0.200),
-            ("D_Gtr",      0.150),
-            ("D_Bass",     0.120),
-            ("D_Vox_CLS",  0.080),
-            ("D_Duo_GB",   0.070),
-            ("D_Vox_Cam_PT", 0.050),
-            ("D_All",      0.030),
-            ("D_Gtr_CLS",  0.020),
+
+            ("D_Vox_Cam_PT", 0.1861),
+
+            ("D_Drums_LT", 0.0766),
+
+            ("D_All_Cam", 0.0730),
+
+            ("D_Vocals", 0.0693),
+
+            ("D_Duo_Bass", 0.0693),
+
+            ("D_All", 0.0584),
+
+            ("D_Vox_Cam_PR", 0.0547),
+
+            ("D_Duo_Gtr", 0.0438),
+
+            ("D_Bass_CLS", 0.0401),
+
+            ("D_Vox_CLS", 0.0365),
+
+            ("D_All_LT", 0.0328),
+
+            ("D_Duo_KB", 0.0292),
+
+            ("D_Bass", 0.0255),
+
+            ("D_Duo_KV", 0.0255),
+
+            ("D_Crowd", 0.0219),
+
+            ("D_Drums_KD", 0.0182),
+
+            ("D_Duo_GB", 0.0182),
+
+            ("D_Duo_Drums", 0.0182),
+
+            ("D_Gtr_Cam_PT", 0.0182),
+
+            ("D_Gtr_CLS", 0.0182),
+
+            ("D_Bass_NP", 0.0146),
+
+            ("D_Drums_Point", 0.0109),
+
+            ("D_All_Yeah", 0.0109),
+
+            ("D_Crowd_Bass", 0.0073),
+
+            ("D_Keys_Cam", 0.0073),
+
+            ("D_Crowd_Gtr", 0.0036),
+
+            ("D_Bass_Cam", 0.0036),
+
+            ("D_Gtr_Cam_PR", 0.0036),
+
+            ("D_Keys", 0.0036),
+
         ]),
+
     },
+
     "intro": {
+
         "entry": CutDistribution(cuts=[
-            ("D_Drums_LT", 0.307),
-            ("D_Gtr_CLS",  0.120),
-            ("D_Gtr",      0.086),
-            ("D_Bass",     0.164),
-            ("D_Bass_CLS", 0.050),
-            ("D_Vocals",   0.100),
-            ("D_All",      0.050),
-            ("D_Drums_KD", 0.040),
-            ("D_Vox_Cam_PT",0.032),
-            ("D_Duo_GB",   0.030),
-            ("D_Crowd",    0.021),
+
+            ("D_Drums_LT", 0.1316),
+
+            ("D_Vox_Cam_PT", 0.0789),
+
+            ("D_Drums_Point", 0.0789),
+
+            ("D_All_Yeah", 0.0789),
+
+            ("D_Gtr", 0.0789),
+
+            ("D_Gtr_CLS", 0.0789),
+
+            ("D_Gtr_Cam_PT", 0.0789),
+
+            ("D_Crowd", 0.0526),
+
+            ("D_Bass", 0.0526),
+
+            ("D_Bass_Cam", 0.0526),
+
+            ("D_Bass_CLS", 0.0526),
+
+            ("D_Duo_Bass", 0.0263),
+
+            ("D_Drums_KD", 0.0263),
+
+            ("D_Duo_GB", 0.0263),
+
+            ("D_Gtr_Cam_PR", 0.0263),
+
+            ("D_Keys", 0.0263),
+
+            ("D_All", 0.0263),
+
+            ("D_Duo_KB", 0.0263),
+
         ]),
+
         "close": CutDistribution(cuts=[
-            ("D_Drums_LT", 0.250),
-            ("D_Gtr_CLS",  0.150),
-            ("D_Bass",     0.120),
-            ("D_Drums_KD", 0.100),
-            ("D_All",      0.080),
-            ("D_Vocals",   0.070),
-            ("D_Gtr",      0.060),
-            ("D_Drums_Point", 0.050),
-            ("D_Bass_CLS", 0.040),
-            ("D_Vox_Cam_PT", 0.030),
+
+            ("D_Vox_Cam_PT", 0.1316),
+
+            ("D_Drums_LT", 0.1316),
+
+            ("D_Bass", 0.1053),
+
+            ("D_Bass_Cam", 0.1053),
+
+            ("D_All_Yeah", 0.0789),
+
+            ("D_Gtr_CLS", 0.0789),
+
+            ("D_Crowd", 0.0526),
+
+            ("D_Bass_CLS", 0.0526),
+
+            ("D_Drums_Point", 0.0526),
+
+            ("D_Vocals", 0.0263),
+
+            ("D_Gtr", 0.0263),
+
+            ("D_Keys", 0.0263),
+
+            ("D_All_LT", 0.0263),
+
+            ("D_Bass_NP", 0.0263),
+
+            ("D_Gtr_Cam_PT", 0.0263),
+
+            ("D_All_Cam", 0.0263),
+
+            ("D_All", 0.0263),
+
         ]),
+
     },
+
     "prechorus": {
+
         "entry": CutDistribution(cuts=[
-            ("D_Vocals",   0.313),
-            ("D_Duo_GB",   0.214),
-            ("D_Gtr",      0.134),
-            ("D_Drums_LT", 0.071),
-            ("D_Vox_CLS",  0.060),
-            ("D_Vox_Cam_PT", 0.050),
-            ("D_Bass",     0.040),
-            ("D_All",      0.035),
-            ("D_Duo_Bass", 0.030),
-            ("D_All_Cam",  0.030),
-            ("D_Gtr_CLS",  0.023),
+
+            ("D_Vox_Cam_PT", 0.1286),
+
+            ("D_Duo_Gtr", 0.1143),
+
+            ("D_Vox_CLS", 0.0857),
+
+            ("D_All", 0.0857),
+
+            ("D_Vox_Cam_PR", 0.0714),
+
+            ("D_All_Cam", 0.0571),
+
+            ("D_All_Yeah", 0.0571),
+
+            ("D_Drums_LT", 0.0429),
+
+            ("D_Duo_GB", 0.0429),
+
+            ("D_All_LT", 0.0429),
+
+            ("D_Gtr_Cam_PT", 0.0429),
+
+            ("D_Vocals", 0.0429),
+
+            ("D_Duo_Bass", 0.0429),
+
+            ("D_Bass_CLS", 0.0286),
+
+            ("D_Gtr", 0.0143),
+
+            ("D_Duo_Drums", 0.0143),
+
+            ("D_Gtr_CLS", 0.0143),
+
+            ("D_Keys", 0.0143),
+
+            ("D_Crowd", 0.0143),
+
+            ("D_Bass", 0.0143),
+
+            ("D_Drums_Point", 0.0143),
+
+            ("D_Duo_KB", 0.0143),
+
         ]),
+
         "close": CutDistribution(cuts=[
-            ("D_Vox_Cam_PT", 0.180),
-            ("D_Drums_LT", 0.160),
-            ("D_Bass",     0.107),
-            ("D_Vocals",   0.100),
-            ("D_Gtr",      0.090),
-            ("D_Vox_CLS",  0.080),
-            ("D_All",      0.060),
-            ("D_Duo_GB",   0.050),
-            ("D_All_Yeah", 0.040),
-            ("D_Gtr_CLS",  0.033),
+
+            ("D_Vox_Cam_PT", 0.1143),
+
+            ("D_Duo_Gtr", 0.1000),
+
+            ("D_All_Cam", 0.0857),
+
+            ("D_All_Yeah", 0.0857),
+
+            ("D_All", 0.0714),
+
+            ("D_Vox_CLS", 0.0571),
+
+            ("D_Drums_LT", 0.0571),
+
+            ("D_Vocals", 0.0571),
+
+            ("D_Duo_Bass", 0.0429),
+
+            ("D_Duo_KB", 0.0429),
+
+            ("D_Vox_Cam_PR", 0.0429),
+
+            ("D_Duo_Drums", 0.0286),
+
+            ("D_All_LT", 0.0286),
+
+            ("D_Bass", 0.0286),
+
+            ("D_Bass_NP", 0.0286),
+
+            ("D_Gtr", 0.0143),
+
+            ("D_Gtr_CLS", 0.0143),
+
+            ("D_Duo_KV", 0.0143),
+
+            ("D_Gtr_Cam_PT", 0.0143),
+
+            ("D_Crowd", 0.0143),
+
+            ("D_Drums_Point", 0.0143),
+
+            ("D_Duo_GB", 0.0143),
+
+            ("D_Stagedive", 0.0143),
+
+            ("D_Keys_Cam", 0.0143),
+
         ]),
+
     },
+
     "solo": {
+
         "entry": CutDistribution(cuts=[
-            ("D_Gtr",      0.343),
-            ("D_Duo_GB",   0.220),
-            ("D_Drums_LT", 0.137),
-            ("D_Bass",     0.117),
-            ("D_Vocals",   0.069),
-            ("D_All",      0.040),
-            ("D_Gtr_CLS",  0.035),
-            ("D_Gtr_Cam_PT", 0.025),
-            ("D_Duo_KB",   0.014),
+
+            ("D_Gtr_CLS", 0.2414),
+
+            ("D_Drums_LT", 0.0920),
+
+            ("D_Vox_CLS", 0.0805),
+
+            ("D_Gtr_Cam_PT", 0.0805),
+
+            ("D_Duo_KB", 0.0690),
+
+            ("D_All", 0.0575),
+
+            ("D_Duo_GB", 0.0460),
+
+            ("D_Vox_Cam_PT", 0.0345),
+
+            ("D_Bass", 0.0345),
+
+            ("D_Keys", 0.0230),
+
+            ("D_Drums_Point", 0.0230),
+
+            ("D_All_Cam", 0.0230),
+
+            ("D_Bass_CLS", 0.0230),
+
+            ("D_Gtr_Cam_PR", 0.0230),
+
+            ("D_Duo_Gtr", 0.0230),
+
+            ("D_All_Yeah", 0.0230),
+
+            ("D_Crowd", 0.0230),
+
+            ("D_Gtr", 0.0230),
+
+            ("D_Vocals", 0.0115),
+
+            ("D_Keys_Cam", 0.0115),
+
+            ("D_Duo_Bass", 0.0115),
+
+            ("D_Keys_NP", 0.0115),
+
+            ("D_Duo_Drums", 0.0115),
+
         ]),
+
         "close": CutDistribution(cuts=[
-            ("D_Gtr_CLS",  0.250),
-            ("D_Drums_LT", 0.200),
-            ("D_Gtr",      0.150),
-            ("D_Duo_GB",   0.120),
-            ("D_Bass_CLS", 0.100),
-            ("D_All",      0.080),
-            ("D_Vocals",   0.050),
-            ("D_Gtr_Cam_PT", 0.030),
-            ("D_Bass",     0.020),
+
+            ("D_Gtr_CLS", 0.1379),
+
+            ("D_Bass_CLS", 0.0920),
+
+            ("D_Duo_GB", 0.0920),
+
+            ("D_Drums_LT", 0.0805),
+
+            ("D_Gtr_Cam_PT", 0.0805),
+
+            ("D_All_Cam", 0.0690),
+
+            ("D_Vox_CLS", 0.0575),
+
+            ("D_All", 0.0575),
+
+            ("D_Bass", 0.0460),
+
+            ("D_Crowd", 0.0460),
+
+            ("D_Vox_Cam_PT", 0.0460),
+
+            ("D_Drums_Point", 0.0230),
+
+            ("D_Gtr_Cam_PR", 0.0230),
+
+            ("D_Duo_KB", 0.0230),
+
+            ("D_All_Yeah", 0.0230),
+
+            ("D_Vocals", 0.0115),
+
+            ("D_All_LT", 0.0115),
+
+            ("D_Duo_Bass", 0.0115),
+
+            ("D_Bass_Cam", 0.0115),
+
+            ("D_Drums_KD", 0.0115),
+
+            ("D_Duo_KV", 0.0115),
+
+            ("D_Duo_Drums", 0.0115),
+
+            ("D_Vox_Cam_PR", 0.0115),
+
+            ("D_Keys", 0.0115),
+
         ]),
+
     },
+
     "bridge": {
+
         "entry": CutDistribution(cuts=[
-            ("D_Duo_GB",   0.234),
-            ("D_Vocals",   0.218),
-            ("D_Drums_LT", 0.202),
-            ("D_Gtr",      0.105),
-            ("D_All",      0.080),
-            ("D_All_Cam",  0.049),
-            ("D_Bass",     0.040),
-            ("D_Vox_CLS",  0.035),
-            ("D_Gtr_CLS",  0.025),
-            ("D_Vox_Cam_PT", 0.012),
+
+            ("D_Drums_LT", 0.1852),
+
+            ("D_Gtr_CLS", 0.1481),
+
+            ("D_Duo_KB", 0.1111),
+
+            ("D_Bass_CLS", 0.0741),
+
+            ("D_Gtr_Cam_PT", 0.0741),
+
+            ("D_Crowd", 0.0741),
+
+            ("D_Vox_CLS", 0.0741),
+
+            ("D_Duo_GB", 0.0370),
+
+            ("D_Bass", 0.0370),
+
+            ("D_Vox_Cam_PT", 0.0370),
+
+            ("D_Vox_Cam_PR", 0.0370),
+
+            ("D_All_Yeah", 0.0370),
+
+            ("D_All_Cam", 0.0370),
+
+            ("D_Vocals", 0.0370),
+
         ]),
+
         "close": CutDistribution(cuts=[
-            ("D_Drums_LT", 0.220),
-            ("D_Bass_CLS", 0.150),
-            ("D_Gtr_CLS",  0.130),
-            ("D_Vocals",   0.110),
-            ("D_All",      0.090),
-            ("D_Vox_CLS",  0.080),
-            ("D_Duo_GB",   0.070),
-            ("D_Gtr",      0.060),
-            ("D_Bass",     0.050),
-            ("D_Vox_Cam_PT", 0.040),
+
+            ("D_Drums_LT", 0.1481),
+
+            ("D_Duo_GB", 0.1111),
+
+            ("D_Bass_CLS", 0.1111),
+
+            ("D_Gtr_CLS", 0.1111),
+
+            ("D_Gtr_Cam_PT", 0.0741),
+
+            ("D_Bass", 0.0370),
+
+            ("D_All", 0.0370),
+
+            ("D_All_LT", 0.0370),
+
+            ("D_Drums_KD", 0.0370),
+
+            ("D_Gtr", 0.0370),
+
+            ("D_Vox_Cam_PR", 0.0370),
+
+            ("D_All_Yeah", 0.0370),
+
+            ("D_Vox_Cam_PT", 0.0370),
+
+            ("D_All_Cam", 0.0370),
+
+            ("D_Vocals", 0.0370),
+
+            ("D_Vox_CLS", 0.0370),
+
+            ("D_Keys", 0.0370),
+
         ]),
+
     },
+
     "breakdown": {
+
         "entry": CutDistribution(cuts=[
-            ("D_Vocals",   0.258),
-            ("D_Drums_LT", 0.210),
-            ("D_Bass",     0.153),
-            ("D_Gtr",      0.145),
-            ("D_All",      0.081),
-            ("D_Gtr_CLS",  0.050),
-            ("D_Bass_CLS", 0.040),
-            ("D_Vox_CLS",  0.030),
-            ("D_Crowd",    0.025),
-            ("D_All_Cam",  0.008),
+
+            ("D_Vox_Cam_PT", 0.2143),
+
+            ("D_Vox_CLS", 0.1429),
+
+            ("D_All_LT", 0.0714),
+
+            ("D_All_Yeah", 0.0714),
+
+            ("D_Duo_KB", 0.0714),
+
+            ("D_Gtr_CLS", 0.0714),
+
+            ("D_Gtr_Cam_PT", 0.0714),
+
+            ("D_Duo_KV", 0.0714),
+
+            ("D_Vox_Cam_PR", 0.0714),
+
+            ("D_Keys", 0.0714),
+
+            ("D_All_Cam", 0.0714),
+
         ]),
+
         "close": CutDistribution(cuts=[
-            ("D_Vox_Cam_PT", 0.180),
-            ("D_Drums_LT", 0.150),
-            ("D_Gtr_CLS",  0.130),
-            ("D_Bass_CLS", 0.110),
-            ("D_Vocals",   0.100),
-            ("D_All",      0.080),
-            ("D_Vox_CLS",  0.070),
-            ("D_Gtr",      0.060),
-            ("D_Bass",     0.050),
-            ("D_Crowd",    0.030),
-            ("D_Drums_KD", 0.020),
+
+            ("D_Vox_Cam_PT", 0.2143),
+
+            ("D_All_LT", 0.1429),
+
+            ("D_Bass", 0.1429),
+
+            ("D_Vox_CLS", 0.1429),
+
+            ("D_All_Yeah", 0.0714),
+
+            ("D_Duo_GB", 0.0714),
+
+            ("D_Duo_Bass", 0.0714),
+
+            ("D_Vox_Cam_PR", 0.0714),
+
+            ("D_All_Cam", 0.0714),
+
         ]),
+
     },
+
     "riff": {
+
         "entry": CutDistribution(cuts=[
-            ("D_Gtr",      0.211),
-            ("D_Bass",     0.203),
-            ("D_Duo_GB",   0.180),
-            ("D_Drums_LT", 0.105),
-            ("D_All",      0.090),
-            ("D_Gtr_CLS",  0.060),
-            ("D_Bass_CLS", 0.050),
-            ("D_All_LT",   0.040),
-            ("D_Vocals",   0.030),
-            ("D_Vox_Cam_PT", 0.021),
-            ("D_Crowd",    0.010),
+
+            ("D_Gtr_CLS", 0.1538),
+
+            ("D_Duo_Gtr", 0.0962),
+
+            ("D_Vox_Cam_PT", 0.0962),
+
+            ("D_Drums_LT", 0.0769),
+
+            ("D_Crowd", 0.0769),
+
+            ("D_Duo_GB", 0.0577),
+
+            ("D_Vox_Cam_PR", 0.0385),
+
+            ("D_Vox_CLS", 0.0385),
+
+            ("D_Gtr", 0.0385),
+
+            ("D_Vocals", 0.0385),
+
+            ("D_Duo_KB", 0.0385),
+
+            ("D_All", 0.0385),
+
+            ("D_All_Yeah", 0.0385),
+
+            ("D_All_Cam", 0.0192),
+
+            ("D_Crowd_Gtr", 0.0192),
+
+            ("D_Duo_KV", 0.0192),
+
+            ("D_All_LT", 0.0192),
+
+            ("D_Bass_CLS", 0.0192),
+
+            ("D_Bass_Cam", 0.0192),
+
+            ("D_Drums_Point", 0.0192),
+
+            ("D_Gtr_NP", 0.0192),
+
+            ("D_Duo_Bass", 0.0192),
+
         ]),
+
         "close": CutDistribution(cuts=[
-            ("D_Gtr_CLS",  0.200),
-            ("D_Drums_LT", 0.180),
-            ("D_Bass_CLS", 0.150),
-            ("D_Gtr",      0.120),
-            ("D_Bass",     0.100),
-            ("D_All",      0.080),
-            ("D_Duo_GB",   0.070),
-            ("D_Vocals",   0.050),
-            ("D_Drums_KD", 0.030),
-            ("D_All_LT",   0.020),
+
+            ("D_Vox_Cam_PT", 0.1346),
+
+            ("D_Bass_CLS", 0.0962),
+
+            ("D_Crowd", 0.0769),
+
+            ("D_Drums_LT", 0.0769),
+
+            ("D_Vocals", 0.0769),
+
+            ("D_Duo_GB", 0.0769),
+
+            ("D_Vox_Cam_PR", 0.0577),
+
+            ("D_Vox_CLS", 0.0577),
+
+            ("D_Duo_Gtr", 0.0385),
+
+            ("D_Gtr_CLS", 0.0385),
+
+            ("D_All", 0.0385),
+
+            ("D_Gtr_Cam_PT", 0.0385),
+
+            ("D_Duo_KV", 0.0192),
+
+            ("D_All_Cam", 0.0192),
+
+            ("D_All_LT", 0.0192),
+
+            ("D_Crowd_Bass", 0.0192),
+
+            ("D_Duo_Bass", 0.0192),
+
+            ("D_Gtr_Cam_PR", 0.0192),
+
+            ("D_All_Yeah", 0.0192),
+
+            ("D_Bass_Cam", 0.0192),
+
+            ("D_Duo_KB", 0.0192),
+
+            ("D_Bass_NP", 0.0192),
+
         ]),
+
     },
+
     "build": {
+
         "entry": CutDistribution(cuts=[
-            ("D_Crowd",    0.222),
-            ("D_Drums_LT", 0.200),
-            ("D_Vocals",   0.100),
-            ("D_Vox_CLS",  0.080),
-            ("D_Gtr",      0.070),
-            ("D_Gtr_CLS",  0.060),
-            ("D_Vox_Cam_PT", 0.055),
-            ("D_Bass",     0.050),
-            ("D_All",      0.045),
-            ("D_Duo_GB",   0.040),
-            ("D_All_Cam",  0.035),
-            ("D_Crowd_Gtr", 0.025),
-            ("D_Crowd_Bass", 0.018),
+
+            ("D_Drums_KD", 0.1500),
+
+            ("D_Vox_Cam_PT", 0.1000),
+
+            ("D_Crowd", 0.1000),
+
+            ("D_Duo_KB", 0.1000),
+
+            ("D_Gtr_CLS", 0.1000),
+
+            ("D_Vocals", 0.1000),
+
+            ("D_Duo_GB", 0.1000),
+
+            ("D_All_Cam", 0.0500),
+
+            ("D_Drums_LT", 0.0500),
+
+            ("D_Bass", 0.0500),
+
+            ("D_All_Yeah", 0.0500),
+
+            ("D_Bass_Cam", 0.0500),
+
         ]),
+
         "close": CutDistribution(cuts=[
-            ("D_Drums_LT", 0.200),
-            ("D_Gtr_CLS",  0.150),
-            ("D_Vox_CLS",  0.120),
-            ("D_All",      0.100),
-            ("D_Bass_CLS", 0.090),
-            ("D_Gtr",      0.080),
-            ("D_Vocals",   0.070),
-            ("D_Bass",     0.060),
-            ("D_Duo_GB",   0.050),
-            ("D_All_LT",   0.040),
-            ("D_Crowd_Gtr", 0.040),
+
+            ("D_All_Cam", 0.1500),
+
+            ("D_Duo_GB", 0.1500),
+
+            ("D_Drums_KD", 0.1000),
+
+            ("D_Duo_KB", 0.1000),
+
+            ("D_Vox_Cam_PT", 0.1000),
+
+            ("D_Gtr_Cam_PT", 0.1000),
+
+            ("D_Crowd", 0.0500),
+
+            ("D_Gtr_Cam_PR", 0.0500),
+
+            ("D_Bass_CLS", 0.0500),
+
+            ("D_Keys", 0.0500),
+
+            ("D_Vocals", 0.0500),
+
+            ("D_All_Yeah", 0.0500),
+
         ]),
+
     },
+
     "outro": {
+
         "entry": CutDistribution(cuts=[
-            ("D_All",      0.217),
-            ("D_Vocals",   0.212),
-            ("D_Drums_LT", 0.153),
-            ("D_Gtr",      0.128),
-            ("D_Bass",     0.089),
-            ("D_All_Cam",  0.060),
-            ("D_Gtr_CLS",  0.040),
-            ("D_Vox_CLS",  0.030),
-            ("D_Bass_CLS", 0.025),
-            ("D_Crowd",    0.024),
-            ("D_Vox_Cam_PT", 0.022),
+
+            ("D_Vox_Cam_PT", 0.2727),
+
+            ("D_Gtr_CLS", 0.1818),
+
+            ("D_Drums_LT", 0.1818),
+
+            ("D_Gtr", 0.0909),
+
+            ("D_All_LT", 0.0909),
+
+            ("D_Vox_CLS", 0.0909),
+
+            ("D_Vocals", 0.0909),
+
         ]),
+
         "close": CutDistribution(cuts=[
-            ("D_Drums_LT", 0.180),
-            ("D_Gtr_CLS",  0.140),
-            ("D_Vocals",   0.120),
-            ("D_All",      0.100),
-            ("D_All_Yeah", 0.090),
-            ("D_Bass_CLS", 0.080),
-            ("D_Gtr",      0.070),
-            ("D_Bass",     0.060),
-            ("D_Vox_CLS",  0.050),
-            ("D_Drums_Point", 0.040),
-            ("D_All_Cam",  0.030),
-            ("D_Drums_KD", 0.020),
-            ("D_Crowd",    0.020),
+
+            ("D_Drums_LT", 0.2727),
+
+            ("D_All", 0.1818),
+
+            ("D_Crowd_Bass", 0.0909),
+
+            ("D_Vox_Cam_PT", 0.0909),
+
+            ("D_Bass", 0.0909),
+
+            ("D_All_Cam", 0.0909),
+
+            ("D_All_LT", 0.0909),
+
+            ("D_Vocals", 0.0909),
+
         ]),
+
     },
+
     "postchorus": {
+
         "entry": CutDistribution(cuts=[
-            ("D_All_Yeah", 0.205),
-            ("D_Duo_GB",   0.178),
-            ("D_Gtr_CLS",  0.164),
-            ("D_Drums_LT", 0.137),
-            ("D_Vocals",   0.068),
-            ("D_All_Cam",  0.060),
-            ("D_Gtr",      0.050),
-            ("D_Vox_CLS",  0.040),
-            ("D_Bass_CLS", 0.035),
-            ("D_All",      0.030),
-            ("D_Bass",     0.020),
-            ("D_Vox_Cam_PT", 0.013),
+
+            ("D_All_Yeah", 0.1875),
+
+            ("D_Duo_KV", 0.1250),
+
+            ("D_Gtr_CLS", 0.1250),
+
+            ("D_Drums_LT", 0.1250),
+
+            ("D_Duo_Gtr", 0.0625),
+
+            ("D_Keys_Cam", 0.0625),
+
+            ("D_Gtr_Cam_PR", 0.0625),
+
+            ("D_Duo_GB", 0.0625),
+
+            ("D_Vox_Cam_PT", 0.0625),
+
+            ("D_Vocals", 0.0625),
+
+            ("D_All_LT", 0.0625),
+
         ]),
+
         "close": CutDistribution(cuts=[
-            ("D_Drums_LT", 0.250),
-            ("D_Gtr_CLS",  0.180),
-            ("D_Bass_CLS", 0.120),
-            ("D_All_Yeah", 0.100),
-            ("D_Gtr",      0.080),
-            ("D_Vocals",   0.070),
-            ("D_All",      0.060),
-            ("D_Bass",     0.050),
-            ("D_Vox_CLS",  0.040),
-            ("D_Drums_KD", 0.030),
-            ("D_All_Cam",  0.020),
+
+            ("D_Gtr_CLS", 0.1875),
+
+            ("D_Drums_LT", 0.1250),
+
+            ("D_Duo_KB", 0.0625),
+
+            ("D_Duo_Gtr", 0.0625),
+
+            ("D_Bass_Cam", 0.0625),
+
+            ("D_Bass_NP", 0.0625),
+
+            ("D_Duo_GB", 0.0625),
+
+            ("D_Vox_Cam_PT", 0.0625),
+
+            ("D_Vocals", 0.0625),
+
+            ("D_All_LT", 0.0625),
+
+            ("D_All_Yeah", 0.0625),
+
+            ("D_Duo_Bass", 0.0625),
+
+            ("D_All", 0.0625),
+
         ]),
+
     },
-    "drop": {
-        "entry": CutDistribution(cuts=[
-            ("D_All_LT",   0.250),
-            ("D_All_Cam",  0.200),
-            ("D_Drums_LT", 0.150),
-            ("D_Gtr",      0.100),
-            ("D_Bass",     0.080),
-            ("D_All",      0.070),
-            ("D_Vocals",   0.050),
-            ("D_Gtr_CLS",  0.040),
-            ("D_Vox_CLS",  0.030),
-            ("D_Duo_GB",   0.030),
-        ]),
-        "close": CutDistribution(cuts=[
-            ("D_All_LT",   0.200),
-            ("D_All_Cam",  0.150),
-            ("D_Drums_LT", 0.150),
-            ("D_Gtr_CLS",  0.100),
-            ("D_All_Yeah", 0.090),
-            ("D_Vocals",   0.080),
-            ("D_Gtr",      0.070),
-            ("D_Bass_CLS", 0.060),
-            ("D_Bass",     0.050),
-            ("D_Vox_CLS",  0.030),
-            ("D_Duo_GB",   0.020),
-        ]),
-    },
-    "default": {
-        "entry": CutDistribution(cuts=[
-            ("D_Vox_Cam_PT", 0.400),
-            ("D_Drums_LT", 0.200),
-            ("D_Gtr",      0.150),
-            ("D_Bass",     0.100),
-            ("D_All",      0.080),
-            ("D_Vocals",   0.070),
-        ]),
-        "close": CutDistribution(cuts=[
-            ("D_Drums_LT", 0.300),
-            ("D_Gtr_CLS",  0.200),
-            ("D_Vocals",   0.150),
-            ("D_All",      0.100),
-            ("D_Bass",     0.080),
-            ("D_Gtr",      0.070),
-            ("D_Bass_CLS", 0.050),
-            ("D_Vox_CLS",  0.050),
-        ]),
-    },
+
 }
 
 
