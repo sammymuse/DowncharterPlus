@@ -463,6 +463,8 @@ def _auto_sticking(
     is_dense: bool = False,
     last_lh_pad: int = -1,
     last_rh_pad: int = -1,
+    phrase_ticks: list[int] | None = None,
+    tpb: int = 480,
 ) -> tuple[list[str], int, int]:
     """Assign LH/RH to a phrase of single hits using data-driven defaults
     derived from 101 official Rock Band 3 drum charts, with directional
@@ -472,6 +474,11 @@ def _auto_sticking(
     hand from the PRIOR phrase (or -1 if unknown).  Returns (hands, updated
     last_lh_pad, updated last_rh_pad).
 
+    *phrase_ticks* and *tpb* enable double-speed detection within a groove:
+    if consecutive same-pad hits are ≤ a 16th note apart (tpb//4), the
+    pad alternates even at groove speed — prevents fatigue on fast hihat/tom
+    repetitions while keeping the musical phrase grouping intact.
+
     Primary rules (data-driven):
     1. First note: use per-pad default hand. Accent (vel >= 120) on snare/crash
        uses RH.
@@ -479,8 +486,9 @@ def _auto_sticking(
        pads like TOM1 flip the previous hand).
     3. Same pad as previous:
        - Snare: always flip (alternate for rolls).
-       - Other pads (not is_dense): stay consistent (use default hand).
-       - Other pads (is_dense, avg gap <= 16th note): flip (dense fill alternation).
+       - Other pads (not is_dense, not double-speed): stay consistent.
+       - Other pads (is_dense): flip (dense fill alternation).
+       - Other pads (double-speed within groove, gap ≤ 16th note): flip.
 
     Secondary correction (anti-crossover):
     - After assigning via the rules above, check whether the hand moves against
@@ -525,7 +533,14 @@ def _auto_sticking(
             elif is_dense:
                 hand = _flip(prev_hand)
             else:
-                hand = _DEFAULT_HAND.get(pad, prev_hand)
+                # Groove: stay consistent with default hand.
+                # UNLESS consecutive same-pad hits are ≤ a 16th note apart
+                # (double speed within groove) — alternate to avoid fatigue.
+                if phrase_ticks and i > 0 \
+                        and (phrase_ticks[i] - phrase_ticks[i - 1]) <= tpb // 4:
+                    hand = _flip(prev_hand)
+                else:
+                    hand = _DEFAULT_HAND.get(pad, prev_hand)
 
         else:
             # Different pad: use default hand for the new pad.
@@ -695,6 +710,7 @@ def generate_drum_animations(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
             hands, last_lh_pad, last_rh_pad = _auto_sticking(
                 phrase, is_dense=is_dense,
                 last_lh_pad=last_lh_pad, last_rh_pad=last_rh_pad,
+                phrase_ticks=phrase_ticks, tpb=tpb,
             )
             for (btick, pad, vel), hand in zip(buffer, hands):
                 _emit(btick, pad, hand, vel)
