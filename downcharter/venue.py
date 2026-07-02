@@ -2061,20 +2061,27 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     last_fullband = -10 ** 9
     did_stagedive = False
     import random
+    # VOX cuts: the single strongest type (25-30% of all official cuts). Anti-recency
+    # should NOT block them — official data is genuinely repetitive on VOX. (H7b)
+    _VOX_CUTS = frozenset({"D_Vox_Cam_PT", "D_Vocals", "D_Vox_CLS", "D_Vox_Cam_PR"})
     for e in events:
         chosen = None
         for cand in e.cuts:                          # 1st candidate that passes the guard
             g = _guard_directed(cand, e.tick, tpb, inst_onsets)
             if g is None:
                 continue
-            # 42% chance of self-repeat (matching official data)
-            if accepted and g == accepted[-1][1] and random.random() < 0.42:
+            is_vox = g in _VOX_CUTS
+            # Self-repeat: 65% for VOX (official data is repetitive on vocals),
+            # 42% for other types (H7b)
+            repeat_prob = 0.65 if is_vox else 0.42
+            if accepted and g == accepted[-1][1] and random.random() < repeat_prob:
                 chosen = g
                 break
-            if g in recent_dir and chosen is None:
-                chosen = g           # fallback
+            # VOX cuts bypass the recent_dir anti-recency block (H7b)
+            if g in recent_dir and not is_vox and chosen is None:
+                chosen = g           # fallback (non-vox repeat: keep as fallback)
                 continue
-            if g not in recent_dir:
+            if g not in recent_dir or is_vox:
                 chosen = g
                 break
         if chosen is None:
@@ -2087,7 +2094,9 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 continue                             # at most one per song
             did_stagedive = True
         accepted.append((e.tick, chosen))
-        recent_dir.append(chosen)
+        # VOX cuts don't go into recent_dir — they should never be "blocked" (H7b)
+        if chosen not in _VOX_CUTS:
+            recent_dir.append(chosen)
         if is_fullband:
             last_fullband = e.tick
 

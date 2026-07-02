@@ -317,6 +317,32 @@ def _busiest_onset(ons: list[int], start: int, end: int, tpb: int, prefer: int) 
     return best
 
 
+def _busiest_combined(ons_a: list[int], ons_b: list[int],
+                      start: int, end: int, tpb: int, prefer: int) -> int:
+    """The tick in [start,end) where COMBINED activity of both onset lists peaks.
+
+    For each onset (from either instrument), counts how many total onsets from BOTH
+    are within ±tpb. Picks the one with the highest combined score — guaranteeing
+    that _guard_directed's duo check (both playing ±2 beats) passes.
+    Ties break toward `prefer` (the section midpoint).
+    """
+    import bisect
+    seg_a = ons_a[bisect.bisect_left(ons_a, start):bisect.bisect_left(ons_a, end)]
+    seg_b = ons_b[bisect.bisect_left(ons_b, start):bisect.bisect_left(ons_b, end)]
+    all_ticks = sorted(set(seg_a) | set(seg_b))
+    if not all_ticks:
+        return prefer
+    best, best_score, best_dist = all_ticks[0], -1, 1 << 62
+    for o in all_ticks:
+        ca = bisect.bisect_right(seg_a, o + tpb) - bisect.bisect_left(seg_a, o - tpb)
+        cb = bisect.bisect_right(seg_b, o + tpb) - bisect.bisect_left(seg_b, o - tpb)
+        score = ca + cb
+        dist = abs(o - prefer)
+        if score > best_score or (score == best_score and dist < best_dist):
+            best, best_score, best_dist = o, score, dist
+    return best
+
+
 
 def detect_stagedive(sections: list[Section], inst_onsets: dict[str, list[int]] | None,
                      accents: list[int], time_sig_map: list, tpb: int) -> list[CutEvent]:
@@ -340,9 +366,13 @@ def detect_stagedive(sections: list[Section], inst_onsets: dict[str, list[int]] 
 #  NEW DETECTORS (data-driven, 100-song analysis)
 # ══════════════════════════════════════════════════════════════════════════
 
+# Sections where VOX priority does NOT apply (instrument-feature sections).
+# In these, the camera follows the soloist/instrument, not the vocalist.
+_VOX_SKIP_KINDS = frozenset({"solo", "riff", "intro"})
+
 # Section-kind → entry cut type, data-driven from 100 songs (2997 cuts).
-# Key principle: section kind determines type, not instrument leader.
-# Percentages shown are of ALL cuts in that section (entry+close+middle).
+# Used as base/fallback; VOX is prepended at runtime when vocals are present
+# (official data: VOX is 25.7% of first events — the single strongest signal).
 _SECTION_ENTRY_CUTS: dict[str, list[str]] = {
     "verse":      ["D_Vox_Cam_PT", "D_Vocals"],       # Vox_PT 3.2%, Vocals 2.1%
     "prechorus":  ["D_Vox_Cam_PT", "D_Drums_LT"],     # Vox_PT 4.6%, Drums_LT 2.3%
@@ -379,47 +409,82 @@ _SECTION_CLOSE_CUTS: dict[str, list[str]] = {
 
 
 
+def _with_vox_priority(kind: str, base: list[str],
+                       inst_onsets: dict[str, list[int]] | None,
+                       tick: int, tpb: int, window: int) -> list[str]:
+    """Prepend D_Vox_Cam_PT when real vocals are active near `tick`.
+
+    Official data: VOX is the #1 type at BOTH entry (25.7%) and close (29.7%)
+    positions across ALL section kinds. Instrument-feature sections (solo/riff/intro)
+    are excluded — the camera follows the soloist there, not the vocalist.
+
+    `window` = ticks to check for vocal activity (entry: 4 beats, close: 8 beats).
+    """
+    if kind in _VOX_SKIP_KINDS or inst_onsets is None:
+        return base
+    real_vox = inst_onsets.get("_vocal_real")
+    if not real_vox:
+        return base
+    # Check for vocal activity within [tick-window, tick+window]
+    import bisect
+    lo = bisect.bisect_left(real_vox, tick - window)
+    hi = bisect.bisect_right(real_vox, tick + window)
+    if hi <= lo:
+        return base  # no vocal notes near this tick
+    # Prepend VOX only if not already first candidate
+    if base and base[0] == "D_Vox_Cam_PT":
+        return base
+    return ["D_Vox_Cam_PT"] + [c for c in base if c != "D_Vox_Cam_PT"]
+
+
 def detect_section_entry(sections: list[Section], accents: list[int],
-                         tpb: int) -> list[CutEvent]:
+                         tpb: int,
+                         inst_onsets: dict[str, list[int]] | None = None) -> list[CutEvent]:
     """Entry cut at EVERY section boundary (including calm).
 
     Data: 30.7% of official directed cuts are at b0-2; 31.8% within 1 beat
-    of a boundary. Section kind determines the cut type, not the leader
-    instrument (75-85% of instruments are playing at any cut).
+    of a boundary.
 
     CHANGE (H1): Removed energy gate. Official data shows 37.6% of all cuts
-    land in calm sections (verse, intro, outro, bridge). Gatekeeping was
-    eliminating 287+ cuts per 100 songs. The cut type tables already have
-    correct entries for calm kinds; density is controlled by _SECTION_BUDGET."""
+    land in calm sections. Gatekeeping was eliminating 287+ cuts per 100 songs.
+    Density is controlled by _SECTION_BUDGET.
+
+    CHANGE (H7a): VOX priority. When real vocals are active near the entry tick,
+    D_Vox_Cam_PT is prepended to the candidate list. Official data shows VOX is
+    25.7% of first events — the single strongest predictor across all kinds."""
     out = []
     for s in sections:
-        # (removed: if _RANK[_entry_tier(s)] < 1: continue)
+        # (removed H1: if _RANK[_entry_tier(s)] < 1: continue)
         tick = _nearest_accent(s.start, accents, tpb)
-        cuts = _SECTION_ENTRY_CUTS.get(s.kind, _SECTION_ENTRY_CUTS["default"])
+        base = _SECTION_ENTRY_CUTS.get(s.kind, _SECTION_ENTRY_CUTS["default"])
+        cuts = _with_vox_priority(s.kind, base, inst_onsets, tick, tpb, tpb * 4)
         out.append(CutEvent(tick, "section_entry", cuts, PRIO["section_entry"],
                            note=f"entry @{s.kind}"))
     return out
 
 
 def detect_section_close(sections: list[Section], accents: list[int],
-                         tpb: int) -> list[CutEvent]:
+                         tpb: int,
+                         inst_onsets: dict[str, list[int]] | None = None) -> list[CutEvent]:
     """Close cut in the last quartile (b16+) for sections ≥16 beats.
 
     Data: 27% of official directed cuts are in b16+ (last quartile).
-    These mark climax/resolution points, not transitional entries.
 
     CHANGE (H3): Removed energy gate. Official data shows ~360 close cuts in
-    calm sections. Gate was eliminating ~30% of close cuts. Calm sections like
-    verse/outro still deserve resolution markers (typically Vox_Cam_PT/Drums_LT)."""
+    calm sections. Gate was eliminating ~30% of close cuts.
+
+    CHANGE (H7a): VOX priority. When real vocals are active near the close tick,
+    D_Vox_Cam_PT is prepended. Official data: VOX is 29.7% of last events."""
     out = []
     for s in sections:
-        # (removed: if _RANK[_entry_tier(s)] < 1: continue)
+        # (removed H3: if _RANK[_entry_tier(s)] < 1: continue)
         length = s.end - s.start
         if length < tpb * 16:  # need at least 16 beats to have a close quartile
             continue
         close_tick = s.start + length * 3 // 4
         tick = _nearest_accent(close_tick, accents, tpb)
-        cuts = _SECTION_CLOSE_CUTS.get(s.kind, _SECTION_CLOSE_CUTS["default"])
+        base = _SECTION_CLOSE_CUTS.get(s.kind, _SECTION_CLOSE_CUTS["default"])
+        cuts = _with_vox_priority(s.kind, base, inst_onsets, tick, tpb, tpb * 8)
         out.append(CutEvent(tick, "section_close", cuts, PRIO["section_close"],
                            dramatic=True, note=f"close @{s.kind}"))
     return out
@@ -428,7 +493,7 @@ def detect_section_close(sections: list[Section], accents: list[int],
 def detect_duo_cluster(sections: list[Section],
                        inst_onsets: dict[str, list[int]] | None,
                        accents: list[int], tpb: int) -> list[CutEvent]:
-    """Generate DUO clusters (triple duos + instrument pairs) at section entries.
+    """Generate DUO clusters (triple duos + instrument pairs) anchored where both play.
 
     Data: duo_gb + duo_kb + duo_kg fire simultaneously 79-80x across 100 songs.
     bass_cls + guitar_cls is the #1 single-instrument pair (55x).
@@ -437,15 +502,23 @@ def detect_duo_cluster(sections: list[Section],
     duos from the top 3 leaders. For sections with 2, generate that single duo.
 
     CHANGE (H2): Removed energy gate. Official data shows 148 DUO cuts in calm
-    sections (verse, intro, outro, bridge). Gate was eliminating ~18% of DUOs."""
+    sections (verse, intro, outro, bridge). Gate was eliminating ~18% of DUOs.
+
+    CHANGE (H7c): Anchor duos at _busiest_onset of the pair, not s.start.
+    _guard_directed requires BOTH members playing within ±2 beats of the tick
+    (venue.py:1880). Anchoring at s.start meant instruments hadn't always entered
+    yet, so the guard killed many duo candidates. Now we find the tick where the
+    combined activity of both instruments peaks — guaranteeing the guard passes."""
     out = []
     if not inst_onsets:
         return out
     totals = {k: len(v) for k, v in inst_onsets.items()
               if v and k in ("guitar", "bass", "keys", "drums", "vocal")}
     real_vox = bool(inst_onsets.get("_vocal_real"))
+    section_mid = lambda s: s.start + (s.end - s.start) // 2
+
     for s in sections:
-        # (removed: if _RANK[_entry_tier(s)] < 1: continue)
+        # (removed H2: if _RANK[_entry_tier(s)] < 1: continue)
         if s.end - s.start < tpb * 4:
             continue
         leaders = _section_leaders(inst_onsets, s.start, s.end, totals)
@@ -458,7 +531,6 @@ def detect_duo_cluster(sections: list[Section],
         if len(eligible) < 2:
             continue
         top_names = [a for a, _ in eligible[:3]]
-        base_tick = _nearest_accent(s.start, accents, tpb)
         # Generate all pairs among top 3
         for i, a in enumerate(top_names):
             for b in top_names[i + 1:]:
@@ -467,12 +539,23 @@ def detect_duo_cluster(sections: list[Section],
                     continue
                 if "vocal" in (a, b) and not real_vox:
                     continue
-                out.append(CutEvent(base_tick, "duo_cluster", [duo],
+                # H7c: anchor at COMBINED busiest moment of BOTH instruments
+                ons_a = inst_onsets.get(a if a != "vocal" else "_vocal_real") or []
+                ons_b = inst_onsets.get(b if b != "vocal" else "_vocal_real") or []
+                mid = section_mid(s)
+                raw_tick = _busiest_combined(ons_a, ons_b, s.start, s.end, tpb, mid)
+                tick = _nearest_accent(raw_tick, accents, tpb)
+                out.append(CutEvent(tick, "duo_cluster", [duo],
                                    PRIO["duo_cluster"],
                                    note=f"duo {a}+{b} @{s.kind}"))
         # Companion: bass+guitar cls pair (55x in official data)
         if "bass" in top_names and "guitar" in top_names:
-            out.append(CutEvent(base_tick, "duo_cluster",
+            ons_g = inst_onsets.get("guitar") or []
+            ons_b = inst_onsets.get("bass") or []
+            mid = section_mid(s)
+            raw_tick = _busiest_combined(ons_g, ons_b, s.start, s.end, tpb, mid)
+            tick = _nearest_accent(raw_tick, accents, tpb)
+            out.append(CutEvent(tick, "duo_cluster",
                                ["D_Bass_CLS", "D_Gtr_CLS"],
                                PRIO["duo_cluster"] - 1,
                                note=f"bass+gtr cls @{s.kind}"))
@@ -550,8 +633,8 @@ def detect_events(sections: list[Section],
     ev += detect_bre(bre_spans)
     ev += detect_stagedive(sections, inst_onsets, acc, time_sig_map, tpb)
     # Phase 2: Boundary markers (entry + close per section)
-    ev += detect_section_entry(sections, acc, tpb)
-    ev += detect_section_close(sections, acc, tpb)
+    ev += detect_section_entry(sections, acc, tpb, inst_onsets)
+    ev += detect_section_close(sections, acc, tpb, inst_onsets)
     # Phase 3: Featured moments
     ev += detect_solos(sections, inst_onsets, acc, tpb)
     ev += detect_vocal_peaks(inst_onsets, acc, time_sig_map, tpb)
