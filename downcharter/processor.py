@@ -567,6 +567,10 @@ def process_midi(
                         all_events.append(ev)
 
         elif track_type == "guitar":
+            # Apply hand position map to Expert guitar/bass (generates 101/102
+            # force-HOPO/strum markers throughout the song, not just at start).
+            from .guitar_handmap import apply_handmap
+            events = apply_handmap(events, tpb)
             all_events = list(events)
             for diff in diffs_to_gen:
                 # Option A: don't regenerate a difficulty the author already charted.
