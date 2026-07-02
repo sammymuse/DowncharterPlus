@@ -1,0 +1,66 @@
+name: test
+
+on:
+  push:
+    branches: [main, native-con-generation]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Test with pytest
+        run: |
+          python -m pytest tests/ -v --tb=short
+
+      - name: Verify all modules import cleanly
+        run: |
+          python -c "
+          import sys; sys.path.insert(0, '.')
+          modules = [
+            'downcharter.milo', 'downcharter.convert', 'downcharter.stfs',
+            'downcharter.validate', 'downcharter.art', 'downcharter.mogg',
+            'downcharter.lipsync', 'downcharter.ps3build', 'downcharter.processor',
+            'downcharter.quality', 'downcharter.midi_utils', 'downcharter.constants',
+            'downcharter.rhythm', 'downcharter.guitar', 'downcharter.guitar2',
+            'downcharter.drums', 'downcharter.venue', 'downcharter.cut_events',
+            'downcharter.chart', 'downcharter.edat', 'downcharter.sng',
+            'downcharter.audio', 'downcharter.art',
+          ]
+          for mod in modules:
+              try:
+                  __import__(mod)
+                  print(f'  ✓ {mod}')
+              except Exception as e:
+                  print(f'  ✗ {mod}: {e}')
+          print('Done.')
+          "
+
+      - name: Minimal pipeline smoke test
+        run: |
+          python -c "
+          import sys; sys.path.insert(0, '.')
+          from downcharter import milo as _milo
+          spans = [(0.0, 0.3, 'test', 1.0), (0.3, 0.6, 'smoke', 0.8)]
+          m = _milo.build_milo_from_spans(spans, 1.0, 'en')
+          assert len(m) > 0x810, 'milo too small'
+          p = _milo.parse_song_lipsync(m)
+          assert p['n_frames'] == 31, f'unexpected frame count: {p[\"n_frames\"]}'
+          assert len(p['visemes']) > 0, 'no visemes'
+          print(f'OK — milo smoke test ({len(m)} bytes, {p[\"n_frames\"]} frames, {len(p[\"visemes\"])} visemes)')
+          "
