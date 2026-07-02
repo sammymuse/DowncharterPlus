@@ -655,11 +655,14 @@ def detect_events(sections: list[Section],
 # Budget (distinct tick positions) per section kind, from 100-song density data.
 # Official: solo 2.23/s, chorus 2.00/s, verse 1.28/s, prechorus 0.86/s, etc.
 # Rounded down to int. Budget 2 = entry + close; budget 1 = entry only.
-# ADJUSTED (H5): verse 1→2 (20.3% of all cuts), outro 1→2 (6.8% of all cuts).
-# These are the 2nd and 3rd densest kinds after chorus; were underdimensioned.
+# REVISED (volume reduction, Fase 1): verse/breakdown/outro 2→1. We were generating
+# 37.8% more cuts than official (1164 gen vs 845 off, 1.38×). Reducing budget for
+# lower-density kinds cuts ~15-20% volume while keeping chorus+solo at 2 (highest
+# official density and most identity-critical sections).
 _SECTION_BUDGET: dict[str, int] = {
-    "solo": 2, "chorus": 2, "breakdown": 2,
-    "verse": 2, "outro": 2,  # ← adjusted from 1 to match official density
+    "solo": 2, "chorus": 2,       # highest official density — keep entry+close
+    "verse": 1, "breakdown": 1,   # reduced: official density 1.28/s and 1.14/s
+    "outro": 1,                   # reduced: official density 1.08/s
     "prechorus": 1, "build": 1, "intro": 1,
     "bridge": 1, "postchorus": 1, "riff": 1, "drop": 1,
 }

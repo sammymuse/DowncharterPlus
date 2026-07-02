@@ -2071,9 +2071,12 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             if g is None:
                 continue
             is_vox = g in _VOX_CUTS
-            # Self-repeat: 65% for VOX (official data is repetitive on vocals),
-            # 42% for other types (H7b)
-            repeat_prob = 0.65 if is_vox else 0.42
+            # Self-repeat: 30% for VOX, 42% for other types.
+            # (Architect H7b originally set VOX to 65%, but our evaluation at 65%
+            # contributed to 1.38× volume — too many VOX repeats inflating count
+            # without improving identity. 30% keeps natural repetition while
+            # reducing the volume bloat. Phase 1 volume reduction.)
+            repeat_prob = 0.30 if is_vox else 0.42
             if accepted and g == accepted[-1][1] and random.random() < repeat_prob:
                 chosen = g
                 break
