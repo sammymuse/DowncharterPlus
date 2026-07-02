@@ -222,28 +222,45 @@ def thin_kicks(kick_ticks, ctx: Ctx, fill_ticks: set[int], collapse_ms: float) -
     return kept
 
 
-def thin_lane_strong(ticks, ctx: Ctx, min_gap: int) -> list[int]:
-    """Like `thin_lane` but in a collapsed pair (gap < min_gap) it prefers the STRONG
-    BEAT (same as `thin_kicks`): keeps the real position but switches to the on-beat
-    note if the previous one was off-beat. Fixes the snare phase in 16th grooves."""
+def _prefer_in_pair(prev: int, cur: int, vel, ctx: Ctx, strong: bool) -> int:
+    """Of two colliding lane onsets, which to KEEP. The ACCENT wins (louder beats
+    ghost — the main hit must survive a ghost grace note). On a velocity tie, the
+    STRONG BEAT wins when `strong` (keeps the downbeat over an off-grid neighbour);
+    otherwise the earlier (original phase) stays."""
+    if vel is not None:
+        vp, vc = vel.get(prev, 0), vel.get(cur, 0)
+        if vc != vp:
+            return cur if vc > vp else prev
+    if strong and ctx is not None and ctx.is_onbeat(cur) and not ctx.is_onbeat(prev):
+        return cur
+    return prev
+
+
+def thin_lane_strong(ticks, ctx: Ctx, min_gap: int, vel=None) -> list[int]:
+    """Like `thin_lane` but in a collapsed pair (gap < min_gap) it prefers the ACCENT
+    (louder note — drops ghosts, keeps the main hit) and, on a velocity tie, the STRONG
+    BEAT. Keeps the real position. Fixes the snare phase/dynamics in 16th grooves."""
     kept: list[int] = []
     for t in sorted(ticks):
         if not kept or t - kept[-1] >= min_gap:
             kept.append(t)
-        elif ctx.is_onbeat(t) and not ctx.is_onbeat(kept[-1]):
-            kept[-1] = t
+        else:
+            kept[-1] = _prefer_in_pair(kept[-1], t, vel, ctx, strong=True)
     return kept
 
 
-def thin_lane(ticks, min_gap: int) -> list[int]:
+def thin_lane(ticks, min_gap: int, vel=None, ctx: Ctx | None = None) -> list[int]:
     """Greedy thinning that PRESERVES THE ORIGINAL PHASE: walks in order and keeps a
     tick if it is ≥ `min_gap` from the last kept one. Never snaps to the grid — unlike
     `grid_thin`, it does not force the note onto the beat line, so a backbone on the
-    off-beat (half-time feel) survives intact. (Option 1 for snare.)"""
+    off-beat (half-time feel) survives intact. (Option 1 for snare.) When `vel` is
+    given, a collision keeps the ACCENT (louder) over a ghost grace note."""
     kept: list[int] = []
     for t in sorted(ticks):
         if not kept or t - kept[-1] >= min_gap:
             kept.append(t)
+        elif vel is not None:
+            kept[-1] = _prefer_in_pair(kept[-1], t, vel, ctx, strong=False)
     return kept
 
 
@@ -397,17 +414,17 @@ def reduce_hard(gems: list, ctx: Ctx) -> list:
     for t, note in collapse_fill(gems, fill_ticks, ctx, EIGHTH_MIN_MS["hard"]):
         keep.add((t, note))
 
-    # H5 — SNARE: groove backbone, but no consecutive snares closer than 1/8 (removes
-    # ~half the accents consistently). The official Hard charts DROP the ghost snares
-    # that fall on a sub-16th position (between the eighths) — measured: those onsets
-    # were almost all ghosts (vel<100) and were ~1700 false snares. Keeping the snare
-    # only on the EIGHTH grid (on-beat OR off-eighth, both survive — math-derived from
-    # tpb, no snap) raised snare precision 74.9→89.9% for −3.9pp snare recall (overall
-    # Hard precision +5.7pp at −0.4pp recall).
-    snare = sorted(t for t, n, *_ in gems if n == SNARE_NOTE and t not in fill_ticks
-                   and (ctx.is_onbeat(t) or ctx.is_offbeat(t)))
+    # H5 — SNARE: groove backbone, no consecutive snares closer than 1/8. We DON'T
+    # pre-filter to the eighth grid: that dropped a sub-16th ghost while keeping an
+    # on-grid ghost crammed against the next strong hit (e.g. Ritual t=90360 vs 90480,
+    # both vel=1 → the earlier, better-spaced one is the musical choice). Instead the
+    # velocity+phase thinner decides over ALL snares: in a collision the ACCENT wins
+    # (louder over ghost) and, on a tie, the earlier/strong-beat note — which keeps the
+    # better-spaced ghost. Learn-set: pos/padok flat vs the old grid filter.
+    snare = sorted(t for t, n, *_ in gems if n == SNARE_NOTE and t not in fill_ticks)
+    svel = {t: bt[t][SNARE_NOTE][1] for t in snare}
     min_gap = ctx.tpb // 2 - ctx.tpb // 16   # 1/8 with 1/16 slack
-    for t in thin_lane_strong(snare, ctx, min_gap):
+    for t in thin_lane_strong(snare, ctx, min_gap, vel=svel):
         keep.add((t, SNARE_NOTE))
 
     # H3 — KICK: ~75% of Expert. Remove ALL kicks from fills (H3); reinforce the
@@ -424,6 +441,11 @@ def reduce_hard(gems: list, ctx: Ctx) -> list:
     kick = (t for t, n, *_ in gems if n == KICK_NOTE)
     for t in thin_kicks(kick, ctx, fill_ticks, _cms):
         keep.add((t, KICK_NOTE))
+
+    # H7 — HAND VELOCITY: a hand can't cross to a different pad faster than the playable
+    # eighth. Drops sub-eighth cross-kit moves that survived because each lane's grid
+    # kept its single note independently. 2-pad chords (same tick) stay.
+    keep = _apply_hand_velocity(keep, ctx, EIGHTH_MIN_MS["hard"])
 
     return rebuild(bt, keep)
 
@@ -453,7 +475,8 @@ def reduce_medium(gems: list, ctx: Ctx) -> list:
     # positions, thinning only by density (≤1/quarter), without snapping to the grid —
     # so as not to destroy off-beat (half-time) grooves like TTFAF/Battery.
     snare = {t for t, n, *_ in gems if n == SNARE_NOTE}
-    for t in thin_lane(snare, ctx.tpb):
+    svel = {t: bt[t][SNARE_NOTE][1] for t in snare}
+    for t in thin_lane(snare, ctx.tpb, vel=svel, ctx=ctx):
         keep.add((t, SNARE_NOTE))
 
     # M3 — kick: preserves the original groove, collapsing sub-quarter double-bash
@@ -468,6 +491,12 @@ def reduce_medium(gems: list, ctx: Ctx) -> list:
         if ctx.is_offbeat(t) and any(n in PAD_NOTES for n in bt.get(t, {})):
             continue
         keep.add((t, KICK_NOTE))
+
+    # M6 — HAND VELOCITY: no cross-kit hand move faster than the playable eighth.
+    keep = _apply_hand_velocity(keep, ctx, EIGHTH_MIN_MS["medium"])
+    # M7 — NO THREE-LIMB HITS: at most 2 simultaneous gems (2 pads allowed; drop the
+    # 3rd member, keeping snare+kick backbone over an extra pad/cymbal).
+    keep = _enforce_no_three_limbs(keep, bt)
 
     return rebuild(bt, keep)
 
@@ -493,7 +522,8 @@ def reduce_easy(gems: list, ctx: Ctx) -> list:
     # SNARE backbone PRESERVING THE PHASE (option 1): real positions, ≤1/quarter,
     # without snap — keeps off-beat grooves at high tempo.
     snare = {t for t, n, *_ in gems if n == SNARE_NOTE}
-    for t in thin_lane(snare, ctx.tpb):
+    svel = {t: bt[t][SNARE_NOTE][1] for t in snare}
+    for t in thin_lane(snare, ctx.tpb, vel=svel, ctx=ctx):
         keep.add((t, SNARE_NOTE))
 
     # E4 — kick: preserves the original groove, collapsing sub-quarter double-bash
@@ -543,6 +573,81 @@ def _enforce_max_two(keep: set[tuple[int, int]], bt: dict) -> set[tuple[int, int
             chosen.add(KICK_NOTE)          # kick only without a crash (kick+snare OK)
         for n in chosen:
             out.add((t, n))
+    return out
+
+
+# ── Hand velocity + limb count (Hard & Medium) ────────────────────────────────
+
+def _apply_hand_velocity(keep: set[tuple[int, int]], ctx: Ctx,
+                         min_ms: float) -> set[tuple[int, int]]:
+    """HAND-VELOCITY limit: a single hand cannot travel to a DIFFERENT pad faster than
+    `min_ms`. This bites ONLY between two consecutive LONE CYMBAL/TOM pads (one stick
+    moving across the kit) — e.g. a Y on one lane then a B a 16th later, each kept
+    independently by its own lane grid, which together is an unplayable cross. It does
+    NOT touch:
+      • the kick (foot, independent of hand travel);
+      • a 2-pad CHORD (two hands striking together — a chord is an anchor, never split);
+      • a second hand JOINING/leaving an ongoing pad (e.g. {Y}→{R,Y}: the hi-hat hand
+        stays, the snare hand joins — not a cross).
+    On a too-fast single→single cross the later note is dropped, unless it sits on a
+    stronger beat, in which case it replaces the earlier one (`thin_kicks` preference).
+    `min_ms` = the level's playable eighth (EIGHTH_MIN_MS). Returns the filtered `keep`
+    (every kick preserved)."""
+    hand_by_tick: dict[int, set[int]] = defaultdict(set)
+    for (t, n) in keep:
+        if n != KICK_NOTE:
+            hand_by_tick[t].add(n)
+
+    drop_ticks: set[int] = set()
+    last: tuple[int, int] | None = None    # (tick, note) of last kept lone-PAD onset
+    for t in sorted(hand_by_tick):
+        notes = hand_by_tick[t]
+        pads = [n for n in notes if n in PAD_NOTES]
+        # Only a LONE cymbal/tom pad is a single-hand travel candidate. A chord, or any
+        # onset carrying the snare (its own dedicated hand), resets the anchor and is kept.
+        if len(notes) != 1 or len(pads) != 1:
+            last = None
+            continue
+        n = pads[0]
+        if last is None:
+            last = (t, n)
+            continue
+        lt, ln = last
+        if n == ln or ctx.span_ms(lt, t - lt) >= min_ms:
+            last = (t, n)                  # same pad (ostinato) OR hand had time to move
+        elif ctx.is_onbeat(t) and not ctx.is_onbeat(lt):
+            drop_ticks.discard(t)
+            drop_ticks.add(lt)             # too-fast cross → keep the strong beat
+            last = (t, n)
+        else:
+            drop_ticks.add(t)              # hand can't reach in time → drop later cross
+
+    return {(t, nn) for (t, nn) in keep if nn == KICK_NOTE or t not in drop_ticks}
+
+
+def _enforce_no_three_limbs(keep: set[tuple[int, int]], bt: dict) -> set[tuple[int, int]]:
+    """MEDIUM (book): NO THREE-LIMB HITS — at most 2 simultaneous gems (two limbs).
+    Two-pad chords ARE allowed (two hands). When 3+ members stack, drop the KICK
+    (foot) first — the book's "no kick, snare AND crash at the same time" — keeping
+    the hands: snare, then pads. (A bare 2-pad chord, with no kick, stays intact.)"""
+    by_t: dict[int, set[int]] = defaultdict(set)
+    for (t, n) in keep:
+        by_t[t].add(n)
+    out: set[tuple[int, int]] = set()
+    for t, notes in by_t.items():
+        if len(notes) <= 2:
+            out |= {(t, n) for n in notes}
+            continue
+        chosen: list[int] = []
+        if SNARE_NOTE in notes:
+            chosen.append(SNARE_NOTE)
+        for n in sorted(x for x in notes if x in PAD_NOTES):
+            if len(chosen) >= 2:
+                break
+            chosen.append(n)
+        if KICK_NOTE in notes and len(chosen) < 2:
+            chosen.append(KICK_NOTE)
+        out |= {(t, n) for n in chosen}
     return out
 
 

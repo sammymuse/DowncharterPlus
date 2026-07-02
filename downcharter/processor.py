@@ -280,9 +280,14 @@ def _diff_already_charted(events: list[AbsEvent], diff: str) -> bool:
     band (gems + open + force/markers of that difficulty). Used to SKIP regenerating
     a difficulty that the author already charted (option A), avoiding duplicate notes.
     Each difficulty occupies a separate 8-note band (Expert 95-102, Hard 83-90,
-    Medium 71-78, Easy 59-66) so the bands never overlap."""
+    Medium 71-78, Easy 59-66) so the bands never overlap.
+
+    Only a real GEM counts (open at base-1 … Orange at base+4). The force HOPO/strum
+    modifiers (base+5/base+6) are NOT gems: a .chart→.mid conversion can leave stray
+    force markers in the lower-difficulty bands with no notes under them, which used
+    to make us think the difficulty was authored and SKIP generating it."""
     base = EXPERT_BASE + DIFF_OFFSET[diff]
-    lo, hi = base - 1, base + 6      # open (base-1) … force-strum (base+6)
+    lo, hi = base - 1, base + 4      # open (base-1) … Orange fret (base+4)
     for ev in events:
         if (ev.msg.type == "note_on" and ev.msg.velocity > 0
                 and lo <= getattr(ev.msg, "note", -1) <= hi):
@@ -1070,17 +1075,26 @@ def _prepare_chart(path: str, log_fn) -> str | None:
 _BG_EXTS = (".png", ".jpg", ".jpeg")
 
 
+_BG_HIDDEN_STEM = "dc_hidden_bg"   # hidden-background filename stem (see below)
+
+
 def _hide_backgrounds(folder: str, log_fn) -> int:
     """Rename in-game background images (background.png/jpg/jpeg) to
-    background.bak.<ext> so they don't render as the stage background. Reversible
-    by revert_folder. Skips files already hidden. Returns the count hidden."""
+    dc_hidden_bg.<ext> so they don't render as the stage background. Reversible
+    by revert_folder. Skips files already hidden. Returns the count hidden.
+
+    The previous scheme renamed to ``background.bak.<ext>``, but RB3/CH/YARG load
+    backgrounds with a ``background*`` glob — so a name still STARTING with
+    "background" kept rendering. The hidden name must therefore not contain the
+    word "background" at all; revert maps ``dc_hidden_bg.<ext>`` (and the legacy
+    ``background.bak.<ext>``) back to ``background.<ext>``."""
     hidden = 0
     for root, _, files in os.walk(folder):
         for f in files:
             name, ext = os.path.splitext(f)
             if name.lower() == "background" and ext.lower() in _BG_EXTS:
                 src = os.path.join(root, f)
-                dst = os.path.join(root, name + ".bak" + ext)
+                dst = os.path.join(root, _BG_HIDDEN_STEM + ext)
                 try:
                     if os.path.exists(dst):
                         continue                       # already hidden
@@ -1235,8 +1249,10 @@ def revert_folder(folder: str, log_fn) -> None:
     for root, _, files in os.walk(folder):
         for f in files:
             name, ext = os.path.splitext(f)
-            if name.lower() == "background.bak" and ext.lower() in _BG_EXTS:
-                # Restore a hidden in-game background image.
+            if (name.lower() in (_BG_HIDDEN_STEM, "background.bak")
+                    and ext.lower() in _BG_EXTS):
+                # Restore a hidden in-game background image (new dc_hidden_bg.*
+                # scheme + legacy background.bak.* still recognised).
                 backup = os.path.join(root, f)
                 original = os.path.join(root, "background" + ext)
                 try:
