@@ -278,11 +278,13 @@ def build_multi_lipsync(spans_list: list, song_len_s: float, lang: str = "en",
     lead: bytes | None = None
     for i, spans in enumerate(spans_list):
         if spans:
+            # Vary facial_seed per entry so each vocalist blinks/pairs differently
+            seed = (facial_seed + i) if facial_seed is not None else None
             blob = build_song_lipsync(
                 spans, song_len_s, lang,
                 phrase_ends=phrase_ends,
                 vocal_notes=vocal_notes,
-                facial_seed=facial_seed,
+                facial_seed=seed,
             )
             if i == 0:
                 lead = blob   # first vocal track = lead / PART VOCALS

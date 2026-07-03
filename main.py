@@ -851,7 +851,8 @@ class App(tk.Tk):
                                         sng_out = os.path.join(out_base, rel_dir) if rel_dir else out_base
                                     else:
                                         # No out_base: write alongside source, preserving internal structure
-                                        sng_out = os.path.join(os.path.dirname(self._conv_folder), rel_dir) if rel_dir else os.path.dirname(sd)
+                                        # (the song's folder, NOT the parent of conv_folder)
+                                        sng_out = os.path.join(self._conv_folder, rel_dir) if rel_dir else os.path.dirname(sd)
                                 except ValueError:
                                     # Different drives - fall back to just the song folder
                                     sng_out = os.path.dirname(sd)

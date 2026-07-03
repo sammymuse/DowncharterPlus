@@ -49,31 +49,70 @@ def _sanitize_path_component(name: str) -> str:
     return safe if safe else "_"
 
 
+# Reserved Windows filenames (cannot be used as path components).
+# Source: Microsoft documentation — these names are disallowed regardless of extension.
+_RESERVED_NAMES: frozenset[str] = frozenset({
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+})
+
+
 def _sanitize_path(path: str) -> str:
     """Sanitize an entire filesystem path by sanitizing each component.
 
-    Preserves Windows drive letters (e.g., 'Y:') by not sanitizing the first
-    component if it looks like a drive letter.
+    Handles:
+      - Windows drive letters (e.g., 'Y:')
+      - UNC paths (\\server\share) — preserves the leading \\
+      - Reserved Windows names (CON, PRN, AUX, …) — replaced with underscore
     """
     if not path:
         return "."
+
+    # Detect and preserve UNC prefix (\\server\share or \\?\UNC\server\share).
+    # Must check BEFORE the drive-letter regex so `\\server` isn't mis-parsed.
+    unc_prefix = ""
+    rest = path
+    if path.startswith("\\\\?\\UNC\\"):
+        unc_prefix = "\\\\?\\UNC\\"
+        rest = path[len(unc_prefix):]
+    elif path.startswith("\\\\?\\"):
+        unc_prefix = "\\\\?\\"
+        rest = path[len(unc_prefix):]
+    elif path.startswith("\\\\"):
+        unc_prefix = "\\\\"
+        rest = path[2:]
+
     # Handle Windows drive letter prefix (e.g., "Y:" or "Y:/" or "Y:\")
-    drive_match = re.match(r"^([A-Za-z]:)[\\/]?", path)
+    drive_match = re.match(r"^([A-Za-z]:)[\\/]?", rest)
     if drive_match:
         drive = drive_match.group(1)  # e.g., "Y:"
-        rest = path[len(drive):]
-        # Determine which separator to use after drive
-        sep = "\\" if rest.startswith("\\") or (not rest.startswith("/") and "\\" in path) else "/"
+        rest = rest[len(drive):]
     else:
         drive = ""
-        rest = path
-        sep = "\\" if "\\" in path else "/"
+
+    # Determine primary separator to use in the output
+    sep = "\\" if ("\\" in path and not path.startswith("/")) else "/"
 
     # Split remaining path into components, sanitize each, rejoin
     parts = rest.replace("\\", "/").split("/")
-    sanitized = [_sanitize_path_component(p) for p in parts if p]
+    sanitized = []
+    for p in parts:
+        if not p:
+            continue
+        safe = _sanitize_path_component(p)
+        # Reserved name (e.g., a folder called "CON" or "PRN"):
+        # Windows rejects these at the filesystem level regardless of extension.
+        if safe.upper() in _RESERVED_NAMES:
+            safe = "_"
+        sanitized.append(safe)
+
     result = sep.join(sanitized) if sanitized else ""
-    return drive + sep + result if drive else result
+    if drive:
+        return drive + sep + result
+    if unc_prefix:
+        return unc_prefix + result
+    return result
 
 
 MAGIC = b"SNGPKG"

@@ -50,6 +50,7 @@ _dta_shortname = _ps3._dta_shortname
 _sanitize_shortname = _ps3._sanitize_shortname
 _pkg_folder_name = _ps3._pkg_folder_name
 _audio_guided_spans = _ps3._audio_guided_spans
+_extract_spans_from_track = _ps3._extract_spans_from_track
 _charted_instruments = _ps3._charted_instruments
 _find_one = _ps3._find_one
 _find_source_mid = _ps3._find_source_mid
@@ -519,38 +520,47 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
             pass
 
     # 3) MILO: build OUR lipsync milo (.milo_xbox body == .milo_ps3 body).
+    #     Multi-entry for PART VOCALS + HARM1/2/3 — same as the PS3 path.
     try:
-        spans = _audio_guided_spans(out_mid, src_folder)
-        if spans:
-            # Extract phrase_ends and vocal_notes from PART VOCALS for facial animation.
-            phrase_ends_s: list[float] = []
-            vocal_notes: list[tuple[float, int]] = []
-            pv = next((tr for tr in out_mid.tracks
-                       if (tr.name or "").strip().upper() == "PART VOCALS"), None)
-            if pv is not None:
-                tpb = out_mid.ticks_per_beat
-                tempo_map = build_tempo_map(out_mid)
-                abs_pv = to_abs(pv)
-                pe_ticks = _proc._abs_phrase_ends(list(abs_pv))
-                phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
-                                 for t in pe_ticks]
-                for e in abs_pv:
-                    m = e.msg
-                    n = getattr(m, "note", None)
-                    if (m.type == "note_on" and getattr(m, "velocity", 0) > 0
-                            and n is not None and 36 <= n <= 84):
-                        sec = tick_to_ms(e.abs_tick, tempo_map, tpb) / 1000.0
-                        vocal_notes.append((sec, n))
+        vocal_tracks = ["PART VOCALS", "HARM1", "HARM2", "HARM3"]
+        all_spans: list[list] = []
+        for tr_name in vocal_tracks:
+            spans = _extract_spans_from_track(out_mid, tr_name, src_folder)
+            all_spans.append(spans)
+
+        phrase_ends_s: list[float] = []
+        vocal_notes: list[tuple[float, int]] = []
+        pv = next((tr for tr in out_mid.tracks
+                   if (tr.name or "").strip().upper() == "PART VOCALS"), None)
+        if pv is not None:
+            tpb = out_mid.ticks_per_beat
+            tempo_map = build_tempo_map(out_mid)
+            abs_pv = to_abs(pv)
+            pe_ticks = _proc._abs_phrase_ends(list(abs_pv))
+            phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
+                             for t in pe_ticks]
+            for e in abs_pv:
+                m = e.msg
+                n = getattr(m, "note", None)
+                if (m.type == "note_on" and getattr(m, "velocity", 0) > 0
+                        and n is not None and 36 <= n <= 84):
+                    sec = tick_to_ms(e.abs_tick, tempo_map, tpb) / 1000.0
+                    vocal_notes.append((sec, n))
+
+        lipsync_list = _milo.build_multi_lipsync(
+            all_spans, out_mid.length,
+            phrase_ends=phrase_ends_s,
+            vocal_notes=vocal_notes,
+        )
+        if lipsync_list:
             files[f"{base}/gen/{shortname}.milo_xbox"] = \
-                _milo.build_milo_from_spans(
-                    spans, out_mid.length,
-                    phrase_ends=phrase_ends_s,
-                    vocal_notes=vocal_notes,
-                    facial_seed=42,
-                )
-            log(f"    ◇ milo: built from {len(spans)} audio-guided syllable(s)\n", "info")
+                _milo.build_milo(lipsync_list)
+            n_entries = len(lipsync_list)
+            entry_hint = f" ({n_entries} entry)" if n_entries > 1 else ""
+            total_spans = sum(len(s) for s in all_spans if s)
+            log(f"    ◇ milo: built from {total_spans} audio-guided syllable(s)"
+                f"{entry_hint}\n", "info")
         else:
-            # fallback: reuse a source milo (ps3/xbox bodies are identical)
             src_milo = _find_one(src_folder, lambda p: p.lower().endswith((".milo_xbox", ".milo_ps3")))
             if src_milo:
                 with open(src_milo, "rb") as f:
