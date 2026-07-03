@@ -1630,6 +1630,19 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
     walls = sorted(strobe_spans) if strobe_spans else []
     rng = design.rng if design is not None else None
     last: str | None = None
+    pp_style = getattr(design, 'pp_style', 'authored') if design else 'authored'
+    climax_idx = getattr(design, 'climax_idx', None) if design else None
+
+    CLUSTER_PAT = {
+        "conservative": {"calm": [2.0],           "mid": [1.0, 2.0],      "high": [1.0, 1.0, 2.0]},
+        "authored":     {"calm": [1.0, 2.0],     "mid": [0.5, 1.0, 2.0], "high": [0.5, 0.5, 2.0]},
+        "dynamic":      {"calm": [0.5, 2.0],     "mid": [0.5, 0.5, 2.0], "high": [0.5, 0.5, 2.0]},
+    }
+    HOLD_BARS = {
+        "conservative": {"calm": 16, "mid": 12, "high": 10},
+        "authored":     {"calm": 10, "mid": 8,  "high": 6},
+        "dynamic":      {"calm": 6,  "mid": 6,  "high": 6},
+    }
 
     for si, s in enumerate(sections):
         # Pool BY SECTION TYPE (primary); fallback to the genre palette.
@@ -1679,12 +1692,22 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
             # Cluster gap pattern for this tier; inside an audio strobe wall add one
             # extra half-beat flip — but ONLY on bright/aggressive walls (a dark
             # atmospheric wall is held, not flickered).
-            pattern = list(_PP_CLUSTER_PAT[tier])
+            pattern = list(CLUSTER_PAT[pp_style][tier])
             if not demote:
                 for ws, we in walls:
                     if ws <= t < we:
                         pattern = [_PP_BURST_SUBDIV] + pattern
                         break
+
+            # Conservative mode: só bursts em strobe wall ou climax
+            if pp_style == "conservative":
+                is_strobe_wall = any(ws <= t < we for ws, we in walls)
+                is_climax = (climax_idx is not None
+                             and sections[climax_idx].start == t)
+                if not (is_strobe_wall or is_climax):
+                    pattern = [p for p in pattern if p > 0.5]
+                    if not pattern:
+                        pattern = [2.0]
 
             # ── Cluster: first change on the downbeat, the rest stepped by `pattern` ──
             tt = t
@@ -1706,7 +1729,7 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
                     tt += max(1, int(beat * pattern[gi]))
 
             # ── Hold to the next downbeat anchor (whole bars), filter held across it ──
-            hb = _PP_HOLD_BARS[tier]
+            hb = HOLD_BARS[pp_style][tier]
             if design is not None and si == design.climax_idx:
                 hb = max(1, round(hb / CLIMAX_PP_FACTOR))
             kind_coeff = _PP_HOLD_KINDS.get(s.kind, {}).get(tier, 1.0)
@@ -4719,8 +4742,10 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     last_fullband = -10 ** 9
     did_stagedive = False
     _rand = rng if rng is not None else random
+    _directed_cap_tracker: dict[str, int] = {}  # anti-recency per instrument type
     for e in events:
         chosen = None
+        chosen_inst = None
         # Level filter candidates
         candidates = _level_filter(e.cuts, 0)  # min_level=0: only level-0 directed cuts
         if not candidates:
@@ -4729,15 +4754,25 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             g = _guard_directed(cand, e.tick, tpb, inst_onsets)
             if g is None:
                 continue
+            # Anti-recency by instrument type: no single instrument
+            # should claim >30% of directed cuts (prevents D_Vocals* dominance)
+            cand_inst = _DIRECTED_INSTR.get(cand)
+            if cand_inst is not None:
+                total = sum(_directed_cap_tracker.values()) or 1
+                if _directed_cap_tracker.get(cand_inst, 0) / total > 0.30:
+                    continue
             # 42% chance of self-repeat (matching official data)
             if accepted and g == accepted[-1][1] and _rand.random() < 0.42:
                 chosen = g
+                chosen_inst = cand_inst
                 break
             if g in recent_dir and chosen is None:
                 chosen = g           # fallback
+                chosen_inst = cand_inst
                 continue
             if g not in recent_dir:
                 chosen = g
+                chosen_inst = cand_inst
                 break
         if chosen is None:
             continue
@@ -4749,6 +4784,9 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 continue                             # at most one per song
             did_stagedive = True
         accepted.append((e.tick, chosen))
+        if chosen_inst is not None:
+            _directed_cap_tracker[chosen_inst] = \
+                _directed_cap_tracker.get(chosen_inst, 0) + 1
         recent_dir.append(chosen)
         if is_fullband:
             last_fullband = e.tick
@@ -5335,10 +5373,11 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
                    fill_onsets: list[int] | None = None,
                    dbass_onsets: list[int] | None = None,
                    audio_onsets: list[int] | None = None,
-                    energy_env: list[tuple[int, str]] | None = None,
-                    audio_strobe_spans: list[tuple[int, int]] | None = None,
-                    drop_ticks: list[int] | None = None,
-                    band_activity: dict[str, list[int]] | None = None) -> list[AbsEvent]:
+                   energy_env: list[tuple[int, str]] | None = None,
+                   audio_strobe_spans: list[tuple[int, int]] | None = None,
+                   drop_ticks: list[int] | None = None,
+                   band_activity: dict[str, list[int]] | None = None,
+                   pp_style: str = "authored") -> list[AbsEvent]:
     """Generate all the text events of an explicit VENUE, sorted by tick.
     `theme` is the THEMES key (derived from the genre via genre_to_theme).
     `accents` (ticks of the Expert accents) syncs the cuts with the music.
@@ -5352,7 +5391,8 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
         sections = resolve_sections(events_track, song_end, onsets, time_sig_map, tpb)
     # Director pass: decisões song-level (grupos de repetição, âncoras de
     # fronteira, arco, RNG seeded do conteúdo) partilhadas por todos os sistemas.
-    design = plan_venue(sections, onsets, inst_onsets, time_sig_map, tpb, song_end)
+    design = plan_venue(sections, onsets, inst_onsets, time_sig_map, tpb, song_end,
+                        pp_style=pp_style)
     out: list[AbsEvent] = []
     pause_spans = find_pause_spans(onsets, time_sig_map, tpb)
     # Strobe fires on fills/consecutive snares (snare+toms), not on fast cymbals.

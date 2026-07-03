@@ -457,7 +457,9 @@ def select_cut(
         return result
 
     # ── Fallback hierarchy ──
-    for fallback in ["D_Vocals", "D_All", "D_Drums_LT", "D_Gtr"]:
+    # D_Vocals last: it's the most common fallthrough (67% of directed cuts were
+    # D_Vocals*), so demote it to last resort. D_All first: full-band is safest.
+    for fallback in ["D_All", "D_Drums_LT", "D_Gtr", "D_Vocals"]:
         r = _guard_directed(fallback, tick, tpb, inst_onsets)
         if r is not None:
             return r

@@ -268,10 +268,12 @@ class App(tk.Tk):
         self._do_medium      = tk.BooleanVar(value=cfg.get("medium", True))
         self._do_easy        = tk.BooleanVar(value=cfg.get("easy", True))
         self._do_venue       = tk.BooleanVar(value=cfg.get("venue", True))
+        self._do_export_venue = tk.BooleanVar(value=cfg.get("export_venue", False))
         self._do_drum_anim   = tk.BooleanVar(value=cfg.get("drum_anim", True))
         self._do_hide_bg     = tk.BooleanVar(value=cfg.get("hide_bg", False))
         self._do_lipsync     = tk.BooleanVar(value=cfg.get("lipsync", False))      # talkies
         self._do_lipsync_trk = tk.BooleanVar(value=cfg.get("lipsync_track", False))  # LIPSYNC1 viseme track
+        self._pp_style       = tk.StringVar(value=cfg.get("pp_style", "authored"))
         # ── Convert tab (native PS3 package generation) ──
         self._conv_folder = cfg.get("conv_folder", "") or ""
         self._conv_out = cfg.get("conv_out", "") or ""
@@ -281,8 +283,10 @@ class App(tk.Tk):
         self._cancel = threading.Event()
         # Persist whenever a toggle/slider changes
         for var in (self._threshold_ms, self._do_expert_plus, self._do_hard,
-                    self._do_medium, self._do_easy, self._do_venue, self._do_drum_anim,
+                    self._do_medium, self._do_easy, self._do_venue, self._do_export_venue,
+                    self._do_drum_anim,
                     self._do_hide_bg, self._do_lipsync, self._do_lipsync_trk,
+                    self._pp_style,
                     self._conv_pedal, self._do_sng_preserve_dirs):
             var.trace_add("write", lambda *_: self._save_settings())
         self._build()
@@ -380,7 +384,19 @@ class App(tk.Tk):
         tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
         self._lbl("GENERATE VENUE  (camera · lights · post-proc)", p_ctrl).pack(anchor="w", pady=(0, 6))
         CheckTile(p_ctrl, "Venue",   self._do_venue, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        # PP Style selector
+        pp_style_frame = tk.Frame(p_ctrl, bg=BG)
+        tk.Label(pp_style_frame, text="PP:", font=("Segoe UI", 9), bg=BG, fg=FG).pack(side=tk.LEFT, padx=(0, 4))
+        rt_colors = {"conservative": RED, "authored": GREEN, "dynamic": BLUE}
+        for text, value in [("Conservative", "conservative"),
+                             ("Authored", "authored"),
+                             ("Dynamic", "dynamic")]:
+            RadioTile(pp_style_frame, text, self._pp_style, value,
+                      color=rt_colors.get(value, RED), width=130, height=28).pack(side=tk.LEFT, padx=2)
+        pp_style_frame.pack(fill=tk.X, pady=(0, 6))
         CheckTile(p_ctrl, "Drum animations",  self._do_drum_anim, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        CheckTile(p_ctrl, "Export VENUE as _venue.mid",
+                  self._do_export_venue, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
         CheckTile(p_ctrl, "Lipsync  (vocal stem recommended)",
                   self._do_lipsync_trk, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
@@ -465,10 +481,12 @@ class App(tk.Tk):
             "medium":       bool(self._do_medium.get()),
             "easy":         bool(self._do_easy.get()),
             "venue":        bool(self._do_venue.get()),
+            "export_venue": bool(self._do_export_venue.get()),
             "drum_anim":    bool(self._do_drum_anim.get()),
             "hide_bg":      bool(self._do_hide_bg.get()),
             "lipsync":      bool(self._do_lipsync.get()),
             "lipsync_track": bool(self._do_lipsync_trk.get()),
+            "pp_style":      self._pp_style.get(),
             "conv_folder":        self._conv_folder,
             "conv_out":           self._conv_out,
             "conv_pedal":         self._conv_pedal.get(),
@@ -550,6 +568,7 @@ class App(tk.Tk):
         hide_bg = self._do_hide_bg.get()
         lipsync = self._do_lipsync.get()
         lipsync_trk = self._do_lipsync_trk.get()
+        pp_style = self._pp_style.get()
         diffs = [d for d, v in [("hard", self._do_hard),
                                   ("medium", self._do_medium),
                                   ("easy", self._do_easy)] if v.get()]
@@ -576,6 +595,8 @@ class App(tk.Tk):
                 process_folder(self._folder, diffs, xp, ms, self._plog, venue, lipsync_trk,
                                do_hide_bg=hide_bg, do_talkies=lipsync,
                                do_drum_anim=drum_anim,
+                               export_venue=self._do_export_venue.get(),
+                               pp_style=pp_style,
                                cancel=self._cancel,
                                status_fn=lambda t: self._pstatus(f"Processing:  {t}"),
                                done_fn=lambda ok, err, tot: self._pstatus(

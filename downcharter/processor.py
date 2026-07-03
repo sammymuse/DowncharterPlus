@@ -283,6 +283,29 @@ def _gather_lyrics(mid: mido.MidiFile) -> list[int]:
     return sorted(set(ticks))
 
 
+def _gather_lyrics_by_track(mid: mido.MidiFile) -> dict[str, list[int]]:
+    """Return ``{track_name: [lyric_tick, ...]}`` for PART VOCALS and HARM1/2/3.
+
+    Each HARM track carries its own lyrics; this separates them so each can be
+    processed independently for multi-entry LIPSYNC2/3/4 milo entries."""
+    out: dict[str, list[int]] = {}
+    for tr in mid.tracks:
+        nm = tr.name.strip().upper()
+        if "VOCAL" not in nm and not nm.startswith("HARM"):
+            continue
+        ticks: list[int] = []
+        t = 0
+        for m in tr:
+            t += m.time
+            txt = getattr(m, "text", "")
+            if m.type in ("lyrics", "lyric") or (
+                    m.type == "text" and txt and not txt.startswith("[")):
+                ticks.append(t)
+        if ticks:
+            out[nm] = sorted(set(ticks))
+    return out
+
+
 def _build_anim_track(name: str, markers: list[AbsEvent]) -> mido.MidiTrack:
     """Animation track (mood markers only, no gameplay notes) for an ABSENT
     instrument — brings the character to life from the audio/lyrics."""
@@ -443,6 +466,7 @@ def process_midi(
     do_lipsync: bool = False,
     do_talkies: bool = False,
     do_drum_anim: bool = True,
+    pp_style: str = "authored",
 ) -> dict:
     """
     Process a MIDI file:
@@ -792,7 +816,8 @@ def process_midi(
                 inst_onsets=inst_onsets, n_harm=n_harm, fill_onsets=fill_onsets,
                 dbass_onsets=dbass_onsets, audio_onsets=audio_accents,
                 energy_env=energy_env, audio_strobe_spans=audio_strobe,
-                drop_ticks=drop_ticks, band_activity=band_activity)
+                drop_ticks=drop_ticks, band_activity=band_activity,
+                pp_style=pp_style)
             new_mid.tracks.append(build_venue_track(venue_events))
             stats["venue_events"] = len(venue_events)
             stats["venue_theme"] = theme
@@ -1351,6 +1376,8 @@ def process_folder(
     do_hide_bg: bool = False,
     do_talkies: bool = False,
     do_drum_anim: bool = True,
+    export_venue: bool = False,
+    pp_style: str = "authored",
     cancel: object | None = None,
     status_fn: Callable[[str], Any] | None = None,
     done_fn: Callable[[int, int, int], Any] | None = None,
@@ -1404,7 +1431,7 @@ def process_folder(
                 shutil.copy2(path, backup)
             s = process_midi(path, path, diffs_to_gen, do_expert_plus,
                              threshold_ms, do_venue, None, do_lipsync, do_talkies,
-                             do_drum_anim=do_drum_anim)
+                             do_drum_anim=do_drum_anim, pp_style=pp_style)
             modified += 1
             skipped_total += len(s.get("diffs_skipped", []))
             if s.get("venue_skipped"):
@@ -1447,6 +1474,10 @@ def process_folder(
                 log_fn(f"    ✗ lipsync error: {s['lipsync_error']}\n", "err")
             for sk in s.get("diffs_skipped", []):
                 log_fn(f"    ↷ skipped {sk} (already charted)\n", "info")
+            if export_venue:
+                venue_out = export_venue_to_mid(path, None)
+                if venue_out:
+                    log_fn(f"    ◇ venue exported: {os.path.basename(venue_out)}\n", "info")
             # Groove-check warnings are recorded only in the session log file,
             # not shown in the GUI log.
         except Exception as e:
@@ -1510,6 +1541,32 @@ def _write_session_log(folder: str, modified: int, skipped_total: int,
         return path
     except Exception:
         return None
+
+
+def export_venue_to_mid(mid_path: str, dst_path: str | None = None) -> str | None:
+    """Export the VENUE track from a processed .mid as a standalone .mid file.
+
+    Use this to give sceptics a starting point they can edit by hand — parity
+    with the Magma "Export" button.
+
+    Returns the path of the exported file, or None if no VENUE track exists."""
+    import mido as _mido
+    mid = _mido.MidiFile(mid_path)
+    venue_track = None
+    for t in mid.tracks:
+        if t.name.strip().upper() == "VENUE":
+            venue_track = t
+            break
+    if venue_track is None:
+        return None
+
+    out = _mido.MidiFile(ticks_per_beat=mid.ticks_per_beat)
+    out.tracks.append(venue_track)
+    if dst_path is None:
+        base, ext = os.path.splitext(mid_path)
+        dst_path = base + "_venue.mid"
+    out.save(dst_path)
+    return dst_path
 
 
 def revert_folder(folder: str, log_fn,

@@ -62,6 +62,7 @@ class VenueDesign:
     groups: dict[str, SectionGroup]
     group_of: list[str]                    # idx da secção → key do grupo
     anchors: list[int]                     # 1 tick por secção, snapped a downbeat
+    pp_style: str = "authored"             # conservative | authored | dynamic
     first_chorus_idx: int | None = None
     climax_idx: int | None = None          # última ocorrência do chorus repetido
     intensity: list[float] = field(default_factory=list)  # multiplicador por secção
@@ -88,7 +89,8 @@ def _content_seed(sections: list, onsets: list[int], song_end: int,
 
 def plan_venue(sections: list, onsets: list[int],
                inst_onsets: dict[str, list[int]] | None,
-               time_sig_map: list, tpb: int, song_end: int) -> VenueDesign:
+               time_sig_map: list, tpb: int, song_end: int,
+               pp_style: str = "authored") -> VenueDesign:
     """Constrói o VenueDesign: grupos de repetição, âncoras de fronteira,
     arco (1.º chorus / clímax) e RNG seeded. Sem secções → design mínimo no-op."""
     # imports tardios: venue importa venue_director no topo; ao tempo de CHAMADA
@@ -158,6 +160,7 @@ def plan_venue(sections: list, onsets: list[int],
         intensity[climax_idx] = CLIMAX_LIGHT_FACTOR
 
     return VenueDesign(
+        pp_style=pp_style,
         rng=rng, groups=groups, group_of=group_of, anchors=anchors,
         first_chorus_idx=first_chorus_idx, climax_idx=climax_idx,
         intensity=intensity,

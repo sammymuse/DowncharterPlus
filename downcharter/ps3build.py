@@ -200,8 +200,17 @@ def _audio_guided_spans(mid, folder: str) -> list:
     → seconds via the chart's tempo map, and re-derive the per-syllable loudness
     gain from the vocal stem in `folder`. These are the same spans the LIPSYNC1
     keyframes came from, so `milo.build_milo_from_spans` reproduces our lipsync."""
+    return _extract_spans_from_track(mid, "PART VOCALS", folder)
+
+
+def _extract_spans_from_track(mid, track_name: str, folder: str) -> list:
+    """Extract ``[(start_s, end_s, text, gain)]`` from a specific track by name.
+
+    ``track_name`` is matched case-insensitively.  Returns an empty list when the
+    track is not present / has no gems — e.g. a HARM track with lyrics but no
+    charted notes produces no spans and no lipsync entry."""
     idx = next((i for i, t in enumerate(mid.tracks)
-                if (t.name or "").strip().upper() == "PART VOCALS"), None)
+                if (t.name or "").strip().upper() == track_name.strip().upper()), None)
     if idx is None:
         return []
     tempo_map = build_tempo_map(mid)
@@ -822,37 +831,57 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     #    the very spans it came from (charted PART VOCALS talky tubes + lyrics +
     #    vocal-stem gain) and serialise the milo with the validated 30 fps path. A
     #    pre-existing source milo is used only as a fallback for instrumental charts.
+    #
+    #    Phase 3 (HARM2/3 → LIPSYNC2/3): each HARM track has its own lyrics.
+    #    We extract spans from PART VOCALS + HARM1 + HARM2 + HARM3 separately and
+    #    build a multi-entry milo (song.lipsync / .2 / .3) so each harmony has its
+    #    own animated mouth.
     milo_out = os.path.join(gen_dir, f"{shortname}.milo_ps3")
     try:
-        spans = _audio_guided_spans(out_mid, src_folder)
-        if spans:
-            # Extract phrase_ends and vocal_notes from PART VOCALS for facial animation.
-            phrase_ends_s: list[float] = []
-            vocal_notes: list[tuple[float, int]] = []
-            pv = next((tr for tr in out_mid.tracks
-                       if (tr.name or "").strip().upper() == "PART VOCALS"), None)
-            if pv is not None:
-                tpb = out_mid.ticks_per_beat
-                tempo_map = build_tempo_map(out_mid)
-                abs_pv = to_abs(pv)
-                pe_ticks = _proc._abs_phrase_ends(list(abs_pv))
-                phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
-                                 for t in pe_ticks]
-                for e in abs_pv:
-                    m = e.msg
-                    n = getattr(m, "note", None)
-                    if (m.type == "note_on" and getattr(m, "velocity", 0) > 0
-                            and n is not None and 36 <= n <= 84):
-                        sec = tick_to_ms(e.abs_tick, tempo_map, tpb) / 1000.0
-                        vocal_notes.append((sec, n))
+        # Extract phrase_ends and vocal_notes from PART VOCALS for facial animation.
+        phrase_ends_s: list[float] = []
+        vocal_notes: list[tuple[float, int]] = []
+        pv = next((tr for tr in out_mid.tracks
+                   if (tr.name or "").strip().upper() == "PART VOCALS"), None)
+        if pv is not None:
+            tpb = out_mid.ticks_per_beat
+            tempo_map = build_tempo_map(out_mid)
+            abs_pv = to_abs(pv)
+            pe_ticks = _proc._abs_phrase_ends(list(abs_pv))
+            phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
+                             for t in pe_ticks]
+            for e in abs_pv:
+                m = e.msg
+                n = getattr(m, "note", None)
+                if (m.type == "note_on" and getattr(m, "velocity", 0) > 0
+                        and n is not None and 36 <= n <= 84):
+                    sec = tick_to_ms(e.abs_tick, tempo_map, tpb) / 1000.0
+                    vocal_notes.append((sec, n))
+
+        # ── Extract spans from each vocal track ──────────────────────────
+        # PART VOCALS → LIPSYNC1, HARM1 → LIPSYNC2, HARM2 → LIPSYNC3, HARM3 → LIPSYNC4
+        vocal_tracks = ["PART VOCALS", "HARM1", "HARM2", "HARM3"]
+        all_spans: list[list] = []
+        for tr_name in vocal_tracks:
+            spans = _extract_spans_from_track(out_mid, tr_name, src_folder)
+            all_spans.append(spans)
+
+        # Build multi-entry milo if any harmonies have lyrics; single-entry fallback.
+        lipsync_list = _milo.build_multi_lipsync(
+            all_spans, out_mid.length,
+            phrase_ends=phrase_ends_s,
+            vocal_notes=vocal_notes,
+            facial_seed=42,
+        )
+
+        if lipsync_list:
             with open(milo_out, "wb") as f:
-                f.write(_milo.build_milo_from_spans(
-                    spans, out_mid.length,
-                    phrase_ends=phrase_ends_s,
-                    vocal_notes=vocal_notes,
-                    facial_seed=42,
-                ))
-            log(f"    ◇ milo: built from {len(spans)} audio-guided syllable(s)\n", "info")
+                f.write(_milo.build_milo(lipsync_list))
+            n_entries = len(lipsync_list)
+            entry_hint = f" ({n_entries} entry)" if n_entries > 1 else ""
+            total_spans = sum(len(s) for s in all_spans if s)
+            log(f"    ◇ milo: built from {total_spans} audio-guided syllable(s)"
+                f"{entry_hint}\n", "info")
         elif milo_path:
             shutil.copy2(milo_path, milo_out)
             log(f"    ◇ milo: no charted vocals — reused source milo\n", "info")

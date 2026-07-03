@@ -46,13 +46,15 @@ _BARRIER = b"\xad\xde\xad\xde"
 _MILO_MAGIC = 0xCABEDEAF
 _MILO_HEADER_SIZE = 0x810
 
-# The MagmaLipsync1 ObjectDir header, from milo version (28) up to — but not
-# including — the first ADDEADDE barrier of the files section. Constant for
-# every single-`song.lipsync` milo; copied verbatim (byte-verified) from the
-# Onyx-built milos. Contains: ver 28, "ObjectDir", name "lipsync", U1=4,
-# U2=0x15, entry ("CharLipSync","song.lipsync"), U3=0x1B, U4=2, empty subname,
-# the 7 dummy matrices, and the trailing dir bookkeeping + 13 unknown bytes.
-_DIR_PREFIX = bytes.fromhex(
+# The MagmaLipsync1 ObjectDir header tail (U3, U4, empty subname, 7 dummy
+# matrices, trailing bookkeeping). Extracted byte-by-byte from the Onyx-built
+# milo blob at offset 71 (after the first entry). Constant regardless of how
+# many CharLipSync entries are listed — only U1 + U2 + the entry list change.
+#
+# We assemble the full header for 1 entry, then slice off the tail (offset 71+)
+# so the hex string is written once and sliced, avoiding subtle string-pasting
+# length bugs.
+_FULL_DIR_SINGLE = bytes.fromhex(
     "0000001c000000094f626a656374446972000000076c697073796e63000000040000001500000001"
     "0000000b436861724c697053796e630000000c736f6e672e6c697073796e630000001b0000000200"
     "0000000000000000000000000000073f3504f3bf3504f3000000003f13cd3a3f13cd3abf13cd3a3e"
@@ -66,6 +68,46 @@ _DIR_PREFIX = bytes.fromhex(
     "8000000000000000000000000000003f800000000000004440000000000000000000000100000000"
     "00000000000000000000000000000000000000000000"
 )
+_DIR_TAIL = _FULL_DIR_SINGLE[71:]  # U3 + U4 + subname + matrices + trailing
+
+
+def _build_dir_prefix(entry_names: list[str]) -> bytes:
+    """Build the ObjectDir header bytes for N `entry_names` (e.g.
+    ``["song.lipsync", "song.lipsync.2", "song.lipsync.3"]``).
+
+    Structure:
+        u32 version = 28
+        u32 type_name_len + "ObjectDir"
+        u32 name_len + "lipsync"
+        u32 U1 = 4
+        u32 U2 = 21
+        u32 entry_count (= N)
+        for each entry: u32 type_len + "CharLipSync" + u32 name_len + name
+        _DIR_TAIL (= U3, U4, subname, 7 matrices, trailing)
+    """
+    out = bytearray()
+    out += struct.pack("<I", 28)               # version
+    out += struct.pack("<I", 9)                # type name length
+    out += b"ObjectDir"                        # type name
+    out += struct.pack("<I", 7)                # name length
+    out += b"lipsync"                          # name
+    out += struct.pack("<I", 4)                # U1
+    out += struct.pack("<I", 21)               # U2 (0x15)
+    out += struct.pack("<I", len(entry_names))  # entry_count
+
+    for name in entry_names:
+        out += struct.pack("<I", 11)           # type length
+        out += b"CharLipSync"                  # type
+        out += struct.pack("<I", len(name))    # name length
+        out += name.encode("ascii")            # name
+
+    out += _DIR_TAIL
+    return bytes(out)
+
+
+# Backward-compatible singleton: for single-entry callers the dir prefix is
+# byte-identical to the old hardcoded constant (verified below).
+_DIR_PREFIX = _build_dir_prefix(["song.lipsync"])
 
 
 def add_milo_header(body: bytes) -> bytes:
@@ -80,11 +122,28 @@ def add_milo_header(body: bytes) -> bytes:
     return bytes(out) + body
 
 
-def build_milo(lipsync_bytes: bytes) -> bytes:
-    """Assemble a complete .milo (== .milo_ps3 == .milo_xbox body) carrying one
-    `song.lipsync` (CharLipSync). The body is platform-independent."""
-    body = _DIR_PREFIX + _BARRIER + lipsync_bytes + _BARRIER
-    return add_milo_header(body)
+def build_milo(lipsync_or_list: bytes | list[bytes]) -> bytes:
+    """Assemble a complete .milo (== .milo_ps3 == .milo_xbox body).
+
+    Accepts a single ``bytes`` (backward-compat: one ``song.lipsync`` entry) or a
+    ``list[bytes]`` (multi-entry: ``song.lipsync``, ``song.lipsync.2``, …).
+
+    The body is platform-independent (PS3 and Xbox share the same milo body)."""
+    if isinstance(lipsync_or_list, bytes):
+        lipsync_list: list[bytes] = [lipsync_or_list]
+    else:
+        lipsync_list = lipsync_or_list
+
+    names = ["song.lipsync"]
+    for i in range(2, len(lipsync_list) + 1):
+        names.append(f"song.lipsync.{i}")
+
+    body = bytearray()
+    body += _build_dir_prefix(names)
+    for lb in lipsync_list:
+        body += _BARRIER + lb
+    body += _BARRIER
+    return add_milo_header(bytes(body))
 
 
 def _serialize_lipsync(frames: dict[int, dict], n_frames: int) -> bytes:
@@ -177,13 +236,49 @@ def build_milo_from_spans(spans, song_len_s: float, lang: str = "en",
     ))
 
 
+def build_multi_lipsync(spans_list: list, song_len_s: float, lang: str = "en",
+                         phrase_ends: list[float] | None = None,
+                         vocal_notes: list[tuple[float, int]] | None = None,
+                         facial_seed: int | None = None) -> list[bytes]:
+    """Build N lipsync byte blobs from N span lists (lead + HARM1 + HARM2 + HARM3).
+
+    Each list may be empty (a track with no lyrics produces no lipsync entry).
+    Returns only the non-empty entries."""
+    out: list[bytes] = []
+    for spans in spans_list:
+        if spans:
+            out.append(build_song_lipsync(
+                spans, song_len_s, lang,
+                phrase_ends=phrase_ends,
+                vocal_notes=vocal_notes,
+                facial_seed=facial_seed,
+            ))
+    return out
+
+
 # ───────────────────────────── validation reader ─────────────────────────────
-def parse_song_lipsync(milo_bytes: bytes) -> dict:
-    """Parse a .milo back to {visemes, n_frames, lipsync_bytes, frames} — a small
-    reader for the round-trip validation gate (diff our output vs. a real milo)."""
+def parse_song_lipsync(milo_bytes: bytes, index: int = 0) -> dict:
+    """Parse the Nth lipsync entry from a .milo back to
+    {visemes, n_frames, lipsync_bytes, frames}.
+
+    ``index=0`` reads the first entry (``song.lipsync``); ``index=1`` reads
+    ``song.lipsync.2``, etc.  Used for round-trip validation gate."""
     body = milo_bytes[_MILO_HEADER_SIZE:]
-    i1 = body.find(_BARRIER)
-    i2 = body.find(_BARRIER, i1 + 4)
+    # Collect all ADDEADDE barrier positions
+    barriers: list[int] = []
+    pos = 0
+    while True:
+        p = body.find(_BARRIER, pos)
+        if p == -1:
+            break
+        barriers.append(p)
+        pos = p + 4
+    if index * 2 + 1 >= len(barriers):
+        raise ValueError(
+            f"lipsync entry {index} not found "
+            f"(milo has {len(barriers) // 2} entries)")
+    i1 = barriers[index * 2]
+    i2 = barriers[index * 2 + 1]
     lip = body[i1 + 4:i2]
     o = 0
 
