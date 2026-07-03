@@ -18,6 +18,7 @@ variants, no MIDI validation, no milo — YARG/CH read what is already there.
 """
 from __future__ import annotations
 import os
+import re
 import struct
 
 from . import ps3build as _ps3
@@ -25,6 +26,55 @@ from . import ps3build as _ps3
 _parse_song_ini = _ps3._parse_song_ini
 _find_one = _ps3._find_one
 _sanitize_shortname = _ps3._sanitize_shortname
+
+# Windows-invalid filename characters + trailing space/dot
+_INVALID_PATH_CHARS = re.compile("[<>:\"|?*]+")
+_TRAILING_SPACE_DOT = re.compile(r"[. ]+$")
+
+
+def _sanitize_path_component(name: str) -> str:
+    """Sanitize a single path component (folder or filename) for Windows.
+
+    - Removes/replaces characters that are invalid in Windows filenames
+    - Strips trailing spaces and dots
+    - Returns a safe string that can be used in a filesystem path
+    """
+    if not name:
+        return "_"
+    # Replace invalid chars with underscore
+    safe = _INVALID_PATH_CHARS.sub("_", name)
+    # Remove trailing spaces and dots
+    safe = _TRAILING_SPACE_DOT.sub("", safe)
+    # If nothing remains, use a placeholder
+    return safe if safe else "_"
+
+
+def _sanitize_path(path: str) -> str:
+    """Sanitize an entire filesystem path by sanitizing each component.
+
+    Preserves Windows drive letters (e.g., 'Y:') by not sanitizing the first
+    component if it looks like a drive letter.
+    """
+    if not path:
+        return "."
+    # Handle Windows drive letter prefix (e.g., "Y:" or "Y:/" or "Y:\")
+    drive_match = re.match(r"^([A-Za-z]:)[\\/]?", path)
+    if drive_match:
+        drive = drive_match.group(1)  # e.g., "Y:"
+        rest = path[len(drive):]
+        # Determine which separator to use after drive
+        sep = "\\" if rest.startswith("\\") or (not rest.startswith("/") and "\\" in path) else "/"
+    else:
+        drive = ""
+        rest = path
+        sep = "\\" if "\\" in path else "/"
+
+    # Split remaining path into components, sanitize each, rejoin
+    parts = rest.replace("\\", "/").split("/")
+    sanitized = [_sanitize_path_component(p) for p in parts if p]
+    result = sep.join(sanitized) if sanitized else ""
+    return drive + sep + result if drive else result
+
 
 MAGIC = b"SNGPKG"
 VERSION = 1
@@ -159,10 +209,16 @@ def build_sng_song(src_folder: str, log_fn=None, out_base: str | None = None) ->
     ini_path = _find_one(src_folder, lambda p: os.path.basename(p).lower() == "song.ini")
 
     # Name the .sng exactly like the source folder (matches the original).
-    folder_name = os.path.basename(os.path.abspath(src_folder)) or "song"
+    # Sanitize folder_name to remove invalid Windows filename characters.
+    raw_folder_name = os.path.basename(os.path.abspath(src_folder)) or "song"
+    folder_name = _sanitize_path_component(raw_folder_name)
 
-    base_dir = os.path.abspath(out_base) if out_base \
-        else os.path.dirname(os.path.abspath(src_folder))
+    if out_base:
+        # Sanitize each component of the output path
+        out_base = _sanitize_path(out_base)
+        base_dir = os.path.abspath(out_base)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(src_folder))
     out_sng = os.path.join(base_dir, f"{folder_name}.sng")
     os.makedirs(base_dir, exist_ok=True)
     log(f"  → {os.path.basename(out_sng)}\n", "info")

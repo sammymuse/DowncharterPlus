@@ -816,9 +816,11 @@ class App(tk.Tk):
             try:
                 # The source may be a single song folder OR a parent holding many
                 # song subfolders — convert every song under it. A "song folder" is
-                # the directory of each notes.mid (same rule the Process tab uses).
-                song_dirs = sorted({os.path.dirname(m)
-                                    for m in find_midis(self._conv_folder)})
+                # the directory of each notes.mid or notes.chart (same rule the Process tab uses).
+                # Combine both to catch songs that have only .chart files.
+                mid_dirs = {os.path.dirname(m) for m in find_midis(self._conv_folder)}
+                chart_dirs = {os.path.dirname(c) for c in find_charts(self._conv_folder)}
+                song_dirs = sorted(mid_dirs | chart_dirs)
                 if not song_dirs:
                     song_dirs = [self._conv_folder]
                 self._clog(f"  Songs: {len(song_dirs)}\n\n")
@@ -838,21 +840,18 @@ class App(tk.Tk):
                         self._clog(f"  ▸ SNG: {_label(sd)}\n", "head")
                         try:
                             if self._do_sng_preserve_dirs.get():
-                                # Preserve FULL folder structure from conv_folder parent to the song.
-                                # "E:\Games\Songs\Chorus\SongA" with conv_folder="E:\Games\Songs\Chorus"
-                                # and out_base="Y:\Output" -> "Y:\Output\Chorus\SongA.sng"
+                                # Preserve folder structure from conv_folder to the song.
+                                # E.g., conv_folder="E:\Songs\Chorus", song at "E:\Songs\Chorus\Sub\SongA"
+                                # with out_base="Y:\Output\Chorus" -> "Y:\Output\Chorus\Sub\SongA.sng"
                                 try:
-                                    # Use parent of conv_folder as base so conv_folder itself
-                                    # and ALL parent folders are preserved in the output
-                                    conv_parent = os.path.dirname(self._conv_folder)
-                                    rel = os.path.relpath(sd, conv_parent)
+                                    # relpath from conv_folder (NOT its parent) to preserve internal structure
+                                    rel = os.path.relpath(sd, self._conv_folder)
                                     rel_dir = os.path.dirname(rel)
                                     if out_base:
                                         sng_out = os.path.join(out_base, rel_dir) if rel_dir else out_base
                                     else:
-                                        # No out_base set: use rel_dir as the base (relative to conv_parent)
-                                        # This preserves the full structure relative to where we started
-                                        sng_out = rel_dir if rel_dir else os.path.dirname(sd)
+                                        # No out_base: write alongside source, preserving internal structure
+                                        sng_out = os.path.join(os.path.dirname(self._conv_folder), rel_dir) if rel_dir else os.path.dirname(sd)
                                 except ValueError:
                                     # Different drives - fall back to just the song folder
                                     sng_out = os.path.dirname(sd)
