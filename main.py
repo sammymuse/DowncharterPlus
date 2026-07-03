@@ -330,14 +330,18 @@ class App(tk.Tk):
 
         # ── Tab container (only one child shown at a time) ──
         container = tk.Frame(self, bg=BG)
-        container.pack(fill="both")
+        container.pack(fill="both", expand=True)
 
-        body = tk.Frame(container, bg=BG, padx=22, pady=16)
+        # ── Process tab ──────────────────────────────────────────────────────
+        body = tk.Frame(container, bg=BG)
         self._tabs["process"] = body
 
-        # ── Folder ──
-        self._lbl("SONGS FOLDER", body).pack(anchor="w")
-        fr = tk.Frame(body, bg=BG)
+        # Controls region (top, fixed height)
+        p_ctrl = tk.Frame(body, bg=BG, padx=22, pady=16)
+        p_ctrl.pack(fill="x")
+
+        self._lbl("SONGS FOLDER", p_ctrl).pack(anchor="w")
+        fr = tk.Frame(p_ctrl, bg=BG)
         fr.pack(fill="x", pady=(5, 14))
         self._folder_lbl = tk.Label(fr, text="(none selected)",
                                     font=(MONO, 9), fg=FG3, bg=SURF2,
@@ -346,22 +350,18 @@ class App(tk.Tk):
         StyledButton(fr, "  OPEN…", self._pick_folder, width=90, height=30).pack(
             side="right", padx=(8, 0))
 
-        # ── Difficulties ──
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
-        self._lbl("GENERATE DIFFICULTIES  (Guitar · Bass · Keys · Drums)", body).pack(anchor="w", pady=(0, 6))
-
-        diff_row = tk.Frame(body, bg=BG)
+        tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
+        self._lbl("GENERATE DIFFICULTIES  (Guitar · Bass · Keys · Drums)", p_ctrl).pack(anchor="w", pady=(0, 6))
+        diff_row = tk.Frame(p_ctrl, bg=BG)
         diff_row.pack(fill="x", pady=(0, 4))
         CheckTile(diff_row, "Hard",   self._do_hard,   color=YELLOW, width=100, height=28).pack(side="left", padx=(0, 8))
         CheckTile(diff_row, "Medium", self._do_medium, color=BLUE,   width=110, height=28).pack(side="left", padx=(0, 8))
         CheckTile(diff_row, "Easy",   self._do_easy,   color=GREEN,  width=100, height=28).pack(side="left")
 
-        # ── Expert+ ──
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
-        CheckTile(body, "Expert+",
+        tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
+        CheckTile(p_ctrl, "Expert+",
                   self._do_expert_plus, color=RED, width=300, height=28).pack(anchor="w")
-
-        thr_row = tk.Frame(body, bg=BG)
+        thr_row = tk.Frame(p_ctrl, bg=BG)
         thr_row.pack(fill="x", pady=(4, 2))
         self._nps_lbl = tk.Label(thr_row, text="8.0 notes/sec",
                                  font=(MONO, 13, "bold"), fg=FG, bg=BG, width=16, anchor="w")
@@ -369,46 +369,33 @@ class App(tk.Tk):
         self._bpm_lbl = tk.Label(thr_row, text="= 240 BPM 16ths",
                                  font=(MONO, 9), fg=FG2, bg=BG)
         self._bpm_lbl.pack(side="left", padx=(4, 0))
-
-        tk.Scale(body, variable=self._threshold_ms, from_=50, to=250, resolution=5,
+        tk.Scale(p_ctrl, variable=self._threshold_ms, from_=50, to=250, resolution=5,
                  orient="horizontal", showvalue=False,
                  bg=BG, fg=FG2, troughcolor=BORDER2, activebackground=RED,
                  highlightthickness=0, bd=0, sliderrelief="flat",
                  command=self._on_slider).pack(fill="x", pady=(2, 4))
-
-        tk.Label(body, text="Doubles preserved  ·  3+ fast kicks → alternating = Expert+",
+        tk.Label(p_ctrl, text="Doubles preserved  ·  3+ fast kicks → alternating = Expert+",
                  font=(MONO, 8), fg=FG3, bg=BG, anchor="w").pack(anchor="w", pady=(0, 10))
 
-        # ── Venue ──
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
-        self._lbl("GENERATE VENUE  (camera · lights · post-proc)", body).pack(anchor="w", pady=(0, 6))
-        CheckTile(body, "Venue",
-                  self._do_venue, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-        # Drummer limb animations (PART DRUMS 24-51) authored from the Expert gems;
-        # without them the drummer stays idle in-game. On by default.
-        CheckTile(body, "Drum animations",
-                  self._do_drum_anim, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-        # LIPSYNC1 viseme track from lyrics (audio-guided keyframes). Independent of
-        # the talkies toggle below — generates the mouth animation track only.
-        CheckTile(body, "Lipsync  (vocal stem recommended)",
+        tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
+        self._lbl("GENERATE VENUE  (camera · lights · post-proc)", p_ctrl).pack(anchor="w", pady=(0, 6))
+        CheckTile(p_ctrl, "Venue",   self._do_venue, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        CheckTile(p_ctrl, "Drum animations",  self._do_drum_anim, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        CheckTile(p_ctrl, "Lipsync  (vocal stem recommended)",
                   self._do_lipsync_trk, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-        # ── Talkies ──
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
-        self._lbl("GENERATE TALKIES  (vocal stem recommended)", body).pack(anchor="w", pady=(0, 6))
-        CheckTile(body, "Generate talkies from lyrics",
+
+        tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
+        self._lbl("GENERATE TALKIES  (vocal stem recommended)", p_ctrl).pack(anchor="w", pady=(0, 6))
+        CheckTile(p_ctrl, "Generate talkies from lyrics",
                   self._do_lipsync, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
-        # ── Extras ──
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
-        self._lbl("EXTRAS", body).pack(anchor="w", pady=(0, 6))
-        # Hides background images in-game by renaming background.png/jpg →
-        # background.bak.png/jpg (revert restores them).
-        CheckTile(body, "Hide in-game background (image only)",
+        tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
+        self._lbl("EXTRAS", p_ctrl).pack(anchor="w", pady=(0, 6))
+        CheckTile(p_ctrl, "Hide in-game background (image only)",
                   self._do_hide_bg, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
-        # ── Buttons ──
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 12))
-        btn_row = tk.Frame(body, bg=BG)
+        tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(0, 12))
+        btn_row = tk.Frame(p_ctrl, bg=BG)
         btn_row.pack(fill="x", pady=(0, 14))
         self._btn_conv = StyledButton(btn_row, "⬡  PROCESS FOLDER",
                                       self._run_convert, accent=True, width=210, height=40)
@@ -420,32 +407,43 @@ class App(tk.Tk):
         self._btn_rev.set_enabled(False)
         self._btn_cancel = StyledButton(btn_row, "✕  CANCEL",
                                         self._cancel_op, danger=True, width=120, height=40)
-        # hidden until processing starts
+
+        # Process log + status
+        self._build_tab_log(body, "process")
 
         # ── Convert tab ──
-        conv = tk.Frame(container, bg=BG, padx=22, pady=16)
+        conv = tk.Frame(container, bg=BG)
         self._tabs["convert"] = conv
         self._build_convert_tab(conv)
 
         # Show the default tab
         self._show_tab("process")
 
-        # ── Log ──
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
-        lf = tk.Frame(self, bg=BG, padx=22, pady=12)
+    def _build_tab_log(self, parent: tk.Frame, which: str):
+        """Add a log box + status bar inside `parent` (a tab frame).
+        `which` is \"process\" or \"convert\" — selects `self._*_log` / `self._*_status`."""
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x")
+        lf = tk.Frame(parent, bg=BG, padx=22, pady=12)
         lf.pack(fill="both", expand=True)
-        self._log_box = tk.Text(lf, height=10, font=(MONO, 9),
-                                bg=SURFACE, fg=FG2, insertbackground=FG,
-                                relief="flat", bd=8, state="disabled", wrap="word",
-                                selectbackground=BORDER2)
-        self._log_box.pack(fill="both", expand=True)
-        self._log_box.tag_config("ok",   foreground=GREEN)
-        self._log_box.tag_config("err",  foreground=RED)
-        self._log_box.tag_config("warn", foreground=YELLOW)
-        self._log_box.tag_config("info", foreground=FG)
-        self._log_box.tag_config("head", foreground=FG, font=(MONO, 9, "bold"))
+        log_box = tk.Text(lf, height=8, font=(MONO, 9),
+                          bg=SURFACE, fg=FG2, insertbackground=FG,
+                          relief="flat", bd=8, state="disabled", wrap="word",
+                          selectbackground=BORDER2)
+        log_box.pack(fill="both", expand=True)
+        for tag, fg in (("ok", GREEN), ("err", RED), ("warn", YELLOW),
+                        ("info", FG), ("head", FG)):
+            log_box.tag_config(tag, foreground=fg,
+                               font=(MONO, 9, "bold") if tag == "head" else (MONO, 9))
+        setattr(self, f"_{which}_log", log_box)
 
-        self._log("Downcharter+ — ready.\n\n", "info")
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x")
+        sf = tk.Frame(parent, bg=SURFACE, padx=22)
+        sf.pack(fill="x", pady=3)
+        sv = tk.StringVar(value="")
+        setattr(self, f"_{which}_status", sv)
+        tk.Label(sf, textvariable=sv,
+                 font=(MONO, 9, "bold"), fg=RED, bg=SURFACE,
+                 anchor="w").pack(side="left", fill="x", expand=True)
 
     def _settings_path(self):
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
@@ -541,7 +539,7 @@ class App(tk.Tk):
         n_mid = len(find_midis(folder))
         n_chart = len(find_charts(folder))
         extra = f" (+{n_chart} .chart)" if n_chart else ""
-        self._log(f"Folder: {folder}\n  {n_mid} file(s){extra}\n\n", "info")
+        self._plog(f"Folder: {folder}\n  {n_mid} file(s){extra}\n\n", "info")
 
     def _run_convert(self):
         if not self._folder: return
@@ -557,32 +555,43 @@ class App(tk.Tk):
                                   ("easy", self._do_easy)] if v.get()]
         if (not xp and not diffs and not venue and not lipsync
                 and not lipsync_trk and not hide_bg and not drum_anim):
-            self._log("⚠  Nothing selected.\n", "warn"); return
+            self._plog("⚠  Nothing selected.\n", "warn"); return
 
-        self._log("── PROCESS ──────────────────────────────\n", "head")
-        if xp:    self._log(f"  Expert+: {1000/ms:.1f} nps\n")
-        if diffs: self._log(f"  Diffs: {', '.join(diffs)}\n")
-        if venue: self._log("  Venue: yes (theme from genre)\n")
-        if drum_anim: self._log("  Drum animations: yes (drummer limbs)\n")
-        if hide_bg: self._log("  Hide background: yes (background.png/jpg → .bak)\n")
-        if lipsync_trk: self._log("  Lipsync: yes (LIPSYNC1 viseme track from lyrics)\n")
-        if lipsync: self._log("  Talkies: yes (talky vocals charted from lyrics)\n")
-        self._log("\n")
+        self._plog("── PROCESS ──────────────────────────────\n", "head")
+        if xp:    self._plog(f"  Expert+: {1000/ms:.1f} nps\n")
+        if diffs: self._plog(f"  Diffs: {', '.join(diffs)}\n")
+        if venue: self._plog("  Venue: yes (theme from genre)\n")
+        if drum_anim: self._plog("  Drum animations: yes (drummer limbs)\n")
+        if hide_bg: self._plog("  Hide background: yes (background.png/jpg → .bak)\n")
+        if lipsync_trk: self._plog("  Lipsync: yes (LIPSYNC1 viseme track from lyrics)\n")
+        if lipsync: self._plog("  Talkies: yes (talky vocals charted from lyrics)\n")
+        self._plog("\n")
         self._btn_conv.set_enabled(False); self._btn_rev.set_enabled(False)
         self._cancel.clear()
         self._btn_cancel.pack(side="right")
         self._btn_cancel.set_enabled(True)
 
         def task():
-            process_folder(self._folder, diffs, xp, ms, self._log, venue, lipsync_trk,
-                           do_hide_bg=hide_bg, do_talkies=lipsync,
-                           do_drum_anim=drum_anim,
-                           cancel=self._cancel)
-            self.after(0, lambda: self._btn_conv.set_enabled(True))
-            self.after(0, lambda: self._btn_rev.set_enabled(True))
-            self.after(0, lambda: self._btn_cancel.pack_forget())
-            self.after(0, self._cancel.clear)
-            self._log("\n")
+            try:
+                process_folder(self._folder, diffs, xp, ms, self._plog, venue, lipsync_trk,
+                               do_hide_bg=hide_bg, do_talkies=lipsync,
+                               do_drum_anim=drum_anim,
+                               cancel=self._cancel,
+                               status_fn=lambda t: self._pstatus(f"Processing:  {t}"),
+                               done_fn=lambda ok, err, tot: self._pstatus(
+                                   f"Processed:  {ok}/{tot}" +
+                                   (f"  ({err} errored)" if err else "")))
+            except Exception as e:
+                self._plog(f"  ✗ Fatal: {e}\n", "err")
+                import traceback
+                self._plog(traceback.format_exc(), "err")
+            finally:
+                # self._status("")  # keep last status visible until next operation
+                self.after(0, lambda: self._btn_conv.set_enabled(True))
+                self.after(0, lambda: self._btn_rev.set_enabled(True))
+                self.after(0, lambda: self._btn_cancel.pack_forget())
+                self.after(0, self._cancel.clear)
+                self._plog("\n")
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -590,29 +599,39 @@ class App(tk.Tk):
         """Cancel the current process or revert operation."""
         self._cancel.set()
         self._btn_cancel.pack_forget()
-        self._log("\n  ⚡ Cancelling… (will stop after the current song)\n", "warn")
+        self._plog("\n  ⚡ Cancelling… (will stop after the current song)\n", "warn")
 
     def _cancel_conv(self):
         """Cancel the current convert operation."""
         self._cancel.set()
         self._btn_cancel_conv.pack_forget()
-        self._log("\n  ⚡ Cancelling… (will stop after the current song)\n", "warn")
+        self._clog("\n  ⚡ Cancelling… (will stop after the current song)\n", "warn")
 
     def _run_revert(self):
         if not self._folder: return
-        self._log("── REVERT ───────────────────────────────\n", "head")
+        self._plog("── REVERT ───────────────────────────────\n", "head")
         self._btn_conv.set_enabled(False); self._btn_rev.set_enabled(False)
         self._cancel.clear()
         self._btn_cancel.pack(side="right")
         self._btn_cancel.set_enabled(True)
 
         def task():
-            revert_folder(self._folder, self._log, cancel=self._cancel)
-            self.after(0, lambda: self._btn_conv.set_enabled(True))
-            self.after(0, lambda: self._btn_rev.set_enabled(True))
-            self.after(0, lambda: self._btn_cancel.pack_forget())
-            self.after(0, self._cancel.clear)
-            self._log("\n")
+            try:
+                revert_folder(self._folder, self._plog, cancel=self._cancel,
+                              status_fn=lambda t: self._pstatus(f"Reverting:  {t}"),
+                              done_fn=lambda n: self._pstatus(
+                                  f"Reverted:  {n} file(s)"))
+            except Exception as e:
+                self._plog(f"  ✗ Fatal: {e}\n", "err")
+                import traceback
+                self._plog(traceback.format_exc(), "err")
+            finally:
+                # self._status("")  # keep last status visible until next operation
+                self.after(0, lambda: self._btn_conv.set_enabled(True))
+                self.after(0, lambda: self._btn_rev.set_enabled(True))
+                self.after(0, lambda: self._btn_cancel.pack_forget())
+                self.after(0, self._cancel.clear)
+                self._plog("\n")
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -628,8 +647,12 @@ class App(tk.Tk):
 
     # ── Convert tab ────────────────────────────────────────────────────────
     def _build_convert_tab(self, body):
-        self._lbl("SOURCE SONG FOLDER", body).pack(anchor="w")
-        fr = tk.Frame(body, bg=BG)
+        # Controls region (top, fixed height)
+        c_ctrl = tk.Frame(body, bg=BG, padx=22, pady=16)
+        c_ctrl.pack(fill="x")
+
+        self._lbl("SOURCE SONG FOLDER", c_ctrl).pack(anchor="w")
+        fr = tk.Frame(c_ctrl, bg=BG)
         fr.pack(fill="x", pady=(5, 14))
         self._conv_folder_lbl = tk.Label(fr, text="(none selected)",
                                          font=(MONO, 9), fg=FG3, bg=SURF2,
@@ -638,10 +661,10 @@ class App(tk.Tk):
         StyledButton(fr, "  OPEN…", self._pick_conv_folder, width=90, height=30).pack(
             side="right", padx=(8, 0))
 
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
+        tk.Frame(c_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
         self._lbl("OUTPUT FOLDER  (where the PS3 package is written — "
-                  "default: next to the source)", body).pack(anchor="w")
-        ofr = tk.Frame(body, bg=BG)
+                  "default: next to the source)", c_ctrl).pack(anchor="w")
+        ofr = tk.Frame(c_ctrl, bg=BG)
         ofr.pack(fill="x", pady=(5, 14))
         self._conv_out_lbl = tk.Label(ofr, text="(default: beside source)",
                                       font=(MONO, 9), fg=FG3, bg=SURF2,
@@ -657,13 +680,13 @@ class App(tk.Tk):
             self._conv_out_lbl.config(text=short, fg=FG2)
 
         # ── ROCK BAND section (PS3 folder + Xbox CON — bass pedal applies) ──
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
-        tk.Label(body, text="ROCK BAND  (PS3 / Xbox 360)",
+        tk.Frame(c_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
+        tk.Label(c_ctrl, text="ROCK BAND  (PS3 / Xbox 360)",
                  font=(MONO, 10, "bold"), fg=RED, bg=BG, anchor="w").pack(
                      anchor="w", pady=(0, 8))
-        self._lbl("BASS PEDAL", body).pack(
+        self._lbl("BASS PEDAL", c_ctrl).pack(
             anchor="w", pady=(0, 6))
-        ped_row = tk.Frame(body, bg=BG)
+        ped_row = tk.Frame(c_ctrl, bg=BG)
         ped_row.pack(fill="x", pady=(0, 4))
         RadioTile(ped_row, "1× pedal", self._conv_pedal, "1x",
                   width=110, height=28).pack(side="left", padx=(0, 8))
@@ -671,37 +694,37 @@ class App(tk.Tk):
                   width=110, height=28).pack(side="left", padx=(0, 8))
         RadioTile(ped_row, "Both", self._conv_pedal, "both",
                   width=90, height=28).pack(side="left")
-        tk.Label(body, text="1× removes Expert+ doubles  ·  2× forces doubles to always play",
+        tk.Label(c_ctrl, text="1× removes Expert+ doubles  ·  2× forces doubles to always play",
                  font=(MONO, 8), fg=FG3, bg=BG, anchor="w").pack(anchor="w", pady=(2, 10))
 
-        self._btn_ps3 = StyledButton(body, "⬢  BUILD PS3 FOLDER",
+        self._btn_ps3 = StyledButton(c_ctrl, "⬢  BUILD PS3 FOLDER",
                                      lambda: self._run_native_convert("ps3"),
                                      color=BLUE, width=220, height=40)
         self._btn_ps3.pack(anchor="w", pady=(0, 8))
-        self._btn_con = StyledButton(body, "⬢  BUILD CON",
+        self._btn_con = StyledButton(c_ctrl, "⬢  BUILD CON",
                                      lambda: self._run_native_convert("xbox"),
                                      color=GREEN, width=220, height=40)
         self._btn_con.pack(anchor="w", pady=(0, 14))
 
         # ── SNG section (YARG / Clone Hero — verbatim repackage of the folder) ──
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
-        tk.Label(body, text="YARG / CLONE HERO",
+        tk.Frame(c_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
+        tk.Label(c_ctrl, text="YARG / CLONE HERO",
                  font=(MONO, 10, "bold"), fg=RED, bg=BG, anchor="w").pack(
                      anchor="w", pady=(0, 6))
-        tk.Label(body, text="Packs the song folder as-is into a .sng container  "
+        tk.Label(c_ctrl, text="Packs the song folder as-is into a .sng container  "
                             "— no pedal variants, no validation, no milo.",
                  font=(MONO, 8), fg=FG3, bg=BG, anchor="w",
                  justify="left", wraplength=520).pack(anchor="w", pady=(0, 8))
-        self._btn_sng = StyledButton(body, "⬢  BUILD SNG",
+        self._btn_sng = StyledButton(c_ctrl, "⬢  BUILD SNG",
                                      lambda: self._run_native_convert("sng"),
                                      color=RED, width=220, height=40)
         self._btn_sng.pack(anchor="w")
-        CheckTile(body, "Preserve parent folders",
+        CheckTile(c_ctrl, "Preserve parent folders",
                   self._do_sng_preserve_dirs, color=RED, width=220, height=28).pack(
                       anchor="w", pady=(4, 14))
 
         self._conv_btns = (self._btn_ps3, self._btn_con, self._btn_sng)
-        self._btn_cancel_conv = StyledButton(body, "✕  CANCEL CONVERT",
+        self._btn_cancel_conv = StyledButton(c_ctrl, "✕  CANCEL CONVERT",
                                               self._cancel_conv, danger=True,
                                               width=200, height=40)
         # hidden until convert starts
@@ -713,6 +736,9 @@ class App(tk.Tk):
                 else "…" + self._conv_folder[-50:]
             self._conv_folder_lbl.config(text=short, fg=FG2)
 
+        # Convert log + status
+        self._build_tab_log(body, "convert")
+
     def _pick_conv_folder(self):
         folder = filedialog.askdirectory(title="Source song folder")
         if not folder:
@@ -723,7 +749,7 @@ class App(tk.Tk):
         self._conv_folder_lbl.config(text=short, fg=FG2)
         for b in self._conv_btns:
             b.set_enabled(True)
-        self._log(f"Convert source: {folder}\n\n", "info")
+        self._clog(f"Convert source: {folder}\n\n", "info")
 
     def _pick_conv_out(self):
         folder = filedialog.askdirectory(title="Output folder")
@@ -731,9 +757,9 @@ class App(tk.Tk):
             return
         self._conv_out = folder
         self._save_settings()
-        short = folder if len(folder) <= 52 else "…" + folder[-50:]
+        short = folder if len(folder) <= 52 else "?" + folder[-50:]
         self._conv_out_lbl.config(text=short, fg=FG2)
-        self._log(f"Convert output: {folder}\n\n", "info")
+        self._clog(f"Convert output: {folder}\n\n", "info")
 
     def _clear_conv_out(self):
         self._conv_out = ""
@@ -747,16 +773,24 @@ class App(tk.Tk):
         out_base = self._conv_out or None
         fmt_label = {"ps3": "PS3 folder", "xbox": "Xbox CON",
                      "sng": "SNG"}.get(fmt, fmt)
+        from downcharter.ps3build import build_ps3_song, source_has_double_kicks
+        from downcharter.stfs import build_con_song
+        from downcharter.sng import build_sng_song
         self._cancel.clear()
-        self._log(f"── CONVERT ({fmt_label}) ─────────────────────\n", "head")
-        self._log(f"  Source: {self._conv_folder}\n")
-        self._log(f"  Output: {out_base or '(beside source)'}\n")
+        self._clog(f"── CONVERT ({fmt_label}) ─────────────────────\n", "head")
+        self._clog(f"  Source: {self._conv_folder}\n")
+        self._clog(f"  Output: {out_base or '(beside source)'}\n")
         for b in self._conv_btns:
             b.set_enabled(False)
         self._btn_cancel_conv.pack(anchor="w", pady=(6, 0))
         self._btn_cancel_conv.set_enabled(True)
 
+        total_songs = 0
+        conv_ok = 0
+        conv_err = 0
+
         def task():
+            nonlocal total_songs, conv_ok, conv_err
             try:
                 # The source may be a single song folder OR a parent holding many
                 # song subfolders — convert every song under it. A "song folder" is
@@ -765,19 +799,21 @@ class App(tk.Tk):
                                     for m in find_midis(self._conv_folder)})
                 if not song_dirs:
                     song_dirs = [self._conv_folder]
-                self._log(f"  Songs: {len(song_dirs)}\n\n")
+                self._clog(f"  Songs: {len(song_dirs)}\n\n")
 
                 def _label(sd):
                     return os.path.basename(sd.rstrip("/\\")) or sd
 
-                for sd in song_dirs:
+                total_songs = len(song_dirs)
+                for si, sd in enumerate(song_dirs):
                     if self._cancel.is_set():
-                        self._log("  ⚡ Cancelled by user.\n", "warn")
+                        self._clog("  ⚡ Cancelled by user.\n", "warn")
                         break
 
+                    self._cstatus(f"Converting:  {si+1}/{total_songs}  {_label(sd)}")
+
                     if fmt == "sng":
-                        from downcharter.sng import build_sng_song
-                        self._log(f"  ▸ SNG: {_label(sd)}\n", "head")
+                        self._clog(f"  ▸ SNG: {_label(sd)}\n", "head")
                         try:
                             if (out_base
                                 and self._do_sng_preserve_dirs.get()):
@@ -794,45 +830,50 @@ class App(tk.Tk):
                                     sng_out = out_base  # different drives
                             else:
                                 sng_out = out_base
-                            build_sng_song(sd, self._log, out_base=sng_out)
+                            build_sng_song(sd, self._clog, out_base=sng_out)
+                            conv_ok += 1
                         except Exception as e:
-                            self._log(f"  ✗ {_label(sd)}: {e}\n", "err")
+                            self._clog(f"  ✗ {_label(sd)}: {e}\n", "err")
+                            conv_err += 1
                         continue
 
-                    from downcharter.ps3build import source_has_double_kicks
                     builder = (build_ps3_song if fmt == "ps3"
                                else build_con_song)
-                    self._log(f"  ▸ {_label(sd)}\n", "head")
+                    has_dk = source_has_double_kicks(sd)
+                    self._clog(f"  ▸ {_label(sd)}\n", "head")
                     try:
                         if pedal == "both":
-                            if source_has_double_kicks(sd):
+                            if has_dk:
                                 modes = ["1x", "2x"]
                             else:
                                 modes = ["1x"]
-                                self._log("    (no double-kicks → 1x only)\n", "info")
+                                self._clog("    (no double-kicks → 1x only)\n", "info")
                         else:
                             modes = [pedal]
                         for mode in modes:
                             if self._cancel.is_set():
                                 break
-                            self._log(f"    {fmt_label} ({mode})\n", "info")
-                            builder(sd, mode, self._log, out_base=out_base)
+                            self._clog(f"    {fmt_label} ({mode})\n", "info")
+                            builder(sd, mode, self._clog, out_base=out_base)
+                        conv_ok += 1
                     except Exception as e:
                         import traceback
-                        self._log(f"  ✗ {_label(sd)}: {e}\n", "err")
-                        self._log(traceback.format_exc(), "err")
+                        self._clog(f"  ✗ {_label(sd)}: {e}\n", "err")
+                        self._clog(traceback.format_exc(), "err")
+                        conv_err += 1
             except Exception as e:
                 import traceback
-                self._log(f"  ✗ {e}\n", "err")
-                self._log(traceback.format_exc(), "err")
+                self._clog(f"  ✗ {e}\n", "err")
+                self._clog(traceback.format_exc(), "err")
             finally:
                 self.after(0, lambda: [b.set_enabled(True) for b in self._conv_btns])
                 self.after(0, lambda: self._btn_cancel_conv.pack_forget())
                 self.after(0, self._cancel.clear)
-                self._log("\n")
+                self.after(0, lambda: self._cstatus(
+                    f"Converted:  {conv_ok}/{total_songs}" +
+                    (f"  ({conv_err} errored)" if conv_err else "")))
+                self._clog("\n")
 
-        from downcharter.ps3build import build_ps3_song
-        from downcharter.stfs import build_con_song
         threading.Thread(target=task, daemon=True).start()
 
     # ── song.ini creator ───────────────────────────────────────────────────
@@ -916,10 +957,19 @@ class App(tk.Tk):
                     "" if typ == "bool" else w.get())
             return vals
 
+        def _ini_log(text, tag=None):
+            """Log to whichever tab is active (or process by default)."""
+            if getattr(self, "_tabs", None):
+                active = next((n for n, f in self._tabs.items()
+                               if f.winfo_ismapped()), "process")
+            else:
+                active = "process"
+            (self._clog if active == "convert" else self._plog)(text, tag)
+
         def do_save():
             vals = collect()
             if not (vals.get("name") or "").strip():
-                self._log("  ✗ song.ini needs at least a 'name'.\n", "err")
+                _ini_log("  ✗ song.ini needs at least a 'name'.\n", "err")
                 return
             path = filedialog.asksaveasfilename(
                 title="Save song.ini", defaultextension=".ini",
@@ -931,9 +981,9 @@ class App(tk.Tk):
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(build_songini_text(vals))
             except OSError as e:
-                self._log(f"  ✗ song.ini save failed: {e}\n", "err")
+                _ini_log(f"  ✗ song.ini save failed: {e}\n", "err")
                 return
-            self._log(f"song.ini saved: {path}\n\n", "info")
+            _ini_log(f"song.ini saved: {path}\n\n", "info")
             win.destroy()
 
         StyledButton(btn_row, "💾  EXPORT song.ini", do_save, accent=True,
@@ -941,14 +991,29 @@ class App(tk.Tk):
         StyledButton(btn_row, "  CLOSE", win.destroy,
                      width=110, height=36).pack(side="right")
 
-    def _log(self, text, tag=None):
-        def _w():
-            self._log_box.config(state="normal")
-            if tag: self._log_box.insert("end", text, tag)
-            else:   self._log_box.insert("end", text)
-            self._log_box.see("end")
-            self._log_box.config(state="disabled")
-        self.after(0, _w)
+    def _pstatus(self, text):
+        """Update the Process tab status bar (thread-safe)."""
+        self.after(0, lambda: self._process_status.set(text or ""))
+
+    def _cstatus(self, text):
+        """Update the Convert tab status bar (thread-safe)."""
+        self.after(0, lambda: self._convert_status.set(text or ""))
+
+    def _plog(self, text, tag=None):
+        """Append to the Process tab log box (thread-safe)."""
+        self.after(0, lambda: self._tab_log(self._process_log, text, tag))
+
+    def _clog(self, text, tag=None):
+        """Append to the Convert tab log box (thread-safe)."""
+        self.after(0, lambda: self._tab_log(self._convert_log, text, tag))
+
+    @staticmethod
+    def _tab_log(log_box, text, tag=None):
+        log_box.config(state="normal")
+        if tag: log_box.insert("end", text, tag)
+        else:   log_box.insert("end", text)
+        log_box.see("end")
+        log_box.config(state="disabled")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 processor.py — MIDI file processing
 """
 from __future__ import annotations
+from typing import Any, Callable
 import mido
 import os, shutil
 
@@ -1348,6 +1349,8 @@ def process_folder(
     do_talkies: bool = False,
     do_drum_anim: bool = True,
     cancel: object | None = None,
+    status_fn: Callable[[str], Any] | None = None,
+    done_fn: Callable[[int, int, int], Any] | None = None,
 ) -> None:
     # Hide in-game background images (background.png/jpg → .bak) — Venue sub-option.
     if do_hide_bg:
@@ -1364,6 +1367,11 @@ def process_folder(
     midis = find_midis(folder)
     if not midis:
         log_fn("⚠  No .mid found.\n", "warn")
+        if done_fn is not None:
+            try:
+                done_fn(0, 0, 0)
+            except Exception as _se:
+                log_fn(f"done callback error: {_se}\n", "err")
         return
     log_fn(f"→ {len(midis)} file(s)\n", "info")
     errors = 0
@@ -1373,7 +1381,8 @@ def process_folder(
     groove_fails: list[str] = []   # "song: PART DIFF groove X% (< Y%)"
     error_log: list[str] = []      # "song: <exception + traceback>"
     conv_set = set(converted)
-    for path in midis:
+    total = len(midis)
+    for idx, path in enumerate(midis):
         if cancel is not None and cancel.is_set():
             log_fn("\n  ⚡ Cancelled by user.\n", "warn")
             break
@@ -1381,6 +1390,11 @@ def process_folder(
         backup = base + ".bak.mid"
         from_chart = os.path.abspath(path) in conv_set
         name = os.path.relpath(path, folder)
+        if status_fn is not None:
+            try:
+                status_fn(f"{idx+1}/{total}  {name}")
+            except Exception as _se:
+                log_fn(f"status error: {_se}\n", "err")
         try:
             # A .mid coming from a .chart already has a .bak.chart backup → don't duplicate .bak.mid.
             if not from_chart and not os.path.exists(backup):
@@ -1440,6 +1454,13 @@ def process_folder(
             log_fn(f"  ✗ {name}: {e}\n", "err")
             log_fn(tb, "err")
 
+    # ── Done callback ──────────────────────────────────────────────────────────
+    if done_fn is not None:
+        try:
+            done_fn(modified, errors, total)
+        except Exception as _se:
+            log_fn(f"done callback error: {_se}\n", "err")
+
     # ── Summary ──────────────────────────────────────────────────────────────
     log_fn("\n── Done ──\n", "info")
     log_fn(f"  modified: {modified}   skipped diffs: {skipped_total}"
@@ -1489,9 +1510,17 @@ def _write_session_log(folder: str, modified: int, skipped_total: int,
 
 
 def revert_folder(folder: str, log_fn,
-                  cancel: object | None = None) -> None:
+                  cancel: object | None = None,
+                  status_fn: Callable[[str], Any] | None = None,
+                  done_fn: Callable[[int], Any] | None = None) -> None:
     reverted = 0
     for root, _, files in os.walk(folder):
+        rel = os.path.relpath(root, folder)
+        if status_fn is not None:
+            try:
+                status_fn(f"Scanning {rel}…")
+            except Exception as _se:
+                log_fn(f"status error: {_se}\n", "err")
         for f in files:
             name, ext = os.path.splitext(f)
             if (name.lower() in (_BG_HIDDEN_STEM, "background.bak")
@@ -1539,3 +1568,8 @@ def revert_folder(folder: str, log_fn,
         log_fn("⚠  No backup found.\n", "warn")
     else:
         log_fn(f"\n✓ {reverted} file(s) reverted.\n", "ok")
+    if done_fn is not None:
+        try:
+            done_fn(reverted)
+        except Exception as _se:
+            log_fn(f"done callback error: {_se}\n", "err")
