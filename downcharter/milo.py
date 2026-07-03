@@ -72,28 +72,39 @@ _DIR_TAIL = _FULL_DIR_SINGLE[71:]  # U3 + U4 + subname + matrices + trailing
 
 
 def _build_dir_prefix(entry_names: list[str]) -> bytes:
-    """Build the ObjectDir header bytes for N `entry_names` (e.g.
-    ``["song.lipsync", "song.lipsync.2", "song.lipsync.3"]``).
+    """Build the ObjectDir header bytes for N `entry_names`.
+
+    Entry name convention (RB3 multi-entry milos, verified against 100+ official
+    samples): single-entry = ``["song.lipsync"]``; multi-entry =
+    ``["part2.lipsync", ..., "song.lipsync"]`` — part entries FIRST, song LAST.
+
+    U1/U2 scale with entry count (verified: N=1→U1=4/U2=21, N=2→U1=6/U2=35,
+    N=3→U1=8/U2=49):
+        U1 = 2 + 2*N
+        U2 = 7 + 14*N
 
     Structure:
         u32 version = 28
         u32 type_name_len + "ObjectDir"
         u32 name_len + "lipsync"
-        u32 U1 = 4
-        u32 U2 = 21
+        u32 U1 = 2 + 2*N
+        u32 U2 = 7 + 14*N
         u32 entry_count (= N)
         for each entry: u32 type_len + "CharLipSync" + u32 name_len + name
         _DIR_TAIL (= U3, U4, subname, 7 matrices, trailing)
     """
+    n = len(entry_names)
+    u1 = 2 + 2 * n
+    u2 = 7 + 14 * n
     out = bytearray()
     out += struct.pack("<I", 28)               # version
     out += struct.pack("<I", 9)                # type name length
     out += b"ObjectDir"                        # type name
     out += struct.pack("<I", 7)                # name length
     out += b"lipsync"                          # name
-    out += struct.pack("<I", 4)                # U1
-    out += struct.pack("<I", 21)               # U2 (0x15)
-    out += struct.pack("<I", len(entry_names))  # entry_count
+    out += struct.pack("<I", u1)               # U1
+    out += struct.pack("<I", u2)               # U2
+    out += struct.pack("<I", n)                # entry_count
 
     for name in entry_names:
         out += struct.pack("<I", 11)           # type length
@@ -125,8 +136,12 @@ def add_milo_header(body: bytes) -> bytes:
 def build_milo(lipsync_or_list: bytes | list[bytes]) -> bytes:
     """Assemble a complete .milo (== .milo_ps3 == .milo_xbox body).
 
-    Accepts a single ``bytes`` (backward-compat: one ``song.lipsync`` entry) or a
-    ``list[bytes]`` (multi-entry: ``song.lipsync``, ``song.lipsync.2``, …).
+    Accepts a single ``bytes`` (single ``song.lipsync`` entry) or a ``list[bytes]``
+    (multi-entry for PART VOCALS + HARM2 + HARM3: entries are
+    ``["part2.lipsync", "song.lipsync"]`` for 2 tracks or
+    ``["part2.lipsync", "part3.lipsync", "song.lipsync"]`` for 3 — part entries FIRST,
+    song LAST, matching the official RB3 milo convention verified against 100+ real
+    files).
 
     The body is platform-independent (PS3 and Xbox share the same milo body)."""
     if isinstance(lipsync_or_list, bytes):
@@ -134,9 +149,13 @@ def build_milo(lipsync_or_list: bytes | list[bytes]) -> bytes:
     else:
         lipsync_list = lipsync_or_list
 
-    names = ["song.lipsync"]
-    for i in range(2, len(lipsync_list) + 1):
-        names.append(f"song.lipsync.{i}")
+    n = len(lipsync_list)
+    if n == 1:
+        names = ["song.lipsync"]
+    else:
+        # part entries first, song.lipsync last — verified against official milos
+        names = [f"part{k}.lipsync" for k in range(2, n + 1)]
+        names.append("song.lipsync")
 
     body = bytearray()
     body += _build_dir_prefix(names)

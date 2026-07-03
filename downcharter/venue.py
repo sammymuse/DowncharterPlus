@@ -1633,14 +1633,21 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
     pp_style = getattr(design, 'pp_style', 'authored') if design else 'authored'
     climax_idx = getattr(design, 'climax_idx', None) if design else None
 
+    # Calibrated against official p50=3 / p75=7 PP events per section:
+    #   conservative: [2.0] = 2 events/cluster, hold=10 bars → ~1-2 clusters/chorus
+    #     → targets p25 (1) to p50 (3) = sparse, artist barely touches lights
+    #   authored: [2.0] = 2 events/cluster, hold=8 bars → ~2-3 clusters/chorus
+    #     → targets p50 (3) to p75 (7) = moderate, artist-aware density
+    #   dynamic: [0.5,0.5,2.0] = 4 events/cluster, hold=6 bars → ~3-4 clusters
+    #     → original dense behaviour for autogen/maximum-energy sections
     CLUSTER_PAT = {
-        "conservative": {"calm": [2.0],           "mid": [1.0, 2.0],      "high": [1.0, 1.0, 2.0]},
-        "authored":     {"calm": [1.0, 2.0],     "mid": [0.5, 1.0, 2.0], "high": [0.5, 0.5, 2.0]},
+        "conservative": {"calm": [2.0],           "mid": [1.0, 2.0],      "high": [2.0]},
+        "authored":     {"calm": [1.0, 2.0],     "mid": [0.5, 1.0, 2.0], "high": [2.0]},
         "dynamic":      {"calm": [0.5, 2.0],     "mid": [0.5, 0.5, 2.0], "high": [0.5, 0.5, 2.0]},
     }
     HOLD_BARS = {
         "conservative": {"calm": 16, "mid": 12, "high": 10},
-        "authored":     {"calm": 10, "mid": 8,  "high": 6},
+        "authored":     {"calm": 10, "mid": 8,  "high": 8},
         "dynamic":      {"calm": 6,  "mid": 6,  "high": 6},
     }
 
@@ -1699,15 +1706,14 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
                         pattern = [_PP_BURST_SUBDIV] + pattern
                         break
 
-            # Conservative mode: só bursts em strobe wall ou climax
+            # Conservative mode: burst suppression — only fire a cluster inside
+            # a strobe wall or the climax section; otherwise hold (single 2.0 event
+            # per cluster = 2 events max, p25-p50 official density).
             if pp_style == "conservative":
                 is_strobe_wall = any(ws <= t < we for ws, we in walls)
-                is_climax = (climax_idx is not None
-                             and sections[climax_idx].start == t)
+                is_climax = (climax_idx is not None and si == climax_idx)
                 if not (is_strobe_wall or is_climax):
-                    pattern = [p for p in pattern if p > 0.5]
-                    if not pattern:
-                        pattern = [2.0]
+                    pattern = []  # empty pattern = just the downbeat event
 
             # ── Cluster: first change on the downbeat, the rest stepped by `pattern` ──
             tt = t

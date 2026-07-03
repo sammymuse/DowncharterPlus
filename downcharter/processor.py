@@ -941,6 +941,15 @@ def process_midi(
     if stats.get("sysex_kept"):
         _restore_ps_sysex(dst_path)
 
+    # Spam gate: measure PP/directed density and store for caller logging
+    if do_venue:
+        try:
+            from . import validate as _val
+            spam = _val._measure_spam(new_mid)
+            stats["spam_metrics"] = spam
+        except Exception:
+            pass
+
     return stats
 
 
@@ -1288,7 +1297,10 @@ def find_midis(folder: str) -> list[str]:
     result = []
     for root, _, files in os.walk(folder):
         for f in files:
-            if f.lower().endswith(".mid") and not f.lower().endswith(".bak.mid"):
+            # Exclude backups and the _venue.mid side-effect of our own export
+            if (f.lower().endswith(".mid")
+                    and ".bak." not in f.lower()
+                    and not f.lower().endswith("_venue.mid")):
                 result.append(os.path.join(root, f))
     return result
 
@@ -1461,6 +1473,19 @@ def process_folder(
             elif do_venue and s.get("venue_skipped"):
                 log_fn(f"    ↷ venue: skipped (already authored)"
                        f" · animations: {s.get('anim_events', 0)}\n", "info")
+            # Spam gate warning: log if PP density falls outside official p25-p75 envelope
+            spam = s.get("spam_metrics")
+            if spam:
+                from . import validate as _val
+                bl = _val._SPAM_BASELINE
+                pp_vals = spam["pp_events_per_section"]
+                if pp_vals:
+                    med = sorted(pp_vals)[len(pp_vals) // 2]
+                    p25 = bl["pp_events_per_section"]["p25"]
+                    p75 = bl["pp_events_per_section"]["p75"]
+                    if med < p25 or med > p75:
+                        log_fn(f"    ⚠ PP density {med}/section (med) outside p25-p75 "
+                               f"[{p25}-{p75}] — consider --pp-style conservative\n", "warn")
             if s.get("vocals_charted"):
                 ph = s.get("vocal_phrases_gen")
                 ph_txt = f" + {ph} phrases" if ph else ""
@@ -1546,13 +1571,14 @@ def _write_session_log(folder: str, modified: int, skipped_total: int,
 def export_venue_to_mid(mid_path: str, dst_path: str | None = None) -> str | None:
     """Export the VENUE track from a processed .mid as a standalone .mid file.
 
-    Use this to give sceptics a starting point they can edit by hand — parity
-    with the Magma "Export" button.
+    Copies track 0 (tempo + time_signature) so the file is importable in editors
+    even for songs with non-120-BPM tempo maps.
 
     Returns the path of the exported file, or None if no VENUE track exists."""
     import mido as _mido
     mid = _mido.MidiFile(mid_path)
     venue_track = None
+    track0 = mid.tracks[0] if mid.tracks else None
     for t in mid.tracks:
         if t.name.strip().upper() == "VENUE":
             venue_track = t
@@ -1561,6 +1587,9 @@ def export_venue_to_mid(mid_path: str, dst_path: str | None = None) -> str | Non
         return None
 
     out = _mido.MidiFile(ticks_per_beat=mid.ticks_per_beat)
+    # Copy tempo/time_signature from track 0 so the _venue.mid is self-contained
+    if track0 is not None:
+        out.tracks.append(_mido.MidiTrack(track0))
     out.tracks.append(venue_track)
     if dst_path is None:
         base, ext = os.path.splitext(mid_path)
