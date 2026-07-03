@@ -662,8 +662,7 @@ class App(tk.Tk):
             side="right", padx=(8, 0))
 
         tk.Frame(c_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(0, 10))
-        self._lbl("OUTPUT FOLDER  (where the PS3 package is written — "
-                  "default: next to the source)", c_ctrl).pack(anchor="w")
+        self._lbl("OUTPUT FOLDER", c_ctrl).pack(anchor="w")
         ofr = tk.Frame(c_ctrl, bg=BG)
         ofr.pack(fill="x", pady=(5, 14))
         self._conv_out_lbl = tk.Label(ofr, text="(default: beside source)",
@@ -697,7 +696,7 @@ class App(tk.Tk):
         tk.Label(c_ctrl, text="1× removes Expert+ doubles  ·  2× forces doubles to always play",
                  font=(MONO, 8), fg=FG3, bg=BG, anchor="w").pack(anchor="w", pady=(2, 10))
 
-        self._btn_ps3 = StyledButton(c_ctrl, "⬢  BUILD PS3 FOLDER",
+        self._btn_ps3 = StyledButton(c_ctrl, "⬢  BUILD RPCS3 FOLDER",
                                      lambda: self._run_native_convert("ps3"),
                                      color=BLUE, width=220, height=40)
         self._btn_ps3.pack(anchor="w", pady=(0, 8))
