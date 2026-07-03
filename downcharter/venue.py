@@ -627,13 +627,13 @@ _LIGHT_PULSE = {
     "high": ["manual_warm", "manual_cool", "blackout_fast", "stomp"],
 }
 # Every how many switches a theme accent (auto preset) is inserted.
-_LIGHT_ACCENT_EVERY = 5
+_LIGHT_ACCENT_EVERY = 8
 
 # Hold (re-emissions of the same preset) per energy tier. Instead of advancing the
 # pool every cycle, we re-emit the same preset `hold` times before advancing.
 # This adds the 24% same-preset re-emissions that official venues use for "pulsing".
 # calm sections hold longer (more re-emissions), high sections advance every cycle.
-_LIGHT_HOLD = {"calm": 5, "mid": 3, "high": 2}
+_LIGHT_HOLD = {"calm": 12, "mid": 8, "high": 5}
 
 # Cluster-then-hold: within each cluster, rapid sub-beat gaps between presets.
 # The pattern defines gaps (in beats) between consecutive events in a cluster.
@@ -948,10 +948,10 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
             if tick < s.start or tick >= s.end:
                 continue
             # Check strobe/pause
-            if _in_span(tick, strobe_spans) and energy == "high":
+            if _in_span(tick, strobe_spans) and energy == "high" and s.kind in {"riff", "drop", "solo", "build"}:
                 last = "strobe_fast"
                 continue
-            if _in_span(tick, pause_spans):
+            if _in_span(tick, pause_spans) and energy == "calm":
                 preset = _PAUSE_LIGHT[pi % len(_PAUSE_LIGHT)]
                 pi += 1
                 out.append(_txt(tick, f"[lighting ({preset})]"))
@@ -1097,7 +1097,7 @@ def find_strobe_spans(drum_onsets: list[int], tpb: int,
          even without being so fast. Does NOT include cymbals/hi-hat (filtered upstream).
     `min_span` = 1.75 beats (between the dense 1.5 and the old 2.0).
     Runs separated by < 1 beat merge. Everything derived from beat fractions."""
-    min_span = int(tpb * 3.0)              # sustained >= 3.0 beats (oficiais: strobe raro)
+    min_span = int(tpb * 5.0)              # sustained >= 5.0 beats (oficiais: strobe raro)
     bridge = tpb                           # merges runs with a gap < 1 beat
     spans = _fast_runs(drum_onsets, int(tpb / 4 * 1.12), min_span)        # 16th
     if dbass_onsets:
@@ -1113,6 +1113,19 @@ def find_pause_spans(onsets: list[int], time_sig_map: list, tpb: int,
     for a, b in zip(onsets, onsets[1:]):
         if b - a >= measure_ticks_at(a, time_sig_map, tpb) * min_measures:
             spans.append((a + tpb, b))     # starts 1 beat after the last note
+    return spans
+
+
+def find_midi_pause_spans(onsets: list[int], time_sig_map: list, tpb: int,
+                           min_measures: int = 2) -> list[tuple[int, int]]:
+    """Pause spans from MIDI onsets: gaps >= min_measures measures with NO notes.
+    Used when audio-based pause_spans are unavailable."""
+    onsets = sorted(onsets)
+    spans: list[tuple[int, int]] = []
+    for a, b in zip(onsets, onsets[1:]):
+        mt = measure_ticks_at(a, time_sig_map, tpb)
+        if b - a >= mt * min_measures:
+            spans.append((a + tpb, b))
     return spans
 
 
@@ -4485,6 +4498,10 @@ def select_coop_cut(
             if featured_inst in insts:
                 boost *= 1.4
 
+        # Boost duos quando guitar/bass é featured (oficiais: duo 27%)
+        if "Duo" in cut_name and featured_inst in ("guitar", "bass"):
+            boost *= 1.8
+
         # energy boost
         if energy == "high":
             if cut_name in ("D_Hand", "V_Closeup", "B_Hand", "G_Hand", "K_Hand", "D_Head"):
@@ -4966,7 +4983,7 @@ _INTENSE_THEMES = {"metal", "punk"}
 # (puts the instrument down). Per-instrument thresholds derived from the 20 official
 # venues: drums/bass idle sooner (shorter rests visible), guitar holds longer
 # (flicker-prone on sparse riffs), vocal is the most rest-heavy (idle 21%).
-_IDLE_DOWNTIME = {"drums": 2, "bass": 2, "guitar": 6, "keys": 3, "vocal": 1}
+_IDLE_DOWNTIME = {"drums": 2, "bass": 2, "guitar": 6, "keys": 3, "vocal": 3}
 
 
 def phrase_end_ticks(track) -> list[int]:
@@ -5049,7 +5066,7 @@ def _idle_marker_at(sections: list[Section], tick: int,
     s = _section_at(sections, tick)
     if s is None:
         return "[idle]"
-    if section_energy(s) == "high" and instrument in ("keys", "vocal"):
+    if section_energy(s) in ("mid", "high") and instrument in ("keys", "vocal"):
         return "[idle_intense]"
     return "[idle]"
 
@@ -5429,6 +5446,9 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
                         pp_style=pp_style)
     out: list[AbsEvent] = []
     pause_spans = find_pause_spans(onsets, time_sig_map, tpb)
+    if not pause_spans:
+        # MIDI-only fallback: pauses derived from onset gaps
+        pause_spans = find_midi_pause_spans(onsets, time_sig_map, tpb)
     # Strobe fires on fills/consecutive snares (snare+toms), not on fast cymbals.
     strobe_spans = find_strobe_spans(
         fill_onsets if fill_onsets is not None else (drum_onsets or []), tpb,
@@ -5437,9 +5457,9 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     # MIDI-derived strobe spans — catches audio-only walls the drums don't flag.
     if audio_strobe_spans:
         strobe_spans = _merge_spans(strobe_spans + list(audio_strobe_spans), tpb // 2)
-    if len(strobe_spans) > 3:
-        # Ficam os primeiros 3 (mais longos)
-        strobe_spans = sorted(strobe_spans, key=lambda x: -(x[1] - x[0]))[:3]
+    # Cap global: só os 2 mais longos por música (oficiais: 47% têm strobe, não 100%)
+    if len(strobe_spans) > 2:
+        strobe_spans = sorted(strobe_spans, key=lambda x: -(x[1] - x[0]))[:2]
     out += build_lighting(sections, th, tpb, time_sig_map, drum_onsets,
                           pause_spans, strobe_spans, audio_onsets=audio_onsets,
                           energy_env=energy_env, drop_ticks=drop_ticks,

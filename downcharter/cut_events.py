@@ -55,7 +55,7 @@ class CutEvent:
 # section_entry/close anchor boundaries; solos/duos/clusters fill featured moments.
 PRIO = {
     "bre": 100, "stagedive": 90, "section_entry": 85, "solo": 80,
-    "section_close": 75, "vocal_peak": 70, "duo_cluster": 65,
+    "section_close": 75, "vocal_peak": 70, "duo_cluster": 72,
     "impact": 60, "downtime": 55, "energy_rise": 50, "baseline": 30,
 }
 
@@ -419,6 +419,11 @@ def select_cut(
         if featured_inst and _cut_instrument(cut_name) == featured_inst:
             boost *= 1.4
 
+        # Vocal boost: D_Vocals mais provável quando vocal é featured
+        if featured_inst == "vocal":
+            if cut_name in ("D_Vocals", "D_Vox_CLS", "D_Vox_Cam_PT", "D_Vox_Cam_PR"):
+                boost *= 1.5
+
         # section leaders boost
         inst = _cut_instrument(cut_name)
         if inst:
@@ -438,6 +443,10 @@ def select_cut(
                 boost *= 0.7
             elif "CLS" in cut_name or "_Cam_" in cut_name:
                 boost *= 1.2
+
+        # Drums boost em high energy
+        if inst == "drums" and energy == "high":
+            boost *= 1.4
 
         weights.append(base_weight * boost)
 
@@ -469,7 +478,7 @@ def select_cut(
             if result is not None:
                 return result
     # ── Último recurso: hierarquia fixa ──
-    for fallback in ["D_All", "D_Drums_LT", "D_Gtr", "D_Vocals"]:
+    for fallback in ["D_Drums_LT", "D_Drums", "D_All", "D_Gtr", "D_Vocals"]:
         if fallback == rejected:
             continue
         r = _guard_directed(fallback, tick, tpb, inst_onsets)
@@ -1686,7 +1695,7 @@ def detect_vocal_moments(sections: list[Section],
             snapped = _nearest_accent(tick, accents, tpb)
             out.append(CutEvent(snapped, "vocal_moment",
                                 ["D_Vocals_CLS", "D_Vox_Cam_PT", "D_Vox_CLS"],
-                                68,
+                                73,
                                 note=f"vocal onset @{s.kind}"))
             last_emit[si] = tick
             break  # max 1 por secção
@@ -2061,12 +2070,17 @@ def _cluster_limit(events: list[CutEvent],
             idxs.sort(key=lambda i: -events[i].priority)
             for i in idxs[1:]:
                 kept[i] = False
-        # Keep top N ticks by budget
+        # Find ticks to discard — but never discard a tick that ONLY has duo events
+        discard_ticks = set()
         if len(buckets) > budget:
             sorted_ticks = sorted(buckets.keys(),
                                   key=lambda t: sum(events[i].priority for i in buckets[t]),
                                   reverse=True)
-            discard_ticks = set(sorted_ticks[budget:])
+            for t in sorted_ticks[budget:]:
+                # Skip if this tick only has duo events
+                if all(events[i].etype == "duo_cluster" for i in buckets[t]):
+                    continue
+                discard_ticks.add(t)
             for tick in discard_ticks:
                 for i in buckets[tick]:
                     kept[i] = False
