@@ -933,11 +933,12 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
     track = new_mid.tracks[idx]
     abs_evts = [e for e in to_abs(track) if e.msg.type != "end_of_track"]
 
-    # already charted (pitched gems in the vocal range)? then we don't touch it.
-    # But when write_gems=False (lipsync-only), we still need spans from lyrics.
-    if write_gems and any(e.msg.type == "note_on" and getattr(e.msg, "velocity", 0) > 0
-           and 36 <= e.msg.note <= 84 for e in abs_evts):
-        return
+    # already charted (pitched gems in the vocal range)? then we don't touch PART
+    # VOCALS — but LIPSYNC1 (do_lipsync) is independent, so we still need spans
+    # from the lyrics regardless of whether we're allowed to write gems.
+    already_charted = any(e.msg.type == "note_on" and getattr(e.msg, "velocity", 0) > 0
+                          and 36 <= e.msg.note <= 84 for e in abs_evts)
+    do_write = write_gems and not already_charted
 
     markers = {"+", "#", "^", "*", "%"}
     syl = [e for e in abs_evts
@@ -991,7 +992,7 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
             ceil_s = tick_to_ms(target, tempo_map, tpb) / 1000.0
             off_s = _audio.voice_offset_s(va, start_s, ceil_s)
             if off_s is not None:
-                a_target = _audio._ms_to_tick(off_s * 1000.0, tempo_map, tpb)
+                a_target = ms_to_abs_tick(off_s * 1000.0, tempo_map, tpb)
                 a_target = max(t + tpb // 4, a_target)   # keep a minimum note
                 if a_target < target - tpb // 8:         # only if meaningfully shorter
                     target = a_target
@@ -1002,18 +1003,22 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
         gems.append((t, end))
         # mark the lyric as talky ('#' at the end, after '-'/'='), if it isn't already.
         cur = e.msg.text
-        if write_gems and not cur.rstrip().endswith(("#", "^")):
+        if do_write and not cur.rstrip().endswith(("#", "^")):
             e.msg = e.msg.copy(text=cur + "#")
-        # Record the span (seconds) + loudness gain for the viseme track.
+        # Record the span (seconds) + loudness gain for the viseme track. Uses
+        # `target` (the real, audio-confirmed boundary), NOT the gapped `end` —
+        # that gap only exists so PART VOCALS notes aren't glued together; the
+        # mouth should stay open ("connected articulation") until the next
+        # syllable or a real silence, not close early for a MIDI-charting reason.
         if tempo_map is not None:
             s_s = tick_to_ms(t, tempo_map, tpb) / 1000.0
-            e_s = tick_to_ms(end, tempo_map, tpb) / 1000.0
+            e_s = tick_to_ms(target, tempo_map, tpb) / 1000.0
             gain = _audio.syllable_gain(va, s_s, e_s) if va is not None else 1.0
             lip_spans.append((s_s, e_s, cur, gain))
 
-    # When only the LIPSYNC1 track is requested (talkies off), don't touch PART
-    # VOCALS — just hand back the spans that drive the viseme track.
-    if not write_gems:
+    # When talkies are off, or PART VOCALS is already charted, don't touch
+    # PART VOCALS — just hand back the spans that drive the viseme track.
+    if not do_write:
         return lip_spans
 
     # phrase markers (105) if the track doesn't have them — RB needs them for the vocals.
@@ -1074,10 +1079,10 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
             pv = next((t for t in new_mid.tracks
                        if t.name.strip().upper() == "PART VOCALS"), None)
             if pv is not None:
-                pe_ticks = _abs_phrase_ends(list(to_abs(pv)))
+                abs_pv = to_abs(pv)
+                pe_ticks = _abs_phrase_ends(list(abs_pv))
                 phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
                                  for t in sorted(set(pe_ticks))]
-                abs_pv = to_abs(pv)
                 for e in abs_pv:
                     m = e.msg
                     n = getattr(m, "note", None)
@@ -1104,7 +1109,8 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
                     new_mid.tracks.append(tr)
                 stats["lipsync_events"] = len(keyframes)
         except Exception:
-            pass
+            import traceback
+            stats["lipsync_error"] = traceback.format_exc()
         # NOTE: the .milo file is NOT built here. Processing only authors the
         # audio-guided LIPSYNC1 track (above); the actual <id>.milo_ps3 is created
         # later, at conversion time (ps3build.build_ps3_song), from this very track
@@ -1126,13 +1132,12 @@ def _build_lipsync_track(keyframes, tempo_map, tpb):
     ``[Cage_hi 140]`` and ``[Cage_hi 0]`` both at T).  We deduplicate: for each
     (tick, viseme) pair, only the LAST event survives — it represents the state
     going forward from that tick."""
-    from . import audio as _audio
     abs_evts = [
         AbsEvent(0, mido.MetaMessage("track_name", name="LIPSYNC1", time=0)),
         AbsEvent(0, mido.MetaMessage("text", text="[lang en]", time=0)),
     ]
     for time_s, viseme, weight, graph in keyframes:
-        tick = _audio._ms_to_tick(time_s * 1000.0, tempo_map, tpb)
+        tick = ms_to_abs_tick(time_s * 1000.0, tempo_map, tpb)
         tok = _LIPSYNC_GRAPH_TOKEN.get(graph, "")
         abs_evts.append(AbsEvent(tick, mido.MetaMessage(
             "text", text=f"[{viseme} {weight}{tok}]", time=0)))
@@ -1141,11 +1146,12 @@ def _build_lipsync_track(keyframes, tempo_map, tpb):
     # Keyframes are already sorted by (time_s, viseme), so after tick-conversion,
     # same-tick events are contiguous; we walk backwards and take the first
     # occurrence of each (tick, viseme) which is the LAST in original order.
+    # Meta events (track_name, [lang en]) are kept separate so they always
+    # appear before any keyframe at tick 0.
     seen: set[tuple[int, str]] = set()
-    deduped: list[AbsEvent] = [abs_evts[0], abs_evts[1]]  # track_name + [lang en]
+    meta: list[AbsEvent] = abs_evts[:2]     # track_name + [lang en]
+    rest: list[AbsEvent] = []
     for ev in reversed(abs_evts[2:]):
-        key = (ev.abs_tick, ev.msg.text)
-        # Extract viseme name from "[viseme weight]" format
         txt = ev.msg.text
         if txt.startswith("[") and " " in txt:
             vis = txt.split("[")[1].split(" ")[0]
@@ -1153,9 +1159,9 @@ def _build_lipsync_track(keyframes, tempo_map, tpb):
             if pair in seen:
                 continue
             seen.add(pair)
-        deduped.append(ev)
-    deduped.reverse()  # back to chronological
-    abs_evts = deduped
+        rest.append(ev)
+    rest.reverse()  # back to chronological
+    abs_evts = meta + rest
 
     tr = to_track(abs_evts)
     tr.append(mido.MetaMessage("end_of_track", time=0))
@@ -1350,6 +1356,8 @@ def process_folder(
                        f"{ph_txt}{tr_txt}\n", "info")
             if s.get("lipsync_events"):
                 log_fn(f"    ◇ lipsync: {s['lipsync_events']} viseme keyframes\n", "info")
+            if s.get("lipsync_error"):
+                log_fn(f"    ✗ lipsync error: {s['lipsync_error']}\n", "err")
             for sk in s.get("diffs_skipped", []):
                 log_fn(f"    ↷ skipped {sk} (already charted)\n", "info")
             # Groove-check warnings are recorded only in the session log file,

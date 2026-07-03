@@ -95,15 +95,18 @@ def load_vocal_from_mogg(
     layouts.  If the file has fewer channels than required, falls back to
     an all-channel mean (so it never silently returns silence)."""
     try:
-        raw = open(mogg_path, "rb").read()
+        with open(mogg_path, "rb") as f:
+            header = f.read(8)
+            version = struct.unpack("<I", header[:4])[0]
+            if version != 0x0A:
+                return None  # encrypted — not supported
+            offset = struct.unpack("<I", header[4:8])[0]
+            f.seek(offset)
+            buf = io.BytesIO(f.read())
     except Exception:
         return None
-    version = struct.unpack("<I", raw[:4])[0]
-    if version != 0x0A:
-        return None  # encrypted — not supported
-    offset = struct.unpack("<I", raw[4:8])[0]
     try:
-        data, sr = _read_all_or_blocks(io.BytesIO(raw[offset:]))
+        data, sr = _read_all_or_blocks(buf)
     except Exception:
         return None
     # Select requested channels, or fall back to all-channel mean.

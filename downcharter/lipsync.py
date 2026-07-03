@@ -631,7 +631,7 @@ def _generate_blinks(
     # Phrase-boundary bonus blinks: 40 % chance of an extra blink just
     # after each phrase end (but not within 0.5 s of an existing blink).
     if phrase_ends:
-        blink_times = {round(e[0], 2) for e in out}
+        blink_times = {e[0] for e in out}
         for pe in phrase_ends:
             if pe < 0 or pe >= song_len_s:
                 continue
@@ -716,7 +716,8 @@ def _generate_eyebrows(
             continue
         pitches = [p for _, p in phrase]
         t0 = phrase[0][0]
-        t1 = phrase[-1][0] + _BROW_HOLD_S + _BROW_FADE_S
+        t1 = min(phrase[-1][0] + _BROW_HOLD_S + _BROW_FADE_S,
+                 song_len_s)
         max_p = max(pitches)
         dur = phrase[-1][0] - phrase[0][0]
         density = len(phrase) / max(dur, 0.01)
@@ -727,6 +728,10 @@ def _generate_eyebrows(
 
         if max_p >= _BROW_AGGRESSIVE_PITCH or (density >= 3.0 and len(phrase) >= 4):
             expr, w = "aggressive", _AW
+        # Sustained low-pitch phrase: dur is the phrase span (gap ≤ 0.5 s
+        # between notes).  A phrase with several short notes can still be
+        # "sustained" by this measure — that is a known trade-off; the span
+        # correlates well with the singer staying in a low register.
         elif dur > _BROW_HOLD_S + _BROW_FADE_S and sum(pitches) / len(pitches) < _BROW_DOWN_PITCH:
             expr, w = "down", _DWb
         elif rng.random() < 0.05 and len(phrase) >= 3:
@@ -760,11 +765,24 @@ def _generate_eyebrows(
         # Insert Brow_up flash if it falls within this segment's time window.
         flash_in = [ut for ut in brow_up_times if seg_start <= ut < seg_end]
         for ft in flash_in:
+            if expr == "aggressive":
+                continue  # aggressive has higher priority — skip flash
             out.append((ft, "Brow_down", 0, "linear"))
             out.append((ft, "Brow_up", _UW, "ease"))
-            out.append((ft + _BROW_HOLD_S, "Brow_up", _UW, "hold"))
-            out.append((ft + _BROW_HOLD_S + _BROW_FADE_S, "Brow_up", 0, "linear"))
-            out.append((ft + _BROW_HOLD_S + _BROW_FADE_S, "Brow_down", _DW, "linear"))
+            out.append((min(ft + _BROW_HOLD_S, seg_end),
+                        "Brow_up", _UW, "hold"))
+            out.append((min(ft + _BROW_HOLD_S + _BROW_FADE_S, seg_end),
+                        "Brow_up", 0, "linear"))
+            # Restore the segment's OWN brow expression, not unconditionally
+            # Brow_down — this avoids overriding e.g. Brow_pouty.
+            if expr is not None:
+                rest_vis = f"Brow_{expr}"
+                rest_w = w
+            else:
+                rest_vis = "Brow_down"
+                rest_w = _DW
+            out.append((min(ft + _BROW_HOLD_S + _BROW_FADE_S, seg_end),
+                        rest_vis, rest_w, "linear"))
             brow_up_times.discard(ft)
 
     # Close Brow_down at song end.

@@ -276,12 +276,14 @@ class App(tk.Tk):
         self._conv_folder = cfg.get("conv_folder", "") or ""
         self._conv_out = cfg.get("conv_out", "") or ""
         self._conv_pedal  = tk.StringVar(value=cfg.get("conv_pedal", "2x"))  # 1x | 2x | both
+        self._do_sng_preserve_dirs = tk.BooleanVar(
+            value=cfg.get("sng_preserve_dirs", True))
         self._cancel = threading.Event()
         # Persist whenever a toggle/slider changes
         for var in (self._threshold_ms, self._do_expert_plus, self._do_hard,
                     self._do_medium, self._do_easy, self._do_venue, self._do_drum_anim,
                     self._do_hide_bg, self._do_lipsync, self._do_lipsync_trk,
-                    self._conv_pedal):
+                    self._conv_pedal, self._do_sng_preserve_dirs):
             var.trace_add("write", lambda *_: self._save_settings())
         self._build()
         if self._folder and os.path.isdir(self._folder):
@@ -469,9 +471,10 @@ class App(tk.Tk):
             "hide_bg":      bool(self._do_hide_bg.get()),
             "lipsync":      bool(self._do_lipsync.get()),
             "lipsync_track": bool(self._do_lipsync_trk.get()),
-            "conv_folder":  self._conv_folder,
-            "conv_out":     self._conv_out,
-            "conv_pedal":   self._conv_pedal.get(),
+            "conv_folder":        self._conv_folder,
+            "conv_out":           self._conv_out,
+            "conv_pedal":         self._conv_pedal.get(),
+            "sng_preserve_dirs":  bool(self._do_sng_preserve_dirs.get()),
         }
         try:
             path = self._settings_path()
@@ -692,7 +695,10 @@ class App(tk.Tk):
         self._btn_sng = StyledButton(body, "⬢  BUILD SNG",
                                      lambda: self._run_native_convert("sng"),
                                      color=RED, width=220, height=40)
-        self._btn_sng.pack(anchor="w", pady=(0, 14))
+        self._btn_sng.pack(anchor="w")
+        CheckTile(body, "Preserve parent folders",
+                  self._do_sng_preserve_dirs, color=RED, width=220, height=28).pack(
+                      anchor="w", pady=(4, 14))
 
         self._conv_btns = (self._btn_ps3, self._btn_con, self._btn_sng)
         self._btn_cancel_conv = StyledButton(body, "✕  CANCEL CONVERT",
@@ -773,7 +779,22 @@ class App(tk.Tk):
                         from downcharter.sng import build_sng_song
                         self._log(f"  ▸ SNG: {_label(sd)}\n", "head")
                         try:
-                            build_sng_song(sd, self._log, out_base=out_base)
+                            if (out_base
+                                and self._do_sng_preserve_dirs.get()):
+                                # Preserve parent folder structure so
+                                # "Guitar Hero/Guitar Hero 1/Song A/"
+                                # outputs "…/Guitar Hero 1/Song A.sng"
+                                try:
+                                    rel = os.path.relpath(
+                                        sd, self._conv_folder)
+                                    rel_dir = os.path.dirname(rel)
+                                    sng_out = (os.path.join(out_base, rel_dir)
+                                               if rel_dir else out_base)
+                                except ValueError:
+                                    sng_out = out_base  # different drives
+                            else:
+                                sng_out = out_base
+                            build_sng_song(sd, self._log, out_base=sng_out)
                         except Exception as e:
                             self._log(f"  ✗ {_label(sd)}: {e}\n", "err")
                         continue
