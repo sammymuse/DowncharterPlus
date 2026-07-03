@@ -4710,8 +4710,16 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 cut_level = _CAMERA_LEVELS.get(cut, 999)
                 if cut_level == 0:
                     min_framing_level = 999  # reset after level-0 shot — allows specific levels again
-                elif cut_level < min_framing_level:
-                    min_framing_level = cut_level
+                else:
+                    # Exceção: duo shots com instrumento partilhado são elegíveis a partir de level 0
+                    prev_insts = _COOP_INSTR.get(last_cut, set()) if last_cut else set()
+                    curr_insts = _COOP_INSTR.get(cut, set())
+                    shared = prev_insts & curr_insts
+                    is_shared_duo = (cut_level >= 2 and len(curr_insts) >= 2 and bool(shared))
+                    if is_shared_duo and min_framing_level > 0:
+                        min_framing_level = 0
+                    elif cut_level < min_framing_level:
+                        min_framing_level = cut_level
                 last_cut, last_tick = cut, placed
             idx += 1
             t += step
@@ -5078,7 +5086,7 @@ def _mood_for_level(level: int, instrument: str, sec_idx: int,
     Density ratio = section density / song mean.  Dense calm → bump up to play;
     sparse high → bump down to play.  Non-unison comes from idle instruments and
     density variation, not a modulo stagger."""
-    if sec_density > 0 and song_mean_density > 0:
+    if sec_density > 0 and song_mean_density > 0 and instrument != "vocal":
         ratio = sec_density / max(song_mean_density, 0.01)
         if level == 0 and ratio > 1.2:
             level = 1
@@ -5108,6 +5116,7 @@ def build_animations(part_onsets: list[int], sections: list[Section], tpb: int,
     # 1/8-note offset for anchor/idle placement (conservative for non-vocal — note-off
     # is close to note-on on percussion. For vocals phrase_ends overrides this.)
     quarter = max(1, tpb // 2)
+    beat = tpb
     last_onset = onsets[-1]
 
     # Compute onset density (onsets per beat) for mood refinement.
@@ -5138,10 +5147,10 @@ def build_animations(part_onsets: list[int], sections: list[Section], tpb: int,
         if sec is not None and _ENERGY_LEVEL[_energy_tier_at(sec, cand)] != cur_level:
             return on
         # Se o tick preemptivo cai dentro de um idle gap, o instrumento
-        # ainda está em repouso; acordar tem de ser no próprio onset.
+        # ainda está em repouso; acordar com antecipação de ~1 beat.
         for a, b in idle_ranges:
             if a < cand < b:
-                return on
+                return max(on - beat, b)
         return cand
 
     # Official pattern: [idle] is placed ~1 beat after the last note, only when
@@ -5161,13 +5170,16 @@ def build_animations(part_onsets: list[int], sections: list[Section], tpb: int,
             # For vocals: find the phrase end after this onset (the note's actual
             # end time), and use that as the idle-start boundary instead of a.
             idle_start = a
-            if instrument == "vocal" and phrase_ends:
+            has_phrase_ends = phrase_ends and any(a < pe < b for pe in phrase_ends)
+            if instrument == "vocal" and has_phrase_ends:
                 for pe in phrase_ends:
                     if a < pe < b:
                         idle_start = pe
                         break
             idle_ranges.append((idle_start, b))
-            idle_ticks.add(idle_start + quarter)
+            # Fallback: sem phrase markers, assumir ~1 beat de duração da última sílaba
+            idle_offset = quarter if has_phrase_ends else beat
+            idle_ticks.add(idle_start + idle_offset)
 
     def _in_idle(tick: int) -> bool:
         return any(a < tick < b for a, b in idle_ranges)
