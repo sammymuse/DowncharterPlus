@@ -633,15 +633,15 @@ _LIGHT_ACCENT_EVERY = 5
 # pool every cycle, we re-emit the same preset `hold` times before advancing.
 # This adds the 24% same-preset re-emissions that official venues use for "pulsing".
 # calm sections hold longer (more re-emissions), high sections advance every cycle.
-_LIGHT_HOLD = {"calm": 3, "mid": 2, "high": 1}
+_LIGHT_HOLD = {"calm": 5, "mid": 3, "high": 2}
 
 # Cluster-then-hold: within each cluster, rapid sub-beat gaps between presets.
 # The pattern defines gaps (in beats) between consecutive events in a cluster.
 # After the cluster, the last preset is held for _LIGHT_HOLD_BARS bars.
 _LIGHT_CLUSTER_PAT = {
-    "calm": [0.5],              # 2 events per step: burst(0.5b) gap
-    "mid":  [0.5],              # 2 events per step: burst(0.5b) gap
-    "high": [0.5, 0.5],         # 3 events per step: burst×2
+    "calm": [],                 # só o downbeat, sem cluster — verse calmo
+    "mid":  [0.5],              # 2 events: burst gap
+    "high": [0.5, 0.5],         # 3 events: burst×2
 }
 
 # Audio-driven trigger density calibration
@@ -948,7 +948,7 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
             if tick < s.start or tick >= s.end:
                 continue
             # Check strobe/pause
-            if _in_span(tick, strobe_spans):
+            if _in_span(tick, strobe_spans) and energy == "high":
                 last = "strobe_fast"
                 continue
             if _in_span(tick, pause_spans):
@@ -1097,7 +1097,7 @@ def find_strobe_spans(drum_onsets: list[int], tpb: int,
          even without being so fast. Does NOT include cymbals/hi-hat (filtered upstream).
     `min_span` = 1.75 beats (between the dense 1.5 and the old 2.0).
     Runs separated by < 1 beat merge. Everything derived from beat fractions."""
-    min_span = int(tpb * 1.75)             # sustained >= 1.75 beats (intermediate)
+    min_span = int(tpb * 3.0)              # sustained >= 3.0 beats (oficiais: strobe raro)
     bridge = tpb                           # merges runs with a gap < 1 beat
     spans = _fast_runs(drum_onsets, int(tpb / 4 * 1.12), min_span)        # 16th
     if dbass_onsets:
@@ -1641,14 +1641,14 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
     #   dynamic: [0.5,0.5,2.0] = 4 events/cluster, hold=6 bars → ~3-4 clusters
     #     → original dense behaviour for autogen/maximum-energy sections
     CLUSTER_PAT = {
-        "conservative": {"calm": [2.0],           "mid": [1.0, 2.0],      "high": [2.0]},
-        "authored":     {"calm": [1.0, 2.0],     "mid": [0.5, 1.0, 2.0], "high": [2.0]},
-        "dynamic":      {"calm": [0.5, 2.0],     "mid": [0.5, 0.5, 2.0], "high": [0.5, 0.5, 2.0]},
+        "conservative": {"calm": [2.0],           "mid": [2.0],           "high": [2.0]},
+        "authored":     {"calm": [0.5, 0.5],     "mid": [0.5, 0.5],     "high": [0.5, 0.5]},
+        "dynamic":      {"calm": [0.5, 0.5],     "mid": [0.5, 0.5, 0.5],"high": [0.5, 0.5, 0.5]},
     }
     HOLD_BARS = {
-        "conservative": {"calm": 16, "mid": 12, "high": 10},
-        "authored":     {"calm": 10, "mid": 8,  "high": 8},
-        "dynamic":      {"calm": 6,  "mid": 6,  "high": 6},
+        "conservative": {"calm": 16, "mid": 14, "high": 12},
+        "authored":     {"calm": 12, "mid": 10,  "high": 10},
+        "dynamic":      {"calm": 8,  "mid": 8,  "high": 8},
     }
 
     for si, s in enumerate(sections):
@@ -4389,7 +4389,7 @@ def _guard_directed(cut: str, tick: int, tpb: int,
     return cut
 
 
-def _level_filter(candidates: list[str], min_level: int) -> list[str]:
+def _level_filter(candidates: list[str], min_level: int, last_cut: str | None = None) -> list[str]:
     """Filter cuts by Onyx level rule: level < min_level OR level == 0 if min == 0.
     
     Falls back to all candidates if filter would empty the pool.
@@ -4400,6 +4400,18 @@ def _level_filter(candidates: list[str], min_level: int) -> list[str]:
         filtered = [c for c in candidates if _CAMERA_LEVELS.get(c, 999) == 0]
     else:
         filtered = [c for c in candidates if _CAMERA_LEVELS.get(c, 999) < min_level]
+    # Exceção: shared duos (partilham instrumento com last_cut) passam sempre
+    if last_cut:
+        prev_insts = _COOP_INSTR.get(last_cut, set())
+        for c in candidates:
+            if c in filtered:
+                continue
+            curr_insts = _COOP_INSTR.get(c, set())
+            shared = prev_insts & curr_insts
+            c_level = _CAMERA_LEVELS.get(c, 999)
+            is_shared_duo = (c_level >= 2 and len(curr_insts) >= 2 and bool(shared))
+            if is_shared_duo:
+                filtered.append(c)
     return filtered if filtered else candidates
 
 
@@ -4588,7 +4600,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 placed = max(t, last_tick + min_gap)
             if placed >= s0.start:
                 break
-            level_pool = _level_filter(framing0, min_framing_level)
+            level_pool = _level_filter(framing0, min_framing_level, last_cut)
             level_pool = _playing_framing(level_pool, placed, inst_onsets, tpb)
             cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV, level_pool[0], rng=rng)
             if cut == last_cut:
@@ -4644,7 +4656,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             if placed <= last_tick:
                 placed = max(t, last_tick + min_gap)
             # Onyx level filter: restrict pool to cuts that respect level progression
-            level_pool = _level_filter(pool, min_framing_level)
+            level_pool = _level_filter(pool, min_framing_level, last_cut)
             if not level_pool:
                 level_pool = pool
             # Playing-state filter: remove cuts que filmam instrumentos em pausa
@@ -4761,7 +4773,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
         chosen = None
         chosen_inst = None
         # Level filter candidates
-        candidates = _level_filter(e.cuts, 0)  # min_level=0: only level-0 directed cuts
+        candidates = _level_filter(e.cuts, 0, None)  # min_level=0: only level-0 directed cuts
         if not candidates:
             candidates = e.cuts
         for cand in candidates:
@@ -4772,7 +4784,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             # should claim >30% of directed cuts (prevents D_Vocals* dominance)
             cand_inst = _DIRECTED_INSTR.get(cand)
             if cand_inst is not None:
-                total = sum(_directed_cap_tracker.values()) or 1
+                total = len(accepted) or 1
                 if _directed_cap_tracker.get(cand_inst, 0) / total > 0.30:
                     continue
             # 42% chance of self-repeat (matching official data)
@@ -5150,7 +5162,8 @@ def build_animations(part_onsets: list[int], sections: list[Section], tpb: int,
         # ainda está em repouso; acordar com antecipação de ~1 beat.
         for a, b in idle_ranges:
             if a < cand < b:
-                return max(on - beat, b)
+                idle_tick = idle_tick_for_range[(a, b)]
+                return max(on - beat, idle_tick + 1)
         return cand
 
     # Official pattern: [idle] is placed ~1 beat after the last note, only when
@@ -5163,6 +5176,7 @@ def build_animations(part_onsets: list[int], sections: list[Section], tpb: int,
     # the onset, and placing idle mid-note looks wrong.
     idle_ranges: list[tuple[int, int]] = []
     idle_ticks: set[int] = set()
+    idle_tick_for_range: dict[tuple[int, int], int] = {}
     dt_measures = _IDLE_DOWNTIME.get(instrument, 4)
     for a, b in zip(onsets, onsets[1:]):
         mt = measure_ticks_at(a, time_sig_map, tpb)
@@ -5179,7 +5193,9 @@ def build_animations(part_onsets: list[int], sections: list[Section], tpb: int,
             idle_ranges.append((idle_start, b))
             # Fallback: sem phrase markers, assumir ~1 beat de duração da última sílaba
             idle_offset = quarter if has_phrase_ends else beat
-            idle_ticks.add(idle_start + idle_offset)
+            idle_tick = idle_start + idle_offset
+            idle_ticks.add(idle_tick)
+            idle_tick_for_range[(idle_start, b)] = idle_tick
 
     def _in_idle(tick: int) -> bool:
         return any(a < tick < b for a, b in idle_ranges)
@@ -5421,6 +5437,9 @@ def generate_venue(events_track: list[AbsEvent], bre_spans: list[tuple[int, int]
     # MIDI-derived strobe spans — catches audio-only walls the drums don't flag.
     if audio_strobe_spans:
         strobe_spans = _merge_spans(strobe_spans + list(audio_strobe_spans), tpb // 2)
+    if len(strobe_spans) > 3:
+        # Ficam os primeiros 3 (mais longos)
+        strobe_spans = sorted(strobe_spans, key=lambda x: -(x[1] - x[0]))[:3]
     out += build_lighting(sections, th, tpb, time_sig_map, drum_onsets,
                           pause_spans, strobe_spans, audio_onsets=audio_onsets,
                           energy_env=energy_env, drop_ticks=drop_ticks,
