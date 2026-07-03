@@ -128,7 +128,7 @@ def apply_handmap(events: list[AbsEvent], tpb: int) -> list[AbsEvent]:
 
         # Look ahead: is the NEXT note after this one on the same fret?
         next_same_fret = False
-        if i + 2 < len(chord_list):
+        if i + 1 < len(chord_list):
             nxt_frets = chord_list[i + 1][1]
             if len(nxt_frets) == 1 and min(nxt_frets) == curr_fret:
                 next_same_fret = True
@@ -162,7 +162,7 @@ def apply_handmap(events: list[AbsEvent], tpb: int) -> list[AbsEvent]:
                 # if the chain actually continues (look at the NEXT note after
                 # this one to confirm).
                 next_ok = False
-                if i + 2 < len(chord_list):
+                if i + 1 < len(chord_list):
                     nt, nf = chord_list[i + 1]
                     n_gap = nt - tick
                     n_single = len(nf) == 1
@@ -194,10 +194,18 @@ def apply_handmap(events: list[AbsEvent], tpb: int) -> list[AbsEvent]:
             abs_tick=tick,
             msg=mido.Message("note_on", note=FORCE_HOPO, velocity=96, time=0),
         ))
+        new_events.append(AbsEvent(
+            abs_tick=tick + 1,
+            msg=mido.Message("note_off", note=FORCE_HOPO, velocity=0, time=0),
+        ))
     for tick in sorted(to_add_102):
         new_events.append(AbsEvent(
             abs_tick=tick,
             msg=mido.Message("note_on", note=FORCE_STRUM, velocity=96, time=0),
+        ))
+        new_events.append(AbsEvent(
+            abs_tick=tick + 1,
+            msg=mido.Message("note_off", note=FORCE_STRUM, velocity=0, time=0),
         ))
 
     new_events.sort(key=lambda e: e.abs_tick)

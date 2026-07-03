@@ -672,6 +672,8 @@ def _generate_blinks(
         out.append((t, "Blink", _BLINK_WEIGHT, "ease"))       # close
         out.append((t + _BLINK_CLOSE_S, "Blink", _BLINK_WEIGHT, "hold"))  # hold
         out.append((t + _BLINK_CLOSE_S + _BLINK_HOLD_S, "Blink", 0, "linear"))  # open
+        out.append((t + _BLINK_CLOSE_S + _BLINK_HOLD_S + _BLINK_OPEN_S,
+                    "Blink", 0, "hold"))                       # hold open
         t += rng.uniform(*_BLINK_INTERVAL)
 
     # Phrase-boundary bonus blinks: 40 % chance of an extra blink just
@@ -687,8 +689,11 @@ def _generate_blinks(
                 out.append((pe, "Blink", _BLINK_WEIGHT, "ease"))
                 out.append((pe + _BLINK_CLOSE_S, "Blink", _BLINK_WEIGHT, "hold"))
                 out.append((pe + _BLINK_CLOSE_S + _BLINK_HOLD_S, "Blink", 0, "linear"))
+                out.append((pe + _BLINK_CLOSE_S + _BLINK_HOLD_S + _BLINK_OPEN_S,
+                            "Blink", 0, "hold"))
                 blink_times.update({pe, pe + _BLINK_CLOSE_S,
-                                    pe + _BLINK_CLOSE_S + _BLINK_HOLD_S})
+                                    pe + _BLINK_CLOSE_S + _BLINK_HOLD_S,
+                                    pe + _BLINK_CLOSE_S + _BLINK_HOLD_S + _BLINK_OPEN_S})
 
     out.sort(key=lambda e: (e[0], e[1]))
     return out

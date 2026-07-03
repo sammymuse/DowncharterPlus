@@ -70,11 +70,13 @@ def _classify_hopo(chords, hopo_thresh, force_on, force_off):
     """
     Classify each chord as HOPO (True) or STRUM (False), the game's way:
       auto-HOPO = single note, different fret from the previous, gap ≤ hopo_thresh.
-      Force-on (101) forces HOPO; force-off (102) forces strum.
+      Force-on (101) forces HOPO; force-off (102) forces strum and propagates
+      across the rest of the chain.
     Returns a list of bool aligned with `chords`.
     """
     out = []
     pt, pf = -10**9, frozenset()
+    strum_chain = False
     for tick, frets, _ in chords:
         gap = tick - pt
         single = len(frets) == 1
@@ -82,10 +84,17 @@ def _classify_hopo(chords, hopo_thresh, force_on, force_off):
         auto = single and diff and gap <= hopo_thresh
         if tick in force_on and single and diff:
             h = True
+            strum_chain = False
         elif tick in force_off:
             h = False
+            strum_chain = True            # propagate: subsequent auto-HOPO notes become strum
+        elif strum_chain and auto:
+            h = False                     # 102 broke the chain — continue forcing strum
         else:
             h = auto
+            # Natural chain break (chord, same fret, or gap > threshold) resets strum_chain
+            if not single or not diff or gap > hopo_thresh:
+                strum_chain = False
         out.append(h)
         pt, pf = tick, frets
     return out
