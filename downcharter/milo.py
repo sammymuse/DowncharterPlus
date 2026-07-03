@@ -141,20 +141,40 @@ def _serialize_lipsync(frames: dict[int, dict], n_frames: int) -> bytes:
     return bytes(out)
 
 
-def build_song_lipsync(spans, song_len_s: float, lang: str = "en") -> bytes:
+def build_song_lipsync(spans, song_len_s: float, lang: str = "en",
+                        phrase_ends: list[float] | None = None,
+                        vocal_notes: list[tuple[float, int]] | None = None,
+                        facial_seed: int | None = None) -> bytes:
     """CharLipSync bytes for the milo, from the same audio-guided syllable spans
     (`lip_spans` = [(start_s, end_s, text, gain)]) used for the LIPSYNC1 MIDI track.
 
     Reuses `lipsync.frames_from_spans` (the dense 30 fps state path) so the milo's
     inherently dense per-frame viseme states come straight from what we already
-    compute — no new lipsync logic."""
-    frames, n_frames = _lip.frames_from_spans(spans, song_len_s, lang)
+    compute — no new lipsync logic.
+
+    When phrase_ends/vocal_notes are provided, facial animation keyframes
+    (Blink, Squint, Eyebrows) are also embedded in the milo so they reach
+    the game — not just the MIDI LIPSYNC1 track."""
+    frames, n_frames = _lip.frames_from_spans(
+        spans, song_len_s, lang,
+        phrase_ends=phrase_ends,
+        vocal_notes=vocal_notes,
+        facial_seed=facial_seed,
+    )
     return _serialize_lipsync(frames, n_frames)
 
 
-def build_milo_from_spans(spans, song_len_s: float, lang: str = "en") -> bytes:
+def build_milo_from_spans(spans, song_len_s: float, lang: str = "en",
+                           phrase_ends: list[float] | None = None,
+                           vocal_notes: list[tuple[float, int]] | None = None,
+                           facial_seed: int | None = None) -> bytes:
     """Convenience: spans → complete .milo ready to write to disk."""
-    return build_milo(build_song_lipsync(spans, song_len_s, lang))
+    return build_milo(build_song_lipsync(
+        spans, song_len_s, lang,
+        phrase_ends=phrase_ends,
+        vocal_notes=vocal_notes,
+        facial_seed=facial_seed,
+    ))
 
 
 # ───────────────────────────── validation reader ─────────────────────────────

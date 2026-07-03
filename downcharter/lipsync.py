@@ -367,6 +367,64 @@ def _lerp_state(a: dict, b: dict, f: float) -> dict:
     return out
 
 
+def _facial_frames_from_keyframes(
+    facial_kf: list[tuple[float, str, int, str]],
+    n_frames: int,
+) -> dict[int, dict]:
+    """Sparse (time_s, viseme, weight, graph) → dense 30fps {frame: {viseme: weight}}.
+
+    Graph tokens (from Lipsync.hs confirmed semantics):
+      hold   → mantenha o peso até ao próximo keyframe
+      linear → interpole linearmente até ao próximo peso
+      ease   → exponencial (1 - (1-t)^2) até ao próximo peso"""
+    out: dict[int, dict] = {}
+    # Group by viseme and sort by time
+    by_viseme: dict[str, list[tuple[float, int, str]]] = {}
+    for time_s, viseme, weight, graph in facial_kf:
+        by_viseme.setdefault(viseme, []).append((time_s, weight, graph))
+
+    for viseme, kfs in by_viseme.items():
+        kfs.sort(key=lambda x: x[0])  # sort by time
+        n = len(kfs)
+        for i, (t_i, w_i, g_i) in enumerate(kfs):
+            start_frame = max(0, int(t_i * FPS))
+            if i + 1 < n:
+                t_next, w_next, _ = kfs[i + 1]
+                end_frame = min(n_frames, int(t_next * FPS))
+                graph = g_i
+            else:
+                end_frame = n_frames
+                graph = "hold"
+
+            for fr in range(start_frame, end_frame):
+                if graph == "hold":
+                    w = w_i
+                elif graph == "linear":
+                    t_range = t_next - t_i
+                    if t_range > 0:
+                        t_local = (fr / FPS) - t_i
+                        alpha = min(1.0, t_local / t_range)
+                        w = int(w_i + alpha * (w_next - w_i))
+                    else:
+                        w = w_i
+                elif graph == "ease":
+                    t_range = t_next - t_i
+                    if t_range > 0:
+                        t_local = (fr / FPS) - t_i
+                        alpha = min(1.0, t_local / t_range)
+                        alpha = 1.0 - (1.0 - alpha) ** 2
+                        w = int(w_i + alpha * (w_next - w_i))
+                    else:
+                        w = w_i
+                else:
+                    w = w_i
+                w_clamped = max(0, min(255, w))
+                if fr not in out:
+                    out[fr] = {}
+                out[fr][viseme] = w_clamped
+    return out
+
+
 def _sample_into(frames: dict[int, dict], pts: list[tuple[float, dict]]) -> None:
     """Sample the points at 30 fps and merge into `frames` (max per viseme)."""
     if len(pts) < 2:
@@ -461,7 +519,10 @@ def lipsync_delta_events(lyrics: list[tuple[float, str]], song_len_s: float,
     return list(_delta_frames(frames, n_frames))
 
 
-def lipsync_events_from_spans(spans, song_len_s: float, lang: str = "en"):
+def lipsync_events_from_spans(spans, song_len_s: float, lang: str = "en",
+                             phrase_ends: list[float] | None = None,
+                             vocal_notes: list[tuple[float, int]] | None = None,
+                             facial_seed: int | None = None):
     """(frame_idx, [(viseme, weight)]) for a LIPSYNC# MIDI track, driven by the REAL
     syllable spans (audio-guided start/end) instead of a geometric onset window.
 
@@ -477,12 +538,21 @@ def lipsync_events_from_spans(spans, song_len_s: float, lang: str = "en"):
 
     NOTE: this is the dense 30fps-delta path, kept as reference/fallback. The production
     path is `lipsync_keyframes_from_spans` (sparse keyframes with hold/ease graphs)."""
-    frames, n_frames = frames_from_spans(spans, song_len_s, lang)
+    frames, n_frames = frames_from_spans(
+        spans, song_len_s, lang,
+        phrase_ends=phrase_ends,
+        vocal_notes=vocal_notes,
+        facial_seed=facial_seed,
+    )
     return list(_delta_frames(frames, n_frames))
 
 
 def frames_from_spans(spans, song_len_s: float,
-                      lang: str = "en") -> tuple[dict[int, dict], int]:
+                      lang: str = "en",
+                      phrase_ends: list[float] | None = None,
+                      vocal_notes: list[tuple[float, int]] | None = None,
+                      facial_seed: int | None = None,
+                      ) -> tuple[dict[int, dict], int]:
     """Dense per-frame viseme states (name→weight, 30 fps) from audio-guided spans.
 
     The shared core of the dense path: resolves one mouth shape per span (grouping
@@ -490,7 +560,10 @@ def frames_from_spans(spans, song_len_s: float,
     at 30 fps and merges them (max per viseme), scaling by the per-syllable loudness
     `gain`. Returns `(frames, n_frames)`. `lipsync_events_from_spans` delta-encodes it
     for the MIDI track; `milo.build_song_lipsync` serializes it into the CharLipSync
-    that goes inside the .milo (guaranteeing the same lipsync reaches the game)."""
+    that goes inside the .milo (guaranteeing the same lipsync reaches the game).
+
+    When ``phrase_ends`` or ``vocal_notes`` are provided, facial animation keyframes
+    (Blink, Squint, Eyebrows) are also embedded so they reach the game via the milo."""
     spans = list(spans)
     shapes = _resolve_shapes(spans, lang)
     frames: dict[int, dict] = {}
@@ -512,6 +585,26 @@ def frames_from_spans(spans, song_len_s: float,
                    for pt_t, st in pts]
         _sample_into(frames, pts)
     n_frames = max(1, int(math.ceil(song_len_s * FPS)) + 1)
+
+    # Inject facial animation keyframes (Blink, Squint, Eyebrows) into the milo.
+    if song_len_s is not None and song_len_s > 0 and (phrase_ends or vocal_notes):
+        gains: list[tuple[float, float]] = [(sp[0], sp[3] if len(sp) > 3 else 1.0)
+                                            for sp in spans]
+        facial_kf = generate_facial_keyframes(
+            song_len_s, phrase_ends, facial_seed, vocal_notes, gains)
+        if facial_kf:
+            facial_frames = _facial_frames_from_keyframes(facial_kf, n_frames)
+            # Merge — max per viseme (mouth and facial visemes are disjoint sets,
+            # but max is still the safe choice).
+            for fr, visemes in facial_frames.items():
+                if fr not in frames:
+                    frames[fr] = {}
+                for viseme, w in visemes.items():
+                    if viseme not in frames[fr]:
+                        frames[fr][viseme] = w
+                    else:
+                        frames[fr][viseme] = max(frames[fr][viseme], w)
+
     return frames, n_frames
 
 

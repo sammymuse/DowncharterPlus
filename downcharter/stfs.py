@@ -39,7 +39,8 @@ from . import validate as _validate
 from . import mogg as _mogg
 from . import art as _art
 from . import ps3build as _ps3
-from .midi_utils import build_tempo_map, tick_to_ms
+from . import processor as _proc
+from .midi_utils import build_tempo_map, tick_to_ms, to_abs
 
 # Reuse every platform-agnostic helper from the tested PS3 path verbatim.
 _parse_song_ini = _ps3._parse_song_ini
@@ -521,8 +522,32 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     try:
         spans = _audio_guided_spans(out_mid, src_folder)
         if spans:
+            # Extract phrase_ends and vocal_notes from PART VOCALS for facial animation.
+            phrase_ends_s: list[float] = []
+            vocal_notes: list[tuple[float, int]] = []
+            pv = next((tr for tr in out_mid.tracks
+                       if (tr.name or "").strip().upper() == "PART VOCALS"), None)
+            if pv is not None:
+                tpb = out_mid.ticks_per_beat
+                tempo_map = build_tempo_map(out_mid)
+                abs_pv = to_abs(pv)
+                pe_ticks = _proc._abs_phrase_ends(list(abs_pv))
+                phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
+                                 for t in pe_ticks]
+                for e in abs_pv:
+                    m = e.msg
+                    n = getattr(m, "note", None)
+                    if (m.type == "note_on" and getattr(m, "velocity", 0) > 0
+                            and n is not None and 36 <= n <= 84):
+                        sec = tick_to_ms(e.abs_tick, tempo_map, tpb) / 1000.0
+                        vocal_notes.append((sec, n))
             files[f"{base}/gen/{shortname}.milo_xbox"] = \
-                _milo.build_milo_from_spans(spans, out_mid.length)
+                _milo.build_milo_from_spans(
+                    spans, out_mid.length,
+                    phrase_ends=phrase_ends_s,
+                    vocal_notes=vocal_notes,
+                    facial_seed=42,
+                )
             log(f"    ◇ milo: built from {len(spans)} audio-guided syllable(s)\n", "info")
         else:
             # fallback: reuse a source milo (ps3/xbox bodies are identical)

@@ -206,6 +206,89 @@ def _build_multi_instrument_mid(first_note_offset: int = 0) -> mido.MidiFile:
     return mid
 
 
+def _build_midi_with_markers(first_note_offset: int = 0) -> mido.MidiFile:
+    """Build a synthetic MIDI designed to trigger handmap + drums bugs.
+
+    Guitar: notes with gap=240 ticks + fret changes → forces 101/102 markers.
+    Drums:  includes tom markers (110, 111, 112) which were previously duplicated.
+    """
+    import mido
+    tpb = 480
+    bt = tpb  # one beat
+    offset = first_note_offset
+
+    mid = mido.MidiFile(ticks_per_beat=tpb)
+
+    # Tempo track
+    tr_t = mido.MidiTrack()
+    tr_t.name = "Tempo"
+    tr_t.append(mido.MetaMessage("track_name", name="Tempo", time=0))
+    tr_t.append(mido.MetaMessage("set_tempo", tempo=500000, time=0))
+    tr_t.append(mido.MetaMessage("time_signature", numerator=4, denominator=4, time=0))
+    tr_t.append(mido.MetaMessage("end_of_track", time=0))
+    mid.tracks.append(tr_t)
+
+    def _build_gem_track(name: str, notes: list[tuple[int, int, int]],
+                         length: int = 60) -> mido.MidiTrack:
+        tr = mido.MidiTrack()
+        tr.name = name
+        tr.append(mido.MetaMessage("track_name", name=name, time=0))
+        if not notes:
+            tr.append(mido.MetaMessage("end_of_track", time=0))
+            return tr
+        sortable = sorted(notes, key=lambda x: (x[0], x[1]))
+        prev = 0
+        for tick, note, vel in sortable:
+            dt = tick - prev
+            if dt < 0:
+                dt = 0
+            tr.append(mido.Message("note_on", note=note, velocity=vel, time=dt))
+            tr.append(mido.Message("note_off", note=note, velocity=0, time=length))
+            prev = tick + length
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        return tr
+
+    # ── PART GUITAR: single notes at HOPO-gap=240 ticks + fret changes → 101/102
+    # Pattern: green(96) → red(97) → green(96) → ... every 240 ticks
+    gtr_notes = []
+    for i in range(200):
+        t = offset + i * 240
+        note = 96 if i % 2 == 0 else 97  # alternate frets → fret changes
+        gtr_notes.append((t, note, 100))
+    mid.tracks.append(_build_gem_track("PART GUITAR", gtr_notes))
+
+    # ── PART DRUMS: kick/snare + tom markers (110,111,112) + overdrive (103)
+    drum_notes = []
+    # Regular kick (96) and snare (97)
+    for b in range(64):
+        t = offset + b * bt
+        if b % 2 == 0:
+            drum_notes.append((t, 96, 100))  # kick
+        else:
+            drum_notes.append((t, 97, 100))  # snare
+    # Tom markers at specific positions (these triggered the duplication bug)
+    # Tom 1 (110) at bar 4, Tom 2 (111) at bar 8, Tom 3 (112) at bar 12
+    for bar in [4, 8, 12]:
+        t = offset + bar * 4 * bt
+        drum_notes.append((t, 110, 100))
+        drum_notes.append((t + 240, 111, 100))
+        drum_notes.append((t + 480, 112, 100))
+    # Overdrive marker (103) at bar 2
+    t = offset + 2 * 4 * bt
+    drum_notes.append((t, 103, 100))
+    mid.tracks.append(_build_gem_track("PART DRUMS", drum_notes))
+
+    # ── EVENTS with [end]
+    ev = mido.MidiTrack()
+    ev.name = "EVENTS"
+    ev.append(mido.MetaMessage("track_name", name="EVENTS", time=0))
+    ev.append(mido.MetaMessage("text", text="[end]", time=offset + 64 * bt))
+    ev.append(mido.MetaMessage("end_of_track", time=0))
+    mid.tracks.append(ev)
+
+    return mid
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Fixtures
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -563,6 +646,81 @@ class TestFullMIDIPipeline:
         dupes = [(t, v) for (t, v), c in Counter(pairs).items() if c > 1]
         assert not dupes, f"Duplicate (tick, viseme) events: {dupes[:10]}"
         print(f"  LIPSYNC1: {len(pairs)} events, 0 duplicate (tick, viseme) pairs")
+
+    def test_process_and_validate_marker_bugs(self, tmp_path):
+        """Regression: handmap 101/102 must have note_off; drums markers must not
+        be duplicated across reduced difficulties. Uses explicit checks because
+        validate_rb_midi only catches same-pitch overlaps, not orphan note_offs."""
+        from downcharter import processor as _proc
+        from downcharter import validate as _val
+
+        # Build MIDI that triggers handmap (gap=240 + fret changes) and has
+        # tom/overdrive markers (110-112, 103) that were previously duplicated.
+        mid = _build_midi_with_markers(first_note_offset=960)
+        src = tmp_path / "marker_bugs.mid"
+        mid.save(str(src))
+
+        dst = tmp_path / "validated.mid"
+        _proc.process_midi(
+            str(src), str(dst),
+            diffs_to_gen=["hard", "medium", "easy"],
+            do_expert_plus=False, do_venue=True,
+            do_lipsync=False, do_talkies=False, do_drum_anim=False,
+        )
+
+        out_mid = mido.MidiFile(str(dst))
+
+        # ── Check 1: 101/102 handmap markers have corresponding note_offs
+        # (validate_rb_midi does NOT catch hanging notes — we check directly)
+        FORCE_NOTES = {101, 102}
+        for tr in out_mid.tracks:
+            nm = (tr.name or "").strip().upper()
+            if "GUITAR" not in nm and "BASS" not in nm:
+                continue
+            # Collect all (tick, note, is_on) events
+            events = []
+            tick = 0
+            for msg in tr:
+                tick += msg.time if hasattr(msg, 'time') else 0
+                if hasattr(msg, 'note') and msg.note in FORCE_NOTES:
+                    events.append((tick, msg.note, msg.type == 'note_on' and msg.velocity > 0))
+            # For each force marker note_on there must be a note_off
+            for t, note, is_on in events:
+                if is_on:
+                    has_off = any(t2 == t + 1 and n == note
+                                  for t2, n, io in events if not io)
+                    assert has_off, (
+                        f"{nm}: force marker {note} at tick {t} has no note_off "
+                        f"(handmap bug — notes hang until end of song)"
+                    )
+
+        # ── Check 2: drums markers must NOT be duplicated across difficulties
+        # (validate_rb_midi catches overlaps but we verify marker dedup explicitly)
+        for tr in out_mid.tracks:
+            nm = (tr.name or "").strip().upper()
+            if not nm.startswith("PART DRUMS"):
+                continue
+            # Marker notes are >= 103
+            marker_events = []
+            tick = 0
+            for msg in tr:
+                tick += msg.time if hasattr(msg, 'time') else 0
+                if hasattr(msg, 'note') and msg.note >= 103:
+                    marker_events.append((tick, msg.note))
+            # Check for duplicates by (tick, note)
+            seen: dict[tuple[int, int], str] = {}
+            for t, note in marker_events:
+                key = (t, note)
+                assert key not in seen, (
+                    f"{nm}: marker note {note} at tick {t} appears more than once "
+                    f"(drums duplication bug — was added once per reduced difficulty)"
+                )
+                seen[key] = nm
+
+        # ── Check 3: standard RB3 validation (no crash-level errors)
+        issues = _val.validate_rb_midi(out_mid)
+        errors = [(lvl, msg) for lvl, msg in issues if lvl == "error"]
+        assert len(errors) == 0, f"RB3 validation errors: {errors}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
