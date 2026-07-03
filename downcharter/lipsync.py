@@ -288,10 +288,42 @@ def align_word_phonemes(syllables: list[str], lang: str = "en") -> list[list[str
 
 
 # ───────────────────────── building the keyframes ────────────────────────────
-def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
+# A syllable that connects to its neighbour with no real pause (legato/same
+# word/held phrase) shouldn't punch the mouth fully shut and reopen — real
+# singing (and connected speech) relaxes partway, not to a dead stop. Only a
+# genuine gap (silence, phrase end, song boundary) gets the full close to {}.
+# Below this many seconds between two spans counts as "no real gap" (they're
+# meant to be exactly back-to-back per `_chart_vocals_from_lyrics`).
+_LEGATO_GAP_S = 0.02
+_LEGATO_FLOOR = 0.35   # weight fraction kept at a legato boundary instead of 0
+
+
+def _scale_state(state: dict, f: float) -> dict:
+    """`state` scaled to weight fraction `f` (0 → {}, i.e. fully closed)."""
+    if f <= 0 or not state:
+        return {}
+    return {k: max(1, min(255, int(round(v * f)))) for k, v in state.items()}
+
+
+def _edge_shapes(shape) -> tuple[dict, dict]:
+    """The mouth shape actually touching each edge of the syllable window (first
+    consonant or the vowel if there's none; last consonant/diphthong-end or the
+    vowel) — what a legato boundary should relax TOWARD instead of {}."""
+    initial, (vmain, vend), final = shape
+    start = initial[0] if initial else vmain
+    end = final[-1] if final else (vend if vend is not None else vmain)
+    return start, end
+
+
+def _syllable_points(t: float, dur: float, shape,
+                     start_floor: float = 0.0, end_floor: float = 0.0
+                     ) -> list[tuple[float, dict]]:
     """Control points (time, visemes) of a syllable in the window [t, t+dur].
 
-    Closed mouth {} before/after; brief consonants; vowel sustained in the middle;
+    Closed mouth {} before/after (or, with `start_floor`/`end_floor` > 0, a
+    partial-weight version of the syllable's own edge shape — used when this
+    syllable connects to its neighbour with no real pause, so the mouth eases
+    instead of fully closing); brief consonants; vowel sustained in the middle;
     diphthong drops from the main shape to the final one. Linear interpolation
     between points creates the transitions (consonant↔vowel)."""
     initial, (vmain, vend), final = shape
@@ -301,8 +333,9 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     inner = max(1e-3, dur - attack - release)
     units = n_i + 3 + n_f          # the vowel is worth 3 units
     u = inner / units
+    edge_start, edge_end = _edge_shapes(shape)
 
-    pts: list[tuple[float, dict]] = [(t, {})]
+    pts: list[tuple[float, dict]] = [(t, _scale_state(edge_start, start_floor))]
     cur = t + attack
     for c in initial:
         pts.append((cur, c))
@@ -318,7 +351,7 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     for c in final:
         pts.append((cur, c))
         cur += u
-    pts.append((t + dur, {}))
+    pts.append((t + dur, _scale_state(edge_end, end_floor)))
     return pts
 
 
@@ -461,13 +494,18 @@ def frames_from_spans(spans, song_len_s: float,
     spans = list(spans)
     shapes = _resolve_shapes(spans, lang)
     frames: dict[int, dict] = {}
-    for sp, shape in zip(spans, shapes):
+    n = len(spans)
+    for i, (sp, shape) in enumerate(zip(spans, shapes)):
         t, end = sp[0], sp[1]
         gain = sp[3] if len(sp) > 3 else 1.0
         dur = end - t
         if dur <= 0:
             continue
-        pts = _syllable_points(t, dur, shape)
+        start_floor = (_LEGATO_FLOOR if i > 0
+                       and t - spans[i - 1][1] <= _LEGATO_GAP_S else 0.0)
+        end_floor = (_LEGATO_FLOOR if i < n - 1
+                     and spans[i + 1][0] - end <= _LEGATO_GAP_S else 0.0)
+        pts = _syllable_points(t, dur, shape, start_floor, end_floor)
         if gain != 1.0:
             pts = [(pt_t, {nm: max(0, min(255, int(round(w * gain))))
                            for nm, w in st.items()})
@@ -501,16 +539,24 @@ def _resolve_shapes(spans, lang: str = "en") -> list:
 # the viseme's NEXT event — `hold` keeps the weight flat, `linear` ramps, `ease`
 # ramps exponentially (diphthong glide). Default (no token) = linear.
 
-def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, str]]:
+def _syllable_points_g(t: float, dur: float, shape,
+                       start_floor: float = 0.0, end_floor: float = 0.0
+                       ) -> list[tuple[float, dict, str]]:
     """Like `_syllable_points` but each point carries the graph of the segment that
-    STARTS at it: a held vowel plateau (`hold`) and the diphthong glide (`ease`)."""
+    STARTS at it: a held vowel plateau (`hold`) and the diphthong glide (`ease`).
+
+    `start_floor`/`end_floor` (see `_syllable_points`) relax to a partial-weight
+    version of the syllable's own edge shape instead of fully closing to {} when
+    this syllable connects to its neighbour with no real pause."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
     attack = min(0.04, dur * 0.25)
     release = min(0.05, dur * 0.25)
     inner = max(1e-3, dur - attack - release)
     u = inner / (n_i + 3 + n_f)        # the vowel is worth 3 units
-    pts: list[tuple[float, dict, str]] = [(t, {}, "linear")]   # ramp up from closed
+    edge_start, edge_end = _edge_shapes(shape)
+    pts: list[tuple[float, dict, str]] = [
+        (t, _scale_state(edge_start, start_floor), "linear")]
     cur = t + attack
     for c in initial:
         pts.append((cur, c, "linear"))
@@ -527,7 +573,7 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
     for c in final:
         pts.append((cur, c, "linear"))
         cur += u
-    pts.append((t + dur, {}, "linear"))   # close
+    pts.append((t + dur, _scale_state(edge_end, end_floor), "linear"))   # close/relax
     return pts
 
 
@@ -845,8 +891,12 @@ def lipsync_keyframes_from_spans(
     Production path. Same audio-guided spans as `lipsync_events_from_spans`, but emits
     sparse keyframes with Onyx graph tokens (held vowels = `hold`, diphthong glides =
     `ease`, transitions = linear) instead of baking the curve into dense 30fps deltas.
-    Far fewer events and closer to how Onyx itself authors the milo. Syllable windows
-    are disjoint (audio gap between gems) so each closes the mouth before the next.
+    Far fewer events and closer to how Onyx itself authors the milo. Adjacent syllable
+    windows with no real pause between them (back-to-back, same word/phrase) relax
+    only partway (`_LEGATO_FLOOR`) instead of fully closing the mouth — otherwise every
+    syllable boundary punches shut and reopens like discrete speech instead of the
+    connected articulation of singing. A genuine gap (real silence, phrase end) still
+    closes fully.
 
     When ``song_len_s`` is provided, facial animation keyframes are generated alongside
     the mouth shapes and merged into the output.  ``facial_seed`` makes random blink/
@@ -855,12 +905,18 @@ def lipsync_keyframes_from_spans(
     spans = list(spans)
     shapes = _resolve_shapes(spans, lang)
     out: list[tuple[float, str, int, str]] = []
-    for sp, shape in zip(spans, shapes):
+    n = len(spans)
+    for i, (sp, shape) in enumerate(zip(spans, shapes)):
         t, end = sp[0], sp[1]
         gain = sp[3] if len(sp) > 3 else 1.0
         if end - t <= 0:
             continue
-        out.extend(_keyframes_from_points(_syllable_points_g(t, end - t, shape), gain))
+        start_floor = (_LEGATO_FLOOR if i > 0
+                       and t - spans[i - 1][1] <= _LEGATO_GAP_S else 0.0)
+        end_floor = (_LEGATO_FLOOR if i < n - 1
+                     and spans[i + 1][0] - end <= _LEGATO_GAP_S else 0.0)
+        out.extend(_keyframes_from_points(
+            _syllable_points_g(t, end - t, shape, start_floor, end_floor), gain))
     if song_len_s is not None and song_len_s > 0:
         facial = generate_facial_keyframes(
             song_len_s, phrase_ends, facial_seed, vocal_notes)
