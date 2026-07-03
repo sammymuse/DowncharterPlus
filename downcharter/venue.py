@@ -4568,7 +4568,9 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             slots.append((placed, cut))
             last_cut, last_tick = cut, placed
             cut_level = _CAMERA_LEVELS.get(cut, 999)
-            if cut_level < min_framing_level:
+            if cut_level == 0:
+                min_framing_level = 999  # reset after level-0 shot — allows specific levels again
+            elif cut_level < min_framing_level:
                 min_framing_level = cut_level
             idx += 1
             t += max(ms_to_ticks(pace_ms0, t, tempo_map, tpb), min_gap)
@@ -4619,7 +4621,8 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             # Playing-state filter: remove cuts que filmam instrumentos em pausa
             level_pool = _playing_framing(level_pool, placed, inst_onsets, tpb)
             if not level_pool:
-                level_pool = pool
+                # Restore only group shots when no instrument is playing — avoids ghost guard cascade
+                level_pool = [c for c in _GROUP_FRAMINGS if c not in bad_framings] or ["All_Near"]
 
             # Posição na secção
             if sec_duration > 0:
@@ -4676,7 +4679,9 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 cd_state.update(cut, placed, _COOP_INSTR)
                 recent_coop.append(cut)
                 cut_level = _CAMERA_LEVELS.get(cut, 999)
-                if cut_level < min_framing_level:
+                if cut_level == 0:
+                    min_framing_level = 999  # reset after level-0 shot — allows specific levels again
+                elif cut_level < min_framing_level:
                     min_framing_level = cut_level
                 last_cut, last_tick = cut, placed
             idx += 1

@@ -564,7 +564,10 @@ def process_midi(
                 events, gen_diffs, tempo_map, tpb, time_sig_map)
             for diff in gen_diffs:
                 for ev in reduced_by_diff.get(diff, []):
-                    if ev.msg.type in ("note_on", "note_off"):
+                    # Skip marker notes (103-127): they come from the original
+                    # track (all_events = list(events) above) and must not be
+                    # re-added per difficulty. Notes < 103 are regular gems.
+                    if ev.msg.type in ("note_on", "note_off") and ev.msg.note < 103:
                         all_events.append(ev)
 
         elif track_type == "guitar":

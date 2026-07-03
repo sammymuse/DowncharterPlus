@@ -688,5 +688,5 @@ def reduce_drums_all(
     charts["medium"] = reduce_medium(charts["hard"], ctx)
     charts["easy"]   = reduce_easy(charts["medium"], ctx)
 
-    return {diff: emit_events(charts[diff], DIFF_OFFSET[diff], [])
+    return {diff: emit_events(charts[diff], DIFF_OFFSET[diff], markers)
             for diff in diffs if diff in charts}
