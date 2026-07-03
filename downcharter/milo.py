@@ -116,8 +116,9 @@ def _build_dir_prefix(entry_names: list[str]) -> bytes:
     return bytes(out)
 
 
-# Backward-compatible singleton: for single-entry callers the dir prefix is
-# byte-identical to the old hardcoded constant (verified below).
+# Singleton dir prefix for the common single-entry case (N=1).
+# Uses the same _build_dir_prefix path as multi-entry, so behaviour is
+# consistent; byte-identical to the original hardcoded _FULL_DIR_SINGLE.
 _DIR_PREFIX = _build_dir_prefix(["song.lipsync"])
 
 
@@ -159,9 +160,14 @@ def build_milo(lipsync_or_list: bytes | list[bytes]) -> bytes:
 
     body = bytearray()
     body += _build_dir_prefix(names)
+    # N entries → N+2 barriers total (leading + N intermediate + trailing).
+    # Barrier layout: [leading, blob0_end, blob1_end, ..., blob{N-1}_end, trailing]
+    # so blob i is body[barriers[i+1]+4 : barriers[i+2]].
+    # The leading barrier (barriers[0]) marks end-of-header; the formula
+    # i1=barriers[index*2+1], i2=barriers[index*2+2] then gives the correct range.
+    body += _BARRIER  # leading (barriers[0])
     for lb in lipsync_list:
-        body += _BARRIER + lb
-    body += _BARRIER
+        body += lb + _BARRIER  # blob + intermediate barrier
     return add_milo_header(bytes(body))
 
 
@@ -262,17 +268,26 @@ def build_multi_lipsync(spans_list: list, song_len_s: float, lang: str = "en",
     """Build N lipsync byte blobs from N span lists (lead + HARM1 + HARM2 + HARM3).
 
     Each list may be empty (a track with no lyrics produces no lipsync entry).
-    Returns only the non-empty entries."""
-    out: list[bytes] = []
-    for spans in spans_list:
+    Returns entries in the order expected by build_milo for the RB3 multi-entry
+    convention: harmonies FIRST, lead LAST (so build_milo names them
+    part2.lipsync / part3.lipsync / song.lipsync)."""
+    parts: list[bytes] = []
+    lead: bytes | None = None
+    for i, spans in enumerate(spans_list):
         if spans:
-            out.append(build_song_lipsync(
+            blob = build_song_lipsync(
                 spans, song_len_s, lang,
                 phrase_ends=phrase_ends,
                 vocal_notes=vocal_notes,
                 facial_seed=facial_seed,
-            ))
-    return out
+            )
+            if i == 0:
+                lead = blob   # first vocal track = lead / PART VOCALS
+            else:
+                parts.append(blob)
+    if lead is not None:
+        parts.append(lead)   # lead goes LAST → named "song.lipsync" by build_milo
+    return parts
 
 
 # ───────────────────────────── validation reader ─────────────────────────────
@@ -280,8 +295,10 @@ def parse_song_lipsync(milo_bytes: bytes, index: int = 0) -> dict:
     """Parse the Nth lipsync entry from a .milo back to
     {visemes, n_frames, lipsync_bytes, frames}.
 
-    ``index=0`` reads the first entry (``song.lipsync``); ``index=1`` reads
-    ``song.lipsync.2``, etc.  Used for round-trip validation gate."""
+    For a multi-entry milo the entries are (in order):
+    ``part2.lipsync``, ``part3.lipsync``, …, ``song.lipsync`` (RB3 convention).
+    ``index=0`` reads the first entry; ``index=1`` the second, etc.
+    Used for round-trip validation gate."""
     body = milo_bytes[_MILO_HEADER_SIZE:]
     # Collect all ADDEADDE barrier positions
     barriers: list[int] = []
@@ -292,12 +309,12 @@ def parse_song_lipsync(milo_bytes: bytes, index: int = 0) -> dict:
             break
         barriers.append(p)
         pos = p + 4
-    if index * 2 + 1 >= len(barriers):
+    if index + 1 >= len(barriers):
         raise ValueError(
             f"lipsync entry {index} not found "
-            f"(milo has {len(barriers) // 2} entries)")
-    i1 = barriers[index * 2]
-    i2 = barriers[index * 2 + 1]
+            f"(milo has {len(barriers) - 1} entries)")
+    i1 = barriers[index]
+    i2 = barriers[index + 1]
     lip = body[i1 + 4:i2]
     o = 0
 

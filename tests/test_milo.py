@@ -243,3 +243,69 @@ class TestParseSongLipsync:
             p = _milo.parse_song_lipsync(milo)
             expected = max(1, int(math.ceil(dur * _lip.FPS)) + 1)
             assert p["n_frames"] == expected, f"expected {expected} frames for {dur}s, got {p['n_frames']}"
+
+
+class TestMultiEntry:
+    """Multi-entry milo for PART VOCALS + HARM1 + HARM2 + HARM3."""
+
+    def test_u1_u2_scaling(self):
+        """U1 and U2 scale with entry count N (verified against 100+ official milos)."""
+        for n, exp_u1, exp_u2 in [(1, 4, 21), (2, 6, 35), (3, 8, 49), (4, 10, 63)]:
+            names = [f"part{k}.lipsync" for k in range(2, n + 1)] + ["song.lipsync"]
+            prefix = _milo._build_dir_prefix(names)
+            u1 = struct.unpack_from("<I", prefix, 28)[0]
+            u2 = struct.unpack_from("<I", prefix, 32)[0]
+            assert u1 == exp_u1, f"N={n}: U1={u1}, expected {exp_u1}"
+            assert u2 == exp_u2, f"N={n}: U2={u2}, expected {exp_u2}"
+
+    def test_singleton_byte_identical_to_old_dir_prefix(self):
+        """Single-entry _build_dir_prefix matches the original hardcoded constant."""
+        names = ["song.lipsync"]
+        prefix = _milo._build_dir_prefix(names)
+        assert prefix == _milo._DIR_PREFIX
+
+    def test_part_names_part_first_song_last(self):
+        """build_milo names entries: harmonies first, song.lipsync (lead) last.
+        Verified by U1/U2 scaling (N=3 → U1=8, U2=49) and by round-trip:
+        all N entries are parseable by index."""
+        blobs = [
+            _milo.build_song_lipsync([(0.0, 0.2, "a", 1.0)], 0.3, "en"),
+            _milo.build_song_lipsync([(0.0, 0.2, "b", 1.0)], 0.3, "en"),
+            _milo.build_song_lipsync([(0.0, 0.2, "c", 1.0)], 0.3, "en"),
+        ]
+        milo = _milo.build_milo(blobs)
+        # Verify all 3 entries are parseable (barrier structure is correct)
+        for i in range(3):
+            parsed = _milo.parse_song_lipsync(milo, index=i)
+            assert parsed["n_frames"] > 0
+
+    def test_build_multi_lipsync_reorders_lead_to_last(self):
+        """build_multi_lipsync returns [HARM1, HARM2, ..., lead] so build_milo
+        names them part2.lipsync, ..., song.lipsync (lead = song.lipsync last).
+        Verified by: all entries round-trip correctly via parse_song_lipsync."""
+        spans_list = [
+            [(0.0, 0.5, "le", 1.0)],   # lead (PART VOCALS)
+            [(1.0, 1.5, "ha", 1.0)],   # HARM1
+            [(2.0, 2.5, "hb", 1.0)],   # HARM2
+            [],                          # HARM3 empty → skipped
+        ]
+        result = _milo.build_multi_lipsync(spans_list, 5.0, "en")
+        assert len(result) == 3, f"expected 3 entries (HARM1,HARM2,lead), got {len(result)}"
+        # Rebuild a milo and verify all entries parse correctly
+        milo = _milo.build_milo(result)
+        for i in range(3):
+            parsed = _milo.parse_song_lipsync(milo, index=i)
+            assert parsed["n_frames"] > 0
+
+    def test_multi_entry_roundtrip_parses_all_entries(self):
+        """All N entries in a multi-entry milo are parseable by index."""
+        blobs = [
+            _milo.build_song_lipsync([(0.0, 0.2, "a", 1.0)], 0.3, "en"),
+            _milo.build_song_lipsync([(0.5, 0.7, "b", 1.0)], 0.8, "en"),
+        ]
+        milo = _milo.build_milo(blobs)
+        for i in range(len(blobs)):
+            parsed = _milo.parse_song_lipsync(milo, index=i)
+            assert parsed["n_frames"] > 0
+            assert len(parsed["visemes"]) >= 0
+

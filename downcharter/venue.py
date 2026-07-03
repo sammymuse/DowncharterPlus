@@ -1707,8 +1707,8 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
                         break
 
             # Conservative mode: burst suppression — only fire a cluster inside
-            # a strobe wall or the climax section; otherwise hold (single 2.0 event
-            # per cluster = 2 events max, p25-p50 official density).
+            # a strobe wall or the climax section; otherwise hold (one event
+            # on the downbeat = 1 event per anchor, p25-p50 official density).
             if pp_style == "conservative":
                 is_strobe_wall = any(ws <= t < we for ws, we in walls)
                 is_climax = (climax_idx is not None and si == climax_idx)

@@ -795,7 +795,7 @@ class App(tk.Tk):
                      "sng": "SNG"}.get(fmt, fmt)
         from downcharter.ps3build import build_ps3_song, source_has_double_kicks
         from downcharter.stfs import build_con_song
-        from downcharter.sng import build_sng_song
+        from downcharter.sng import build_sng_song, _sanitize_path_component
         self._cancel.clear()
         self._clog(f"── CONVERT ({fmt_label}) ─────────────────────\n", "head")
         self._clog(f"  Source: {self._conv_folder}\n")
@@ -808,6 +808,8 @@ class App(tk.Tk):
         total_songs = 0
         conv_ok = 0
         conv_err = 0
+        # Track output paths to detect collisions (same output .sng path from different sources)
+        sng_output_seen: dict[str, str] = {}
 
         def task():
             nonlocal total_songs, conv_ok, conv_err
@@ -835,21 +837,41 @@ class App(tk.Tk):
                     if fmt == "sng":
                         self._clog(f"  ▸ SNG: {_label(sd)}\n", "head")
                         try:
-                            if (out_base
-                                and self._do_sng_preserve_dirs.get()):
-                                # Preserve parent folder structure so
-                                # "Guitar Hero/Guitar Hero 1/Song A/"
-                                # outputs "…/Guitar Hero 1/Song A.sng"
+                            if self._do_sng_preserve_dirs.get():
+                                # Preserve FULL folder structure from conv_folder parent to the song.
+                                # "E:\Games\Songs\Chorus\SongA" with conv_folder="E:\Games\Songs\Chorus"
+                                # and out_base="Y:\Output" -> "Y:\Output\Chorus\SongA.sng"
                                 try:
-                                    rel = os.path.relpath(
-                                        sd, self._conv_folder)
+                                    # Use parent of conv_folder as base so conv_folder itself
+                                    # and ALL parent folders are preserved in the output
+                                    conv_parent = os.path.dirname(self._conv_folder)
+                                    rel = os.path.relpath(sd, conv_parent)
                                     rel_dir = os.path.dirname(rel)
-                                    sng_out = (os.path.join(out_base, rel_dir)
-                                               if rel_dir else out_base)
+                                    if out_base:
+                                        sng_out = os.path.join(out_base, rel_dir) if rel_dir else out_base
+                                    else:
+                                        # No out_base set: use rel_dir as the base (relative to conv_parent)
+                                        # This preserves the full structure relative to where we started
+                                        sng_out = rel_dir if rel_dir else os.path.dirname(sd)
                                 except ValueError:
-                                    sng_out = out_base  # different drives
+                                    # Different drives - fall back to just the song folder
+                                    sng_out = os.path.dirname(sd)
                             else:
                                 sng_out = out_base
+                            # Compute the final output path for collision detection
+                            folder_name = os.path.basename(os.path.abspath(sd)) or "song"
+                            safe_name = _sanitize_path_component(folder_name)
+                            final_out_sng = os.path.join(sng_out, safe_name + ".sng")
+                            # Check for collision: same output path from different source
+                            if final_out_sng in sng_output_seen:
+                                prev_src = sng_output_seen[final_out_sng]
+                                self._clog(
+                                    f"  ! Collision: {_label(sd)} would overwrite {_label(prev_src)}\n"
+                                    f"    (both output to {os.path.basename(final_out_sng)})\n", "warn")
+                                # Skip to avoid data loss
+                                conv_err += 1
+                                continue
+                            sng_output_seen[final_out_sng] = sd
                             build_sng_song(sd, self._clog, out_base=sng_out)
                             conv_ok += 1
                         except Exception as e:
