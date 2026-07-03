@@ -97,19 +97,22 @@ def _build_dir_prefix(entry_names: list[str]) -> bytes:
     u1 = 2 + 2 * n
     u2 = 7 + 14 * n
     out = bytearray()
-    out += struct.pack("<I", 28)               # version
-    out += struct.pack("<I", 9)                # type name length
+    # ObjectDir header fields are BIG-ENDIAN (>I) — verified against 100+ official
+    # milos (PS3 and Xbox). The outer MILO_A wrapper uses native-endian for the
+    # header fields, but the dir body is pure big-endian.
+    out += struct.pack(">I", 28)               # version
+    out += struct.pack(">I", 9)                # type name length
     out += b"ObjectDir"                        # type name
-    out += struct.pack("<I", 7)                # name length
+    out += struct.pack(">I", 7)               # name length
     out += b"lipsync"                          # name
-    out += struct.pack("<I", u1)               # U1
-    out += struct.pack("<I", u2)               # U2
-    out += struct.pack("<I", n)                # entry_count
+    out += struct.pack(">I", u1)               # U1
+    out += struct.pack(">I", u2)               # U2
+    out += struct.pack(">I", n)                # entry_count
 
     for name in entry_names:
-        out += struct.pack("<I", 11)           # type length
+        out += struct.pack(">I", 11)           # type length
         out += b"CharLipSync"                  # type
-        out += struct.pack("<I", len(name))    # name length
+        out += struct.pack(">I", len(name))    # name length
         out += name.encode("ascii")            # name
 
     out += _DIR_TAIL

@@ -253,16 +253,20 @@ class TestMultiEntry:
         for n, exp_u1, exp_u2 in [(1, 4, 21), (2, 6, 35), (3, 8, 49), (4, 10, 63)]:
             names = [f"part{k}.lipsync" for k in range(2, n + 1)] + ["song.lipsync"]
             prefix = _milo._build_dir_prefix(names)
-            u1 = struct.unpack_from("<I", prefix, 28)[0]
-            u2 = struct.unpack_from("<I", prefix, 32)[0]
+            u1 = struct.unpack_from(">I", prefix, 28)[0]
+            u2 = struct.unpack_from(">I", prefix, 32)[0]
             assert u1 == exp_u1, f"N={n}: U1={u1}, expected {exp_u1}"
             assert u2 == exp_u2, f"N={n}: U2={u2}, expected {exp_u2}"
 
-    def test_singleton_byte_identical_to_old_dir_prefix(self):
-        """Single-entry _build_dir_prefix matches the original hardcoded constant."""
+    def test_singleton_byte_identical_to_known_reference(self):
+        """Single-entry _build_dir_prefix matches the known-good reference constant.
+        Uses _FULL_DIR_SINGLE (the original hardcoded bytes extracted from a real
+        Onyx-built milo) as the reference — NOT _DIR_PREFIX which is defined as
+        _build_dir_prefix(...), making any comparison with it a no-op/tautology."""
         names = ["song.lipsync"]
         prefix = _milo._build_dir_prefix(names)
-        assert prefix == _milo._DIR_PREFIX
+        assert prefix == _milo._FULL_DIR_SINGLE, \
+            "singleton prefix does not match known-good reference"
 
     def test_part_names_part_first_song_last(self):
         """build_milo names entries: harmonies first, song.lipsync (lead) last.
