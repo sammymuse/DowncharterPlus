@@ -176,6 +176,48 @@ def voice_activity(paths, hop_s: float = 0.05):
         return None
 
 
+def voice_active_spans(va, min_dur: float = 0.3,
+                       merge_gap: float = 0.25) -> list[tuple[float, float]]:
+    """Continuous singing spans (start_s, end_s), straight from the vocal stem's
+    RMS envelope (`va` from `voice_activity`) — independent of any charted note
+    or lyric event. Silent gaps < `merge_gap` apart are bridged (so a vibrato
+    dip doesn't fragment a held note); runs shorter than `min_dur` are dropped
+    as noise."""
+    if va is None:
+        return []
+    env, hop_s, thr = va
+    runs: list[list[float]] = []
+    for i, v in enumerate(env):
+        if v <= thr:
+            continue
+        t = i * hop_s
+        if runs and t - runs[-1][1] <= merge_gap:
+            runs[-1][1] = t + hop_s
+        else:
+            runs.append([t, t + hop_s])
+    return [(r[0], r[1]) for r in runs if r[1] - r[0] >= min_dur]
+
+
+def voice_active_ticks(va, tempo_map, tpb: int, min_dur: float = 0.3,
+                       merge_gap: float = 0.25, spacing_s: float = 0.5) -> list[int]:
+    """Pseudo-onset ticks marking continuous singing (see `voice_active_spans`) —
+    independent of any charted note or lyric event. Fills animation-onset gaps
+    where the lyrics track has no event (e.g. an unscripted scream/ad-lib) but
+    the singer is audibly still performing; without this, idle-gap detection
+    (`venue.build_animations`) reads those stretches as silence and the
+    vocalist's body freezes in an idle pose while still singing.
+
+    Emits one tick every `spacing_s` seconds inside each continuous active run."""
+    runs = voice_active_spans(va, min_dur, merge_gap)
+    out: list[int] = []
+    for start_s, end_s in runs:
+        t = start_s
+        while t < end_s:
+            out.append(_ms_to_tick(t * 1000.0, tempo_map, tpb))
+            t += spacing_s
+    return out
+
+
 def voice_offset_s(va, start_s: float, ceil_s: float,
                    gap_s: float = 0.25) -> float | None:
     """Second at which the voice falls silent after `start_s` (silence sustained

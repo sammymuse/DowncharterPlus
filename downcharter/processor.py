@@ -643,8 +643,36 @@ def process_midi(
         # Vocals from LYRICS (audio-independent): if there are no charted vocals but
         # there are lyrics in the MIDI, the vocals are driven by them (sing-along/directed/anim).
         lyrics = _gather_lyrics(mid)
+        # The lyrics track itself can have gaps the author never transcribed
+        # (unscripted screams/ad-libs, common in metal/metalcore) — those read as
+        # silence to idle-gap detection even though the singer is audibly still
+        # performing. Fill them with pseudo-onsets straight from the vocal stem's
+        # own RMS voice-activity, independent of any lyric/note event.
+        voice_fill: list[int] = []
+        if lyrics:
+            try:
+                from . import audio as _audio_va
+                if _audio_va.available():
+                    song_folder = os.path.dirname(os.path.abspath(src_path))
+                    vocal_paths = _audio_va.find_vocal_audio(song_folder)
+                    va = None
+                    if vocal_paths:
+                        va = _audio_va.voice_activity(vocal_paths)
+                    elif vocal_paths is None:
+                        for f in os.listdir(song_folder):
+                            if f.lower().endswith(".mogg"):
+                                va = _audio_va.voice_activity_from_mogg(
+                                    os.path.join(song_folder, f))
+                                break
+                    if va is not None:
+                        voice_fill = _audio_va.voice_active_ticks(va, tempo_map, tpb)
+                        if voice_fill:
+                            stats["audio_vocal_fill"] = len(voice_fill)
+            except Exception:
+                voice_fill = []
         if "vocal" not in present and lyrics:
-            inst_onsets.setdefault("vocal", lyrics)
+            merged = sorted(set(lyrics) | set(voice_fill))
+            inst_onsets.setdefault("vocal", merged)
             vocal_real = True
             stats["audio_lyrics"] = True
             # PART VOCALS exists (lyrics) but has no gems → it didn't enter part_onsets,
@@ -654,9 +682,23 @@ def process_midi(
                        if n.strip().upper() == "PART VOCALS"), None) \
                 or (vocal_tracks[0] if vocal_tracks else None)
             if vt is not None:
-                part_onsets[vt] = lyrics       # → generate_animations animates the track
+                part_onsets[vt] = merged       # → generate_animations animates the track
             else:
-                pseudo_anim["vocal"] = lyrics   # no track → create a dedicated animation
+                pseudo_anim["vocal"] = merged   # no track → create a dedicated animation
+        elif "vocal" in present and lyrics:
+            # PARTIALLY charted vocals (e.g. only the chorus has melody notes, the
+            # rest is plain lyrics): merge the lyric onsets (+ voice-activity fill)
+            # into the real note onsets so idle-gap detection (build_animations)
+            # sees the full picture. Without this, gaps between charted notes read
+            # as idle even when lyrics/talky gems (_chart_vocals_from_lyrics) fill
+            # them in later — the vocalist's body froze in "idle" while singing.
+            merged = sorted(set(inst_onsets["vocal"]) | set(lyrics) | set(voice_fill))
+            inst_onsets["vocal"] = merged
+            vt = next((n for n in vocal_tracks
+                       if n.strip().upper() == "PART VOCALS"), None) \
+                or (vocal_tracks[0] if vocal_tracks else None)
+            if vt is not None and vt in part_onsets:
+                part_onsets[vt] = merged
 
         from . import audio as _audio
         a_paths = ([audio_path] if audio_path
@@ -914,7 +956,10 @@ def _gen_phrase_notes(notes: list[tuple[int, int]], tpb: int) -> list[tuple[int,
 def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
                               tempo_map=None, folder: str | None = None,
                               write_gems: bool = True) -> None:
-    """Create unpitched gems (talky, lyric '#') in PART VOCALS from the lyrics.
+    """Create unpitched gems (talky, lyric '#') in PART VOCALS from the lyrics,
+    filling only the syllables NOT already covered by a real (manually pitched)
+    note — a track can be partially charted (e.g. only the chorus has melody
+    notes) and the rest left as plain lyrics; we must not touch the charted part.
 
     Each note extends to near the next syllable / phrase end, leaving a GAP (notes
     never glued together). RB now has charted vocals; Onyx's autoLipsync reads these
@@ -933,12 +978,34 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
     track = new_mid.tracks[idx]
     abs_evts = [e for e in to_abs(track) if e.msg.type != "end_of_track"]
 
-    # already charted (pitched gems in the vocal range)? then we don't touch PART
-    # VOCALS — but LIPSYNC1 (do_lipsync) is independent, so we still need spans
-    # from the lyrics regardless of whether we're allowed to write gems.
-    already_charted = any(e.msg.type == "note_on" and getattr(e.msg, "velocity", 0) > 0
-                          and 36 <= e.msg.note <= 84 for e in abs_evts)
-    do_write = write_gems and not already_charted
+    # Existing pitched notes (a real, manually authored melody) — collect their
+    # [start,end) intervals so we only FILL GAPS (syllables the manual chart left
+    # uncharted) instead of skipping the whole track. A song can have some
+    # sections charted with pitch and others left as plain lyrics; blanket-skipping
+    # the whole track left those lyrics-only stretches with no gems at all, so the
+    # vocalist's body animation read them as idle (no onsets) even though the
+    # lyrics/lipsync show singing there.
+    existing_notes: list[tuple[int, int]] = []
+    _open: dict[int, int] = {}
+    for e in abs_evts:
+        m = e.msg
+        n = getattr(m, "note", None)
+        if n is None or not (36 <= n <= 84):
+            continue
+        if m.type == "note_on" and getattr(m, "velocity", 0) > 0:
+            _open.setdefault(n, e.abs_tick)
+        elif m.type == "note_off" or (m.type == "note_on" and getattr(m, "velocity", 0) == 0):
+            s = _open.pop(n, None)
+            if s is not None:
+                existing_notes.append((s, e.abs_tick))
+    existing_notes.sort()
+
+    def _covered(t0: int, t1: int) -> bool:
+        """True if [t0, t1) overlaps an already-charted (real) note — a manually
+        pitched syllable we must not touch."""
+        return any(a < t1 and t0 < b for a, b in existing_notes)
+
+    do_write = write_gems
 
     markers = {"+", "#", "^", "*", "%"}
     syl = [e for e in abs_evts
@@ -1000,10 +1067,12 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
         span = max(1, target - t)
         g = max(1, min(tpb // 6, span // 3))   # gap before the boundary (never glued)
         end = t + max(1, span - g)
-        gems.append((t, end))
+        write_this = do_write and not _covered(t, end)
+        if write_this:
+            gems.append((t, end))
         # mark the lyric as talky ('#' at the end, after '-'/'='), if it isn't already.
         cur = e.msg.text
-        if do_write and not cur.rstrip().endswith(("#", "^")):
+        if write_this and not cur.rstrip().endswith(("#", "^")):
             e.msg = e.msg.copy(text=cur + "#")
         # Record the span (seconds) + loudness gain for the viseme track. Uses
         # `target` (the real, audio-confirmed boundary), NOT the gapped `end` —
@@ -1016,9 +1085,10 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
             gain = _audio.syllable_gain(va, s_s, e_s) if va is not None else 1.0
             lip_spans.append((s_s, e_s, cur, gain))
 
-    # When talkies are off, or PART VOCALS is already charted, don't touch
-    # PART VOCALS — just hand back the spans that drive the viseme track.
-    if not do_write:
+    # When talkies are off, or every syllable is already covered by a real
+    # (manually charted) note, don't touch PART VOCALS — just hand back the
+    # spans that drive the viseme track.
+    if not do_write or not gems:
         return lip_spans
 
     # phrase markers (105) if the track doesn't have them — RB needs them for the vocals.
