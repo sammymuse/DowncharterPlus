@@ -627,13 +627,13 @@ _LIGHT_PULSE = {
     "high": ["manual_warm", "manual_cool", "blackout_fast", "stomp"],
 }
 # Every how many switches a theme accent (auto preset) is inserted.
-_LIGHT_ACCENT_EVERY = 8
+_LIGHT_ACCENT_EVERY = 5
 
 # Hold (re-emissions of the same preset) per energy tier. Instead of advancing the
 # pool every cycle, we re-emit the same preset `hold` times before advancing.
 # This adds the 24% same-preset re-emissions that official venues use for "pulsing".
 # calm sections hold longer (more re-emissions), high sections advance every cycle.
-_LIGHT_HOLD = {"calm": 12, "mid": 8, "high": 5}
+_LIGHT_HOLD = {"calm": 5, "mid": 3, "high": 2}
 
 # Cluster-then-hold: within each cluster, rapid sub-beat gaps between presets.
 # The pattern defines gaps (in beats) between consecutive events in a cluster.
@@ -948,10 +948,10 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
             if tick < s.start or tick >= s.end:
                 continue
             # Check strobe/pause
-            if _in_span(tick, strobe_spans) and energy == "high" and s.kind in {"riff", "drop", "solo", "build"}:
+            if _in_span(tick, strobe_spans) and energy == "high":
                 last = "strobe_fast"
                 continue
-            if _in_span(tick, pause_spans) and energy == "calm":
+            if _in_span(tick, pause_spans):
                 preset = _PAUSE_LIGHT[pi % len(_PAUSE_LIGHT)]
                 pi += 1
                 out.append(_txt(tick, f"[lighting ({preset})]"))
