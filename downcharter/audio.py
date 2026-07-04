@@ -76,6 +76,18 @@ _VOCAL_CACHE_MOGG = ".downcharter_vocals_mogg.wav"
 _VOCAL_CACHE_MDX = ".downcharter_vocals_mdx.wav"
 
 
+def _cache_is_fresh(cache_path: str, source_paths: list[str]) -> bool:
+    """True if the cache file exists and is newer than all sources."""
+    if not os.path.isfile(cache_path):
+        return False
+    try:
+        ctime = os.path.getmtime(cache_path)
+        return all(os.path.isfile(p) and os.path.getmtime(p) <= ctime
+                   for p in source_paths)
+    except Exception:
+        return False
+
+
 def _atomic_write_cache(cache_path: str, mono, sr: int) -> bool:
     """Write ``mono`` to ``cache_path`` atomically via a temp file.
     Returns True on success, False on any I/O or encoding error.
@@ -100,6 +112,43 @@ def _atomic_write_cache(cache_path: str, mono, sr: int) -> bool:
         return False
 
 
+def _try_mdx_separation(
+    folder: str, model_path: str | None
+) -> list[str] | None:
+    """Attempt MDX-NET vocal separation on the full mix of ``folder``.
+    
+    Returns a single-element list (path to cached vocal WAV) or ``None``.
+    """
+    try:
+        from .separate import separate_vocals
+    except ImportError:
+        return None
+    mdx_cache = os.path.join(folder, _VOCAL_CACHE_MDX)
+    try:
+        import numpy as np
+        mix_paths = find_song_audio(folder)
+        if not mix_paths:
+            return None
+        if _cache_is_fresh(mdx_cache, mix_paths):
+            return [mdx_cache]
+        if len(mix_paths) == 1:
+            mono, file_sr = load_mono(mix_paths[0])
+        else:
+            mono, file_sr = load_mono_mix(mix_paths)
+        if mono is None or not file_sr:
+            return None
+        stereo = np.column_stack([mono, mono])
+        vocals = separate_vocals(stereo, sr=file_sr, model_path=model_path)
+        if vocals is None:
+            return None
+        mono_vocals = vocals.mean(axis=1).astype(np.float32)
+        if _atomic_write_cache(mdx_cache, mono_vocals, file_sr):
+            return [mdx_cache]
+    except Exception:
+        pass
+    return None
+
+
 def resolve_vocal_audio(
     folder: str,
     model_path: str | None = None,
@@ -113,11 +162,18 @@ def resolve_vocal_audio(
     Priority:
     1. Isolated vocal stems (``Vocal.ogg`` / ``vocals.wav``) → returned directly
     2. A ``.mogg`` → extract vocal channels → cache to ``.downcharter_vocals_mogg.wav``
-    3. MDX-NET separation on the full mix → cache to ``.downcharter_vocals_mdx.wav``
+    3. MDX-NET separation on the full mix (only when ``allow_separation=True``)
+       → cache to ``.downcharter_vocals_mdx.wav``
     4. Nothing works → ``None``
 
     Each source type has its own cache file, invalidated independently when
     the corresponding source file changes.  Cache files can be safely deleted.
+
+    Args:
+        folder: Song folder to search for vocal audio.
+        model_path: Optional path to the MDX-NET ONNX model.
+        allow_separation: If True (default), try MDX-NET separation as last
+            resort when no stems or .mogg are available.
     """
     # Priority 1: already-separated stems
     stems = find_vocal_stems(folder)
@@ -145,32 +201,9 @@ def resolve_vocal_audio(
 
     # Priority 3: MDX-NET separation (only when allow_separation=True)
     if allow_separation:
-        try:
-            from .separate import separate_vocals
-        except ImportError:
-            pass
-        else:
-            mdx_cache = os.path.join(folder, _VOCAL_CACHE_MDX)
-            try:
-                import numpy as np
-                mix_paths = find_song_audio(folder)
-                if mix_paths:
-                    if _cache_is_fresh(mdx_cache, mix_paths):
-                        return [mdx_cache]
-                    # Use the first audio file as the full mix
-                    if len(mix_paths) == 1:
-                        mono, file_sr = load_mono(mix_paths[0])
-                    else:
-                        mono, file_sr = load_mono_mix(mix_paths)
-                    if mono is not None and file_sr:
-                        stereo = np.column_stack([mono, mono])
-                        vocals = separate_vocals(stereo, sr=file_sr, model_path=model_path)
-                        if vocals is not None:
-                            mono_vocals = vocals.mean(axis=1).astype(np.float32)
-                            if _atomic_write_cache(mdx_cache, mono_vocals, file_sr):
-                                return [mdx_cache]
-            except Exception:
-                pass
+        result = _try_mdx_separation(folder, model_path)
+        if result is not None:
+            return result
 
     return None
 

@@ -1,5 +1,5 @@
 """
-processor.py — MIDI file processing
+processor.py - MIDI file processing
 """
 from __future__ import annotations
 from typing import Any, Callable
@@ -46,13 +46,13 @@ def _rank01(values: list[float]) -> list[float]:
 def _section_midi_cues(mid, sections, part_onsets,
                        tpb: int = 480) -> tuple[list[float], list[float], list[float]]:
     """Three per-section MIDI energy cues (raw, un-normalized):
-      • band fullness — how many instruments play in the section (full chorus vs
+      • band fullness - how many instruments play in the section (full chorus vs
         sparse verse). A useful cue, BUT it conflates 'no vocals' with 'low energy':
         a heavy instrumental outro/breakdown (guitar+bass+drums going hard, no singer)
         scores only 3/4 and gets wrongly read as calm. So it is no longer used alone.
-      • note density — gameplay onsets per beat (all instruments). Structure-free
+      • note density - gameplay onsets per beat (all instruments). Structure-free
         heaviness that survives a missing vocal track; the primary MIDI-only cue.
-      • mean velocity — the chart's real dynamics (accents vs ghost notes).
+      • mean velocity - the chart's real dynamics (accents vs ghost notes).
     Velocities are read straight from the source MIDI gameplay notes (note < 103)."""
     import bisect
     # Onsets grouped per instrument (sorted) → fullness.
@@ -101,7 +101,7 @@ def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
                         theme: str | None = None) -> bool:
     """Set each section's energy using a HYBRID audio+MIDI approach.
 
-    Audio (feel_envelope) decides calm AND high — it has higher agreement
+    Audio (feel_envelope) decides calm AND high - it has higher agreement
     than the MIDI composite because it measures actual sound.  MIDI composite
     decides mid (audio's overlap zone where calm/high scores are ambiguous).
 
@@ -127,7 +127,7 @@ def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
     # low-energy (intro/outro/bridge/breakdown/riff → calm prior) but playing at/above
     # the song's median note density is a busy instrumental passage, not a quiet one.
     # Floor its structural prior to 'mid' so the calm LABEL can't drag a heavy
-    # instrumental outro/breakdown to 'calm'. Restricted to these transition kinds —
+    # instrumental outro/breakdown to 'calm'. Restricted to these transition kinds -
     # verse/chorus keep their own structural energy meaning untouched.
     _DECEPTIVE_CALM = {"intro", "outro", "bridge", "breakdown", "riff", "default"}
     _med = sorted(dens)[len(dens) // 2] if dens else 0.0
@@ -185,7 +185,7 @@ def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
             else:
                 s.energy = "mid"
         else:
-            # No audio — MIDI composite only
+            # No audio - MIDI composite only
             if midi_comp[i] < 0.20:
                 s.energy = "calm"
             elif midi_comp[i] < 0.60:
@@ -193,7 +193,7 @@ def _apply_audio_energy(folder: str, sections, tempo_map, tpb: int,
             else:
                 s.energy = "high"
 
-    # Sub-spans from audio are NOT clamped — they provide within-section
+    # Sub-spans from audio are NOT clamped - they provide within-section
     # dynamics that may differ from the section-level tier.
 
     return au is not None
@@ -209,7 +209,7 @@ _TOM_OF_MARKER = {110: 98, 111: 99, 112: 100}   # marker → pad that becomes a 
 
 
 def _double_bass_onsets(mid: mido.MidiFile) -> list[int]:
-    """DOUBLE BASS onsets (note 95, 2x-kick) — to reinforce the strobe in zones of
+    """DOUBLE BASS onsets (note 95, 2x-kick) - to reinforce the strobe in zones of
     sustained blast/double-bass, with a looser gap than the normal fills."""
     ticks: list[int] = []
     for tr in mid.tracks:
@@ -226,7 +226,7 @@ def _double_bass_onsets(mid: mido.MidiFile) -> list[int]:
 def _drum_fill_onsets(mid: mido.MidiFile) -> list[int]:
     """Onsets of SNARE + TOMS + KICK/double-bass, EXCLUDING only cymbals and hi-hat.
     The strobe (Painkiller style) fires on drum fills, consecutive snares AND zones of
-    fast kicks/double-bass — but NOT on fast cymbal/hi-hat work.
+    fast kicks/double-bass - but NOT on fast cymbal/hi-hat work.
     In pro-drums a yellow/blue/green pad (98/99/100) is only a TOM if the
     110/111/112 marker is active over it; without a marker it is a CYMBAL/hi-hat → it
     doesn't count. Charts with NO marker at all (non-pro): there is no cymbal concept
@@ -308,7 +308,7 @@ def _gather_lyrics_by_track(mid: mido.MidiFile) -> dict[str, list[int]]:
 
 def _build_anim_track(name: str, markers: list[AbsEvent]) -> mido.MidiTrack:
     """Animation track (mood markers only, no gameplay notes) for an ABSENT
-    instrument — brings the character to life from the audio/lyrics."""
+    instrument - brings the character to life from the audio/lyrics."""
     tr = mido.MidiTrack()
     tr.name = name
     prev = 0
@@ -374,7 +374,7 @@ def _inject_meta(track: mido.MidiTrack, extra: list[AbsEvent]) -> mido.MidiTrack
     return out
 
 
-# ── Drums — Expert+ (pre-processing; the reduction lives in drums.py) ──────────
+# ── Drums - Expert+ (pre-processing; the reduction lives in drums.py) ──────────
 
 def _find_kick_note(track: mido.MidiTrack) -> int:
     counts: dict[int, int] = {}
@@ -474,6 +474,7 @@ def process_midi(
       - Generate reduced difficulties for every recognized instrument
       - Optional: convert double bass to Expert+ in PART DRUMS
       - Optional: generate a VENUE track (camera + lights + post-proc)
+      - Optional: MDX-NET vocal separation (do_vocal_sep)
     Returns statistics.
     """
     try:
@@ -549,7 +550,7 @@ def process_midi(
                     part_onsets[track.name] = ons
                     all_onsets.update(ons)
             if track_name == "VENUE":
-                # Option A: an existing VENUE is the author's work — keep it intact
+                # Option A: an existing VENUE is the author's work - keep it intact
                 # (copied below via the track_type-None path) and skip generating ours.
                 pass
 
@@ -558,7 +559,7 @@ def process_midi(
         new_mid.tracks.append(new_track)
 
         if track_type is None:
-            # Unrecognized track — copy intact (PS sysex preserved; see
+            # Unrecognized track - copy intact (PS sysex preserved; see
             # _restore_ps_sysex at the end to restore the 0xFF byte clamped by clip).
             for msg in track:
                 if msg.type == "sysex":
@@ -619,7 +620,7 @@ def process_midi(
                         all_events.append(ev)
 
         # Sort and write to the single track. The sysex (e.g. Phase Shift "F0 50 53…",
-        # open/tap notes) are PRESERVED — mido reads them with clip (0xFF→0x7F) and
+        # open/tap notes) are PRESERVED - mido reads them with clip (0xFF→0x7F) and
         # _restore_ps_sysex restores the 0xFF in the final file so they end up like the
         # original (which YARG reads fine).
         all_events.sort(key=lambda e: e.abs_tick)
@@ -635,7 +636,7 @@ def process_midi(
         theme = genre_to_theme(genre)
         accents = expert_accents(accent_src, tpb) if accent_src else []
         onsets = sorted(all_onsets)
-        # Resolved sections (multi-instrument) — shared by venue+animations.
+        # Resolved sections (multi-instrument) - shared by venue+animations.
         sections = resolve_sections(events_track, song_end, onsets, time_sig_map, tpb)
         # AUDIO refinement (optional): mixes the real loudness with the structural
         # energy. With no audio/libs, sections.energy stays None (MIDI-only intact).
@@ -646,7 +647,7 @@ def process_midi(
         drum_onsets = sorted(
             t for nm, ons in part_onsets.items()
             if _part_instrument(nm) == "drums" for t in ons)
-        # Snare + toms (fills/rolls) for the strobe — no cymbals/hi-hat.
+        # Snare + toms (fills/rolls) for the strobe - no cymbals/hi-hat.
         fill_onsets = _drum_fill_onsets(mid)
         dbass_onsets = _double_bass_onsets(mid)         # double-bass to reinforce strobe
         # Onsets per instrument (spotlights) + number of harmonies (sing-along).
@@ -673,7 +674,7 @@ def process_midi(
         # there are lyrics in the MIDI, the vocals are driven by them (sing-along/directed/anim).
         lyrics = _gather_lyrics(mid)
         # The lyrics track itself can have gaps the author never transcribed
-        # (unscripted screams/ad-libs, common in metal/metalcore) — those read as
+        # (unscripted screams/ad-libs, common in metal/metalcore) - those read as
         # silence to idle-gap detection even though the singer is audibly still
         # performing. Fill them with pseudo-onsets straight from the vocal stem's
         # own RMS voice-activity, independent of any lyric/note event.
@@ -715,7 +716,7 @@ def process_midi(
             # into the real note onsets so idle-gap detection (build_animations)
             # sees the full picture. Without this, gaps between charted notes read
             # as idle even when lyrics/talky gems (_chart_vocals_from_lyrics) fill
-            # them in later — the vocalist's body froze in "idle" while singing.
+            # them in later - the vocalist's body froze in "idle" while singing.
             merged = sorted(set(inst_onsets["vocal"]) | set(lyrics) | set(voice_fill))
             inst_onsets["vocal"] = merged
             vt = next((n for n in vocal_tracks
@@ -781,12 +782,12 @@ def process_midi(
             if band_activity:
                 stats["audio_band_activity"] = list(band_activity.keys())
             # Character ANIMATION from the audio: ONLY vocals. Animating an ABSENT
-            # bass/guitar/drums/keys creates a PART track with no charted gems —
+            # bass/guitar/drums/keys creates a PART track with no charted gems -
             # RB3 doesn't render the character (camera/animation pointing at nothing)
             # and YARG doesn't even support characters. We only animate instruments
             # with a REAL chart. Vocals are the exception: the "animation" is the
             # mouth lipsync, which makes sense from the singing detected in the audio
-            # (or from the lyrics) even without charted gems — the vocalist sings.
+            # (or from the lyrics) even without charted gems - the vocalist sings.
             # (Keys were already out for the same reason; now bass/guitar/drums follow
             # the rule.)
             if "vocal" not in present and not lyrics:  # no lyrics → 'lead' band
@@ -896,7 +897,7 @@ def process_midi(
             stats["end_added"] = True
 
         # BEAT track (pulse): if the song doesn't have one, we create it. If it does,
-        # we make sure it reaches the end — a BEAT that ends early (the case of the midi
+        # we make sure it reaches the end - a BEAT that ends early (the case of the midi
         # in the "beattrack" folder) leaves the characters FROZEN in-game, because the
         # BandDirector stops receiving the pulse. In that case we extend it.
         if song_end > 0:
@@ -916,7 +917,7 @@ def process_midi(
 
     # Drummer limb animations (PART DRUMS notes 24-51): RB3 needs them authored or
     # the drummer stays idle. Synthesise them HERE, into the notes.mid track, from the
-    # Expert gems — NOT at conversion time. No-op if the drums track is already animated.
+    # Expert gems - NOT at conversion time. No-op if the drums track is already animated.
     if do_drum_anim:
         try:
             from . import convert as _convert
@@ -994,19 +995,24 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
                               do_vocal_sep: bool = True) -> None:
     """Create unpitched gems (talky, lyric '#') in PART VOCALS from the lyrics,
     filling only the syllables NOT already covered by a real (manually pitched)
-    note — a track can be partially charted (e.g. only the chorus has melody
+    note - a track can be partially charted (e.g. only the chorus has melody
     notes) and the rest left as plain lyrics; we must not touch the charted part.
 
     Each note extends to near the next syllable / phrase end, leaving a GAP (notes
     never glued together). RB now has charted vocals; Onyx's autoLipsync reads these
     tubes (whose LENGTH defines the mouth opening) and generates a lipsync that holds
-    the vowel — instead of the pointwise lipsync it fabricated from uncharted lyrics.
+    the vowel - instead of the pointwise lipsync it fabricated from uncharted lyrics.
     It doesn't pitch them (we don't know the melody) → talky, full note.
 
-    Audio confirmation: with an isolated vocal stem in `folder`, the note is not
-    stretched blindly to the next syllable — it is cut where the singer actually
+    Audio confirmation: with an isolated vocal stem in ``folder``, the note is not
+    stretched blindly to the next syllable - it is cut where the singer actually
     stops (RMS envelope drops), avoiding fake long sustains across silent gaps.
-    Falls back to pure geometry when no vocal stem is available."""
+    Falls back to pure geometry when no vocal audio is available.
+
+    Args:
+        do_vocal_sep: If True, try MDX-NET separation when no vocal stems
+            or .mogg are present.  When False, skip MDX-NET entirely.
+    """
     idx = next((i for i, t in enumerate(new_mid.tracks)
                 if t.name.strip().upper() == "PART VOCALS"), None)
     if idx is None:
@@ -1014,7 +1020,7 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
     track = new_mid.tracks[idx]
     abs_evts = [e for e in to_abs(track) if e.msg.type != "end_of_track"]
 
-    # Existing pitched notes (a real, manually authored melody) — collect their
+    # Existing pitched notes (a real, manually authored melody) - collect their
     # [start,end) intervals so we only FILL GAPS (syllables the manual chart left
     # uncharted) instead of skipping the whole track. A song can have some
     # sections charted with pitch and others left as plain lyrics; blanket-skipping
@@ -1037,8 +1043,8 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
     existing_notes.sort()
 
     def _covered(t0: int, t1: int) -> bool:
-        """True if [t0, t1) overlaps an already-charted (real) note — a manually
-        pitched syllable we must not touch."""
+        '''True if [t0, t1) overlaps an already-charted (real) note -
+        a manually pitched syllable we must not touch.'''
         return any(a < t1 and t0 < b for a, b in existing_notes)
 
     do_write = write_gems
@@ -1105,7 +1111,7 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
         if write_this and not cur.rstrip().endswith(("#", "^")):
             e.msg = e.msg.copy(text=cur + "#")
         # Record the span (seconds) + loudness gain for the viseme track. Uses
-        # `target` (the real, audio-confirmed boundary), NOT the gapped `end` —
+        # `target` (the real, audio-confirmed boundary), NOT the gapped `end` -
         # that gap only exists so PART VOCALS notes aren't glued together; the
         # mouth should stay open ("connected articulation") until the next
         # syllable or a real silence, not close early for a MIDI-charting reason.
@@ -1116,12 +1122,12 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
             lip_spans.append((s_s, e_s, cur, gain))
 
     # When talkies are off, or every syllable is already covered by a real
-    # (manually charted) note, don't touch PART VOCALS — just hand back the
+    # (manually charted) note, don't touch PART VOCALS - just hand back the
     # spans that drive the viseme track.
     if not do_write or not gems:
         return lip_spans
 
-    # phrase markers (105) if the track doesn't have them — RB needs them for the vocals.
+    # phrase markers (105) if the track doesn't have them - RB needs them for the vocals.
     have_phrases = any(e.msg.type == "note_on" and getattr(e.msg, "velocity", 0) > 0
                        and e.msg.note in (105, 106) for e in abs_evts)
     phrase_spans = [] if have_phrases else _gen_phrase_notes(gems, tpb)
@@ -1151,9 +1157,9 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
                    do_vocal_sep: bool = True) -> None:
     """Two independent lipsync outputs from the lyrics, each toggled separately:
 
-    1. Talky vocals in PART VOCALS (``do_talkies``) — the path RB/Onyx's `.ini` import
+    1. Talky vocals in PART VOCALS (``do_talkies``) - the path RB/Onyx's `.ini` import
        actually uses (charted tubes → autoLipsync). Works in-game today.
-    2. A LIPSYNC1 viseme track (``do_lipsync``) — text-commands
+    2. A LIPSYNC1 viseme track (``do_lipsync``) - text-commands
        `[<viseme> <weight>[ hold|ease]]`, the exact format Onyx parses (confirmed in
        `Onyx/MIDI/Track/Lipsync.hs`: track name `LIPSYNC1`, graph token = curve out of
        the keyframe). Sparse keyframes (held vowels, diphthong glides), not dense 30fps
@@ -1216,7 +1222,7 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
         # NOTE: the .milo file is NOT built here. Processing only authors the
         # audio-guided LIPSYNC1 track (above); the actual <id>.milo_ps3 is created
         # later, at conversion time (ps3build.build_ps3_song), from this very track
-        # / its charted talky vocals — so there's exactly one milo, made when the
+        # / its charted talky vocals - so there's exactly one milo, made when the
         # PS3 pack is assembled.
 
 
@@ -1232,7 +1238,7 @@ def _build_lipsync_track(keyframes, tempo_map, tpb):
     Keyframes at syllable boundaries can collapse to the same tick after ms→tick
     conversion, producing two events for the same viseme at the same tick (e.g.
     ``[Cage_hi 140]`` and ``[Cage_hi 0]`` both at T).  We deduplicate: for each
-    (tick, viseme) pair, only the LAST event survives — it represents the state
+    (tick, viseme) pair, only the LAST event survives - it represents the state
     going forward from that tick."""
     abs_evts = [
         AbsEvent(0, mido.MetaMessage("track_name", name="LIPSYNC1", time=0)),
@@ -1301,7 +1307,7 @@ def find_midis(folder: str) -> list[str]:
 
 def find_charts(folder: str) -> list[str]:
     """.chart files still to process (ignores those that already have the .mid
-    generated alongside — those were converted in a previous run and are processed
+    generated alongside - those were converted in a previous run and are processed
     as MIDI)."""
     result = []
     for root, _, files in os.walk(folder):
@@ -1346,7 +1352,7 @@ def _hide_backgrounds(folder: str, log_fn) -> int:
     by revert_folder. Skips files already hidden. Returns the count hidden.
 
     The previous scheme renamed to ``background.bak.<ext>``, but RB3/CH/YARG load
-    backgrounds with a ``background*`` glob — so a name still STARTING with
+    backgrounds with a ``background*`` glob - so a name still STARTING with
     "background" kept rendering. The hidden name must therefore not contain the
     word "background" at all; revert maps ``dc_hidden_bg.<ext>`` (and the legacy
     ``background.bak.<ext>``) back to ``background.<ext>``."""
@@ -1389,7 +1395,7 @@ def process_folder(
     status_fn: Callable[[str], Any] | None = None,
     done_fn: Callable[[int, int, int], Any] | None = None,
 ) -> None:
-    # Hide in-game background images (background.png/jpg → .bak) — Venue sub-option.
+    # Hide in-game background images (background.png/jpg → .bak) - Venue sub-option.
     if do_hide_bg:
         _hide_backgrounds(folder, log_fn)
 
@@ -1485,7 +1491,7 @@ def process_folder(
                         else:
                             rec = "Dynamic"
                         log_fn(f"    ⚠ PP density {med}/section (med) outside p25-p75 "
-                               f"[{p25}-{p75}] — try PP style: {rec}\n", "warn")
+                               f"[{p25}-{p75}] - try PP style: {rec}\n", "warn")
             if s.get("vocals_charted"):
                 ph = s.get("vocal_phrases_gen")
                 ph_txt = f" + {ph} phrases" if ph else ""
@@ -1544,7 +1550,7 @@ def _write_session_log(folder: str, modified: int, skipped_total: int,
     fname = f"downcharter_log_{ts:%Y%m%d-%H%M%S}.txt"
     path = os.path.join(folder, fname)
     lines = [
-        f"Downcharter+ session log — {ts:%Y-%m-%d %H:%M:%S}",
+        f"Downcharter+ session log - {ts:%Y-%m-%d %H:%M:%S}",
         f"Folder: {folder}",
         f"Modified: {modified}   Skipped diffs: {skipped_total}"
         f"   Skipped venues: {venue_skipped_total}"
