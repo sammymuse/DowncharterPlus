@@ -26,7 +26,7 @@ pytestmark = pytest.mark.skipif(not _SLOW, reason="Use --run-slow or DOWNCHARTER
 # 534b2070fcc7df514b13ef660dc8cbb328679c2374d04354a5c42bb14ecce111)
 # CPU-only (DOWNCHARTER_FORCE_CPU=1).
 # To regenerate: python dev/generate_mdx_golden.py
-_GOLDEN_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
+_GOLDEN_SHA256 = "b552636279aead04d71771f31c19357ede42a30de4d45e62d5f9a577763a0bcc"
 
 # Test signal parameters
 _SR = 44100
