@@ -268,17 +268,17 @@ class App(tk.Tk):
         self._do_medium      = tk.BooleanVar(value=cfg.get("medium", True))
         self._do_easy        = tk.BooleanVar(value=cfg.get("easy", True))
         self._do_venue       = tk.BooleanVar(value=cfg.get("venue", True))
-        self._do_export_venue = tk.BooleanVar(value=cfg.get("export_venue", False))
+        self._do_export_venue = tk.BooleanVar(value=cfg.get("export_venue", False))  # hidden (no GUI widget, settings.json only)
         self._do_drum_anim   = tk.BooleanVar(value=cfg.get("drum_anim", True))
         self._do_hide_bg     = tk.BooleanVar(value=cfg.get("hide_bg", False))
-        self._do_lipsync     = tk.BooleanVar(value=cfg.get("lipsync", False))      # talkies
-        self._do_lipsync_trk = tk.BooleanVar(value=cfg.get("lipsync_track", False))  # LIPSYNC1 viseme track
+        self._do_lipsync     = tk.BooleanVar(value=cfg.get("lipsync", True))       # talkies
+        self._do_lipsync_trk = tk.BooleanVar(value=cfg.get("lipsync_track", True))   # LIPSYNC1 viseme track
         self._do_vocal_sep   = tk.BooleanVar(value=cfg.get("vocal_sep", True))
-        self._pp_style       = tk.StringVar(value=cfg.get("pp_style", "authored"))
+        self._pp_style       = tk.StringVar(value=cfg.get("pp_style", "authored"))  # hidden (no GUI widget, settings.json only)
         # ── Convert tab (native PS3 package generation) ──
         self._conv_folder = cfg.get("conv_folder", "") or ""
         self._conv_out = cfg.get("conv_out", "") or ""
-        self._conv_pedal  = tk.StringVar(value=cfg.get("conv_pedal", "2x"))  # 1x | 2x | both
+        self._conv_pedal  = tk.StringVar(value=cfg.get("conv_pedal", "both"))  # 1x | 2x | both
         self._do_sng_preserve_dirs = tk.BooleanVar(
             value=cfg.get("sng_preserve_dirs", True))
         self._cancel = threading.Event()
@@ -301,7 +301,7 @@ class App(tk.Tk):
             self._folder = ""
         self.update_idletasks()
         w, h = self.winfo_width(), self.winfo_height()
-        self.geometry(f"+{(self.winfo_screenwidth()-w)//2}+{(self.winfo_screenheight()-h)//2}")
+        self.geometry(f"{w}x{h}+{(self.winfo_screenwidth()-w)//2}+{(self.winfo_screenheight()-h)//2}")
 
     def _build(self):
         # ── Header ──
@@ -386,19 +386,7 @@ class App(tk.Tk):
         tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
         self._lbl("GENERATE VENUE  (camera · lights · post-proc)", p_ctrl).pack(anchor="w", pady=(0, 6))
         CheckTile(p_ctrl, "Venue",   self._do_venue, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-        # PP Style selector
-        pp_style_frame = tk.Frame(p_ctrl, bg=BG)
-        tk.Label(pp_style_frame, text="PP:", font=("Segoe UI", 9), bg=BG, fg=FG).pack(side=tk.LEFT, padx=(0, 4))
-        rt_colors = {"conservative": RED, "authored": GREEN, "dynamic": BLUE}
-        for text, value in [("Conservative", "conservative"),
-                             ("Authored", "authored"),
-                             ("Dynamic", "dynamic")]:
-            RadioTile(pp_style_frame, text, self._pp_style, value,
-                      color=rt_colors.get(value, RED), width=130, height=28).pack(side=tk.LEFT, padx=2)
-        pp_style_frame.pack(fill=tk.X, pady=(0, 6))
         CheckTile(p_ctrl, "Drum animations",  self._do_drum_anim, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-        CheckTile(p_ctrl, "Export VENUE as _venue.mid",
-                  self._do_export_venue, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
         CheckTile(p_ctrl, "Lipsync  (vocal stem recommended)",
                   self._do_lipsync_trk, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
@@ -411,8 +399,8 @@ class App(tk.Tk):
         self._lbl("EXTRAS", p_ctrl).pack(anchor="w", pady=(0, 6))
         CheckTile(p_ctrl, "Hide in-game background (image only)",
                   self._do_hide_bg, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-        CheckTile(p_ctrl, "Vocal separation  (MDX-NET, .onnx model required)",
-                  self._do_vocal_sep, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        CheckTile(p_ctrl, "Vocal separation  (MDX-NET)  (recommended for lipsync and talkies)",
+                  self._do_vocal_sep, color=RED, width=520, height=28).pack(anchor="w", pady=(0, 6))
 
         tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(0, 12))
         btn_row = tk.Frame(p_ctrl, bg=BG)
@@ -579,7 +567,8 @@ class App(tk.Tk):
                                   ("medium", self._do_medium),
                                   ("easy", self._do_easy)] if v.get()]
         if (not xp and not diffs and not venue and not lipsync
-                and not lipsync_trk and not hide_bg and not drum_anim):
+                and not lipsync_trk and not hide_bg and not drum_anim
+                and not vocal_sep):
             self._plog("⚠  Nothing selected.\n", "warn"); return
 
         self._plog("── PROCESS ──────────────────────────────\n", "head")
@@ -697,12 +686,14 @@ class App(tk.Tk):
         ofr.pack(fill="x", pady=(5, 14))
         self._conv_out_lbl = tk.Label(ofr, text="(default: beside source)",
                                       font=(MONO, 9), fg=FG3, bg=SURF2,
-                                      anchor="w", padx=8, pady=6, width=46)
+                                      anchor="w", padx=8, width=46)
         self._conv_out_lbl.pack(side="left", fill="x", expand=True)
-        StyledButton(ofr, "  SET…", self._pick_conv_out, width=90, height=30).pack(
-            side="right", padx=(8, 0))
-        StyledButton(ofr, "  ✕", self._clear_conv_out, width=34, height=30).pack(
-            side="right", padx=(8, 0))
+        btn_fr = tk.Frame(ofr, bg=BG)
+        btn_fr.pack(side="right", padx=(8, 0))
+        StyledButton(btn_fr, "  SET…", self._pick_conv_out, width=90, height=30).pack(
+            side="left", padx=(0, 8))
+        StyledButton(btn_fr, "  ✕", self._clear_conv_out, width=34, height=30).pack(
+            side="left")
         if self._conv_out and os.path.isdir(self._conv_out):
             short = self._conv_out if len(self._conv_out) <= 52 \
                 else "…" + self._conv_out[-50:]
@@ -740,15 +731,14 @@ class App(tk.Tk):
         tk.Label(c_ctrl, text="YARG / CLONE HERO",
                  font=(MONO, 10, "bold"), fg=RED, bg=BG, anchor="w").pack(
                      anchor="w", pady=(0, 6))
-        tk.Label(c_ctrl, text="Packs the song folder as-is into a .sng container  "
-                            "— no pedal variants, no validation, no milo.",
+        tk.Label(c_ctrl, text="Packs the song folder as-is into a .sng container",
                  font=(MONO, 8), fg=FG3, bg=BG, anchor="w",
                  justify="left", wraplength=520).pack(anchor="w", pady=(0, 8))
         self._btn_sng = StyledButton(c_ctrl, "⬢  BUILD SNG",
                                      lambda: self._run_native_convert("sng"),
                                      color=RED, width=220, height=40)
         self._btn_sng.pack(anchor="w")
-        CheckTile(c_ctrl, "Preserve parent folders",
+        CheckTile(c_ctrl, "Preserve folder structure",
                   self._do_sng_preserve_dirs, color=RED, width=220, height=28).pack(
                       anchor="w", pady=(4, 14))
 
@@ -786,7 +776,7 @@ class App(tk.Tk):
             return
         self._conv_out = folder
         self._save_settings()
-        short = folder if len(folder) <= 52 else "?" + folder[-50:]
+        short = folder if len(folder) <= 52 else "…" + folder[-50:]
         self._conv_out_lbl.config(text=short, fg=FG2)
         self._clog(f"Convert output: {folder}\n\n", "info")
 

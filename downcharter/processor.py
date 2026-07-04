@@ -505,6 +505,7 @@ def process_midi(
         "beat_extended": False,
         "audio_used": False, "audio_drums": False, "audio_lyrics": False,
         "audio_anim_instr": [],
+        "vocal_sep_source": None,
         "tracks_renamed": norm["tracks_renamed"], "sp_remapped": norm["sp_remapped"],
     }
 
@@ -688,6 +689,14 @@ def process_midi(
                         song_folder, allow_separation=do_vocal_sep)
                     va = None
                     if vocal_paths:
+                        # Identify source type for logging
+                        p = vocal_paths[0]
+                        if p.endswith("_mdx.wav"):
+                            stats["vocal_sep_source"] = "mdx"
+                        elif p.endswith("_mogg.wav"):
+                            stats["vocal_sep_source"] = "mogg"
+                        else:
+                            stats["vocal_sep_source"] = "stems"
                         va = _audio_va.voice_activity(vocal_paths)
                     if va is not None:
                         voice_fill = _audio_va.voice_active_ticks(va, tempo_map, tpb)
@@ -1068,6 +1077,13 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
                 vocal = _audio.resolve_vocal_audio(
                     folder, allow_separation=do_vocal_sep)
                 if vocal:
+                    p = vocal[0]
+                    if p.endswith("_mdx.wav"):
+                        stats["vocal_sep_source"] = "mdx"
+                    elif p.endswith("_mogg.wav"):
+                        stats["vocal_sep_source"] = "mogg"
+                    elif stats.get("vocal_sep_source") is None:
+                        stats["vocal_sep_source"] = "stems"
                     va = _audio.voice_activity(vocal)
         except Exception:
             va = None
@@ -1472,6 +1488,10 @@ def process_folder(
                 log_fn(f"    ◇ venue: {s['venue_events']} events "
                        f"(theme {s.get('venue_theme')})"
                        f" · animations: {s.get('anim_events', 0)}{audio}{extra}\n", "info")
+            vsrc = s.get("vocal_sep_source")
+            if vsrc:
+                log_fn(f"    ◇ vocal source: {vsrc}"
+                       f"{' (cache)' if vsrc in ('mdx', 'mogg') else ''}\n", "info")
             elif do_venue and s.get("venue_skipped"):
                 log_fn(f"    ↷ venue: skipped (already authored)"
                        f" · animations: {s.get('anim_events', 0)}\n", "info")
