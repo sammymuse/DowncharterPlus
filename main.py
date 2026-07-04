@@ -1048,8 +1048,8 @@ class App(tk.Tk):
         """Append to the Convert tab log box (thread-safe)."""
         self.after(0, lambda: self._tab_log(self._convert_log, text, tag))
 
-    _LOG_MAX_LINES = 5000     # truncate when exceeded
-    _LOG_KEEP_LINES = 1000    # lines to keep after truncation
+    _LOG_MAX_LINES = 250      # truncate when exceeded
+    _LOG_KEEP_LINES = 200     # lines to keep after truncation
 
     @staticmethod
     def _tab_log(log_box, text, tag=None):
