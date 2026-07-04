@@ -158,82 +158,148 @@ def _fit_endpoints(blk, axis):
 def _encode_dxt1(rgb) -> bytes:
     """High-quality DXT1 encode of an (H,W,3) uint8 image (H,W multiples of 4).
 
-    Per 4×4 block we fit the colour line along the PRINCIPAL AXIS (PCA via power
-    iteration) instead of the per-channel bounding box — the bbox over-expands
-    the range and desaturates, the principal axis tracks the real colour spread.
-    Endpoints are then refined by LEAST SQUARES against the chosen indices (a
-    couple of stb_dxt-style iterations), recovering detail the old range-fit lost.
-    Output is byte-identical in layout (c0 u16le, c1 u16le, 32 2-bit indices).
+    All 4×4 blocks are processed in a single vectorised pass: PCA via batched
+    power-iteration, least-squares refinement, and final packing into 8-byte
+    DXT1 blocks (c0 u16le, c1 u16le, 32 2-bit indices).
     """
     import numpy as np
-    h, w, _ = rgb.shape
-    weights = np.array(_C0_WEIGHT)                   # (4,)
-    out = bytearray()
-    for by in range(0, h, 4):
-        for bx in range(0, w, 4):
-            blk = rgb[by:by + 4, bx:bx + 4, :].reshape(-1, 3).astype(np.float64)
-            axis = _principal_axis(blk - blk.mean(axis=0))
-            if axis is None:                         # flat block
-                c0 = int(_rgb565(blk[:1].astype(np.int32))[0])
-                out += bytes([c0 & 0xFF, (c0 >> 8) & 0xFF,
-                              c0 & 0xFF, (c0 >> 8) & 0xFF, 0, 0, 0, 0])
-                continue
+    h, w, _c = rgb.shape
+    bh, bw = h // 4, w // 4
+    if bh == 0 or bw == 0:
+        return b""
 
-            e0, e1 = _fit_endpoints(blk, axis)
-            idx = None
-            for _ in range(3):                       # refine endpoints ↔ indices
-                c0q = int(_rgb565(np.clip(np.round(e0), 0, 255)
-                                  .astype(np.int32)[None, :])[0])
-                c1q = int(_rgb565(np.clip(np.round(e1), 0, 255)
-                                  .astype(np.int32)[None, :])[0])
-                p0 = np.array(_unpack565(c0q))
-                p1 = np.array(_unpack565(c1q))
-                palette = np.stack([p0, p1,
-                                    (2 * p0 + p1) / 3.0,
-                                    (p0 + 2 * p1) / 3.0])      # (4,3)
-                d = ((blk[:, None, :] - palette[None, :, :]) ** 2).sum(axis=2)
-                idx = d.argmin(axis=1)                          # (16,)
-                # least-squares: minimise Σ‖p − (w·E0 + (1−w)·E1)‖² over E0,E1
-                wpix = weights[idx]                             # (16,)
-                a = float((wpix * wpix).sum())
-                b = float((wpix * (1.0 - wpix)).sum())
-                c = float(((1.0 - wpix) * (1.0 - wpix)).sum())
-                det = a * c - b * b
-                if abs(det) < 1e-9:
-                    break
-                pw0 = (wpix[:, None] * blk).sum(axis=0)         # Σ w·p
-                pw1 = ((1.0 - wpix)[:, None] * blk).sum(axis=0) # Σ (1−w)·p
-                e0 = (c * pw0 - b * pw1) / det
-                e1 = (a * pw1 - b * pw0) / det
+    # ── 1. Extract all 4×4 blocks → (N, 16, 3) ──────────────────────────
+    blocks = (rgb.reshape(bh, 4, bw, 4, 3)
+              .transpose(0, 2, 1, 3, 4)
+              .reshape(-1, 16, 3)
+              .astype(np.float64))
+    N = blocks.shape[0]
+    weights = np.array(_C0_WEIGHT, dtype=np.float64)           # (4,)
 
-            c0 = int(_rgb565(np.clip(np.round(e0), 0, 255)
-                             .astype(np.int32)[None, :])[0])
-            c1 = int(_rgb565(np.clip(np.round(e1), 0, 255)
-                             .astype(np.int32)[None, :])[0])
-            if c0 == c1:                             # collapsed → flat block
-                out += bytes([c0 & 0xFF, (c0 >> 8) & 0xFF,
-                              c1 & 0xFF, (c1 >> 8) & 0xFF, 0, 0, 0, 0])
-                continue
-            if c0 < c1:                              # keep c0>c1 → 4-colour mode
-                c0, c1 = c1, c0
-            # final index assignment against the quantised palette
-            p0 = np.array(_unpack565(c0))
-            p1 = np.array(_unpack565(c1))
-            palette = np.stack([p0, p1,
-                                (2 * p0 + p1) / 3.0,
-                                (p0 + 2 * p1) / 3.0])
-            d = ((blk[:, None, :] - palette[None, :, :]) ** 2).sum(axis=2)
-            idx = d.argmin(axis=1).astype(np.uint32)
-            bits = 0
-            for i in range(16):
-                bits |= int(idx[i]) << (2 * i)
-            out += bytes([
-                c0 & 0xFF, (c0 >> 8) & 0xFF,
-                c1 & 0xFF, (c1 >> 8) & 0xFF,
-                bits & 0xFF, (bits >> 8) & 0xFF,
-                (bits >> 16) & 0xFF, (bits >> 24) & 0xFF,
-            ])
-    return bytes(out)
+    # ── 2. Per-block means & centred data ───────────────────────────────
+    means = blocks.mean(axis=1)                                 # (N, 3)
+    centred = blocks - means[:, None, :]                        # (N, 16, 3)
+
+    # ── 3. Per-block 3×3 covariance & flat-block detection ──────────────
+    cov = np.einsum("nij,nik->njk", centred, centred)          # (N, 3, 3)
+    trace = cov[:, 0, 0] + cov[:, 1, 1] + cov[:, 2, 2]
+    flat = trace < 1e-4                                         # (N,) bool
+
+    # ── 4. Batched power-iteration for principal axis ───────────────────
+    axis = cov.sum(axis=1)                                     # seed  (N, 3)
+    axis /= np.sqrt((axis * axis).sum(axis=1, keepdims=True)) + 1e-12
+
+    active = ~flat
+    if active.any():
+        cov_a = cov[active]
+        ax_a = axis[active]
+        for _ in range(8):
+            ax_new = np.einsum("nij,nj->ni", cov_a, ax_a)
+            ax_new /= np.sqrt((ax_new * ax_new).sum(axis=1,
+                                                     keepdims=True)) + 1e-12
+            ax_a = ax_new
+        axis[active] = ax_a
+
+    # ── 5. Initial endpoints via projection onto principal axis ─────────
+    proj = np.einsum("nij,nj->ni", centred, axis)              # (N, 16)
+    e0 = means + axis * proj.max(axis=1)[:, None]              # (N, 3)
+    e1 = means + axis * proj.min(axis=1)[:, None]              # (N, 3)
+
+    # ── Helper: batch RGB565 pack / unpack ──────────────────────────────
+    def _pack565b(c):
+        """(…,3) float → (…,) uint16."""
+        r = (np.clip(np.round(c[..., 0]), 0, 255).astype(np.uint16) >> 3) & 0x1F
+        g = (np.clip(np.round(c[..., 1]), 0, 255).astype(np.uint16) >> 2) & 0x3F
+        b = (np.clip(np.round(c[..., 2]), 0, 255).astype(np.uint16) >> 3) & 0x1F
+        return (r << 11) | (g << 5) | b
+
+    def _unpack565b(c):
+        """(…,) uint16 → (…,3) float64 with low-bit replication."""
+        r = (c >> 11) & 0x1F
+        g = (c >> 5) & 0x3F
+        b = c & 0x1F
+        r_f = ((r.astype(np.float64) << 3) | (r.astype(np.float64) >> 2))
+        g_f = ((g.astype(np.float64) << 2) | (g.astype(np.float64) >> 4))
+        b_f = ((b.astype(np.float64) << 3) | (b.astype(np.float64) >> 2))
+        return np.stack([r_f, g_f, b_f], axis=-1)
+
+    # ── 6. Least-squares refinement (3 iterations) ──────────────────────
+    refine = active.copy()
+    for _ in range(3):
+        if not refine.any():
+            break
+        c0 = _pack565b(e0)
+        c1 = _pack565b(e1)
+
+        p0 = _unpack565b(c0)                                   # (N, 3)
+        p1 = _unpack565b(c1)                                   # (N, 3)
+        palette = np.stack(
+            [p0, p1, (2 * p0 + p1) / 3.0, (p0 + 2 * p1) / 3.0],
+            axis=1)                                            # (N, 4, 3)
+
+        d = ((blocks[:, :, None, :] - palette[:, None, :, :])
+             ** 2).sum(axis=3)                                 # (N, 16, 4)
+        idx = d.argmin(axis=2)                                 # (N, 16)
+
+        wpix = weights[idx]                                    # (N, 16)
+        a = (wpix * wpix).sum(axis=1)                          # (N,)
+        b = (wpix * (1.0 - wpix)).sum(axis=1)                  # (N,)
+        c = ((1.0 - wpix) * (1.0 - wpix)).sum(axis=1)         # (N,)
+        det = a * c - b * b                                    # (N,)
+
+        ok = refine & (np.abs(det) > 1e-9)
+        if not ok.any():
+            break
+        pw0 = (wpix[ok, :, None] * blocks[ok]).sum(axis=1)    # (n_ok, 3)
+        pw1 = ((1.0 - wpix[ok])[:, :, None] *
+               blocks[ok]).sum(axis=1)                         # (n_ok, 3)
+        det_ok = det[ok]
+        e0[ok] = (c[ok, None] * pw0 - b[ok, None] * pw1) / det_ok[:, None]
+        e1[ok] = (a[ok, None] * pw1 - b[ok, None] * pw0) / det_ok[:, None]
+        # Update refinement mask: stop refining blocks whose det fell below threshold
+        refine = ok
+
+    # ── 7. Final quantisation & mode selection ──────────────────────────
+    c0 = _pack565b(e0).astype(np.uint64)
+    c1 = _pack565b(e1).astype(np.uint64)
+    collapsed = flat | (c0 == c1)                              # treat as flat
+
+    # Ensure c0 > c1 on non-collapsed blocks (triggers DXT1 4-colour mode)
+    swap = (c0 < c1) & (~collapsed)
+    c0_n = np.where(swap, c1, c0)
+    c1_n = np.where(swap, c0, c1)
+
+    # ── 8. Final index assignment against the quantised palette ─────────
+    p0 = _unpack565b(c0_n.astype(np.uint16))
+    p1 = _unpack565b(c1_n.astype(np.uint16))
+    palette = np.stack(
+        [p0, p1, (2 * p0 + p1) / 3.0, (p0 + 2 * p1) / 3.0],
+        axis=1)
+    d = ((blocks[:, :, None, :] - palette[:, None, :, :]) ** 2).sum(axis=3)
+    idx = d.argmin(axis=2).astype(np.uint32)                   # (N, 16)
+
+    # ── 9. Pack indices into 32-bit words ───────────────────────────────
+    shifts = np.arange(16, dtype=np.uint32) * 2
+    bits = (idx.astype(np.uint32) << shifts[None, :]).sum(axis=1)
+
+    # ── 10. Assemble 8-byte blocks ──────────────────────────────────────
+    out = np.empty(N * 8, dtype=np.uint8)
+    out[0::8] = c0_n & 0xFF;                    out[1::8] = (c0_n >> 8) & 0xFF
+    out[2::8] = c1_n & 0xFF;                    out[3::8] = (c1_n >> 8) & 0xFF
+    out[4::8] = bits & 0xFF;                    out[5::8] = (bits >> 8) & 0xFF
+    out[6::8] = (bits >> 16) & 0xFF;            out[7::8] = (bits >> 24) & 0xFF
+
+    # ── 11. Override flat/collapsed blocks with solid colour ────────────
+    c_flat = _pack565b(blocks[:, 0, :]).astype(np.uint16)
+    cflat = collapsed
+    out_2d = out.reshape(N, 8)
+    out_2d[cflat, 0] = c_flat[cflat] & 0xFF
+    out_2d[cflat, 1] = (c_flat[cflat] >> 8) & 0xFF
+    out_2d[cflat, 2] = c_flat[cflat] & 0xFF
+    out_2d[cflat, 3] = (c_flat[cflat] >> 8) & 0xFF
+    out_2d[cflat, 4:] = 0
+
+    return out.tobytes()
 
 
 def build_png_ps3(cover_path: str, size: int = _SIZE) -> bytes:
@@ -268,7 +334,11 @@ def build_png_xbox(cover_path: str, size: int = _SIZE) -> bytes:
     PS3↔Xbox texture-endianness difference, confirmed against a real Onyx
     ``.png_xbox`` (whose HMX header stays little-endian).
     """
-    data = bytearray(build_png_ps3(cover_path, size))
-    for i in range(32, len(data) - 1, 2):              # swap each u16 word, header intact
-        data[i], data[i + 1] = data[i + 1], data[i]
-    return bytes(data)
+    import numpy as np
+    data = np.frombuffer(build_png_ps3(cover_path, size), dtype=np.uint8)
+    # Byte-swap every u16 word in the payload (skip the 32-byte HMX header)
+    payload = data[32:]
+    even_len = (len(payload) // 2) * 2
+    pairs = payload[:even_len].reshape(-1, 2)
+    data[32:32 + even_len] = pairs[:, ::-1].ravel()
+    return data.tobytes()

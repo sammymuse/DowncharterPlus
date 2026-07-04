@@ -174,11 +174,10 @@ def ensure_mogg_44100(src_mogg: str, out_path: str, log_fn=None,
             if decoded_src is not None:
                 src_data, src_sr = decoded_src
                 threshold = 0.01
-                src_first_real = 0.0
-                for i in range(len(src_data)):
-                    if np.max(np.abs(src_data[i])) > threshold:
-                        src_first_real = i / src_sr
-                        break
+                abs_data = np.abs(src_data)
+                max_per_frame = abs_data.max(axis=1)
+                candidates = np.where(max_per_frame > threshold)[0]
+                src_first_real = float(candidates[0]) / src_sr if len(candidates) else 0.0
             else:
                 src_first_real = 0.0
         except Exception as e:
@@ -308,12 +307,13 @@ def build_mogg_from_stems(folder: str, out_path: str, log_fn=None,
         src_first_real = None
         for track, data, sr in decoded:
             threshold = 0.01
-            for i in range(len(data)):
-                if np.max(np.abs(data[i])) > threshold:
-                    t = i / sr
-                    if src_first_real is None or t < src_first_real:
-                        src_first_real = t
-                    break
+            abs_data = np.abs(data)
+            max_per_frame = abs_data.max(axis=1)
+            candidates = np.where(max_per_frame > threshold)[0]
+            if len(candidates):
+                t = float(candidates[0]) / sr
+                if src_first_real is None or t < src_first_real:
+                    src_first_real = t
         if src_first_real is None:
             src_first_real = 0.0
 

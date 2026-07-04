@@ -56,6 +56,9 @@ def find_vocal_stems(folder: str) -> list[str]:
         if (low.endswith(_AUDIO_EXTS) and not low.endswith(".mogg")
                 and any(k in low for k in _VOCAL_STEM_KEYS)
                 and "harm" not in low):   # keep only the lead vocal stem
+            # Exclude our own cache files — resolve_vocal_audio manages those
+            if f in _VOCAL_CACHE_NAMES:
+                continue
             out.append(os.path.join(folder, f))
     return sorted(out)
 

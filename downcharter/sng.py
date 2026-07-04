@@ -249,27 +249,36 @@ def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
         # Random mask (os.urandom) was the old behavior; zero mask is equivalent for YARG.
         header_mask = b"\x00" * 16
         index_body = bytearray()
-        data_body = bytearray()
+        total_data_size = sum(len(blob) for blob in files.values())
+        data_body = bytearray(total_data_size)
         offset = data_start
+        write_pos = 0
         for nb, blob in zip(names, files.values()):
             index_body += struct.pack("<B", len(nb)) + nb
             index_body += struct.pack("<Q", len(blob))
             index_body += struct.pack("<Q", offset)
-            data_body += blob
-            offset += len(blob)
+            blob_len = len(blob)
+            data_body[write_pos:write_pos + blob_len] = blob
+            write_pos += blob_len
+            offset += blob_len
     else:
         import numpy as np
         mask_arr = np.frombuffer(xor_mask, dtype=np.uint8)
         header_mask = xor_mask
         index_body = bytearray()
-        data_body = bytearray()
+        total_data_size = sum(len(blob) for blob in files.values())
+        data_body = bytearray(total_data_size)
         offset = data_start
+        write_pos = 0
         for nb, blob in zip(names, files.values()):
             index_body += struct.pack("<B", len(nb)) + nb
             index_body += struct.pack("<Q", len(blob))
             index_body += struct.pack("<Q", offset)
-            data_body += _xor_mask_bytes(blob, mask_arr)
-            offset += len(blob)
+            masked = _xor_mask_bytes(blob, mask_arr)
+            blob_len = len(masked)
+            data_body[write_pos:write_pos + blob_len] = masked
+            write_pos += blob_len
+            offset += blob_len
 
     index_section = (struct.pack("<Q", index_section_len)
                      + struct.pack("<Q", len(files)) + index_body)
