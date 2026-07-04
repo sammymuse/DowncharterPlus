@@ -2132,11 +2132,19 @@ def _ensure_companion_map():
     _COMPANION_OFF2INT = {v: k for k, v in DIRECTED_CUTS.items()}
 
 
-def add_companion_shots(accepted: list[tuple[int, str]]) -> list[tuple[int, str]]:
-    """Add best companion directed cut at the same tick as accepted primary cuts.
+def add_companion_shots(
+    accepted: list[tuple[int, str]],
+    rng: random.Random | None = None,
+) -> list[tuple[int, str]]:
+    """Add companion directed cuts at the same tick as accepted primary cuts.
 
-    Uses high-confidence co-occurrence pairs (P >= 0.30) learned from 100 songs.
-    At most 1 companion per tick, matched to the highest probability pair.
+    Uses co-occurrence pairs learned from 100 official songs. Each companion
+    fires probabilistically with its own P value (not deterministically).
+    At most 1 companion per tick.
+
+    When rng is provided, uses it for reproducible probability rolls
+    (pass design.rng from build_camera - seeded from song content).
+    Without rng, falls back to deterministic best-companion (legacy).
 
     Returns list of (tick, D_xxx_cut) to merge into the accepted list.
     """
@@ -2144,7 +2152,7 @@ def add_companion_shots(accepted: list[tuple[int, str]]) -> list[tuple[int, str]
 
     companions: list[tuple[int, str]] = []
     seen_at: dict[int, set[str]] = {}
-    # Build internal → (companion_int, prob) pairs, filtered by P >= 0.30
+    # Build primary -> [(companion, prob), ...] map
     pair_map: dict[str, list[tuple[str, float]]] = {}
     for p_official, c_official, prob in _COMPANION_PAIRS:
         if prob < 0.30:
@@ -2159,20 +2167,34 @@ def add_companion_shots(accepted: list[tuple[int, str]]) -> list[tuple[int, str]
         candidates = pair_map.get(cut)
         if not candidates:
             continue
-        # Pick the best companion NOT already seen at this tick
-        best: tuple[str, float] | None = None
-        for c_int, prob in candidates:
-            if tick in seen_at and c_int in seen_at[tick]:
-                continue
-            if c_int == cut:
-                continue
-            if best is None or prob > best[1]:
-                best = (c_int, prob)
-        if best is not None:
-            c_int, _prob = best
-            if tick not in seen_at:
-                seen_at[tick] = set()
-            companions.append((tick, c_int))
-            seen_at[tick].add(c_int)
+        if rng is not None:
+            # Probabilistic: candidates sorted by descending P, roll for each
+            for c_int, prob in sorted(candidates, key=lambda x: -x[1]):
+                if tick in seen_at and c_int in seen_at[tick]:
+                    continue
+                if c_int == cut:
+                    continue
+                if rng.random() < prob:
+                    if tick not in seen_at:
+                        seen_at[tick] = set()
+                    companions.append((tick, c_int))
+                    seen_at[tick].add(c_int)
+                    break  # max 1 companion per tick
+        else:
+            # Legacy deterministic: pick best companion by highest P
+            best: tuple[str, float] | None = None
+            for c_int, prob in candidates:
+                if tick in seen_at and c_int in seen_at[tick]:
+                    continue
+                if c_int == cut:
+                    continue
+                if best is None or prob > best[1]:
+                    best = (c_int, prob)
+            if best is not None:
+                c_int, _prob = best
+                if tick not in seen_at:
+                    seen_at[tick] = set()
+                companions.append((tick, c_int))
+                seen_at[tick].add(c_int)
 
     return companions

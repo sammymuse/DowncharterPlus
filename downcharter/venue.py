@@ -919,11 +919,11 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
         def _no_strobe(pool):
             return [p for p in pool if p not in ("strobe_fast", "strobe_slow")]
         if not strobe_spans:
-            base = _no_strobe(base)
+            base = _no_strobe(base) or ["frenzy"]   # fallback: nao deixar vazio
         accents = ([SPECIAL_LIGHTING[s.kind]] if s.kind in SPECIAL_LIGHTING
                    else _warmth_pool(_section_lights(theme, s), s.warmth))
         if not strobe_spans:
-            accents = _no_strobe(accents)
+            accents = _no_strobe(accents) or ["frenzy"]  # build -> SPECIAL_LIGHTING="strobe_slow" fica vazio
         # ── Motivo por grupo (repetição estrutural, dev/repetition_stats.json:
         # oficiais reutilizam o look — Jaccard same-group 0.53 vs 0.18, 1.º preset
         # igual 57%). 1.ª ocorrência GRAVA a sequência; repetições REPETEM-NA.
@@ -4904,7 +4904,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     # (e.g. directed_drums_lt + directed_guitar_cls). Add companions using
     # co-occurrence pairs learned from 100 official songs.
     from .cut_events import add_companion_shots
-    companions = add_companion_shots(accepted)
+    companions = add_companion_shots(accepted, rng=design.rng if design is not None else None)
 
     # ── MERGE: directed wins near a framing slot; drop the filler within min_gap ──
     import bisect
