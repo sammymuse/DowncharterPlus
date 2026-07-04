@@ -282,6 +282,7 @@ class App(tk.Tk):
         self._do_sng_preserve_dirs = tk.BooleanVar(
             value=cfg.get("sng_preserve_dirs", True))
         self._cancel = threading.Event()
+        self._log_pending = 0   # tracks _after(0)_ callback backlog
         # Persist whenever a toggle/slider changes
         for var in (self._threshold_ms, self._do_expert_plus, self._do_hard,
                     self._do_medium, self._do_easy, self._do_venue, self._do_export_venue,
@@ -1034,25 +1035,28 @@ class App(tk.Tk):
 
     def _pstatus(self, text):
         """Update the Process tab status bar (thread-safe)."""
-        self.after(0, lambda: self._process_status.set(text or ""))
+        bk = f"  | backlog: {self._log_pending}" if self._log_pending > 0 else ""
+        self.after(0, lambda: self._process_status.set((text or "") + bk))
 
     def _cstatus(self, text):
         """Update the Convert tab status bar (thread-safe)."""
-        self.after(0, lambda: self._convert_status.set(text or ""))
+        bk = f"  | backlog: {self._log_pending}" if self._log_pending > 0 else ""
+        self.after(0, lambda: self._convert_status.set((text or "") + bk))
 
     def _plog(self, text, tag=None):
         """Append to the Process tab log box (thread-safe)."""
-        self.after(0, lambda: self._tab_log(self._process_log, text, tag))
+        self._log_pending += 1
+        self.after(0, self._tab_log, self._process_log, text, tag)
 
     def _clog(self, text, tag=None):
         """Append to the Convert tab log box (thread-safe)."""
-        self.after(0, lambda: self._tab_log(self._convert_log, text, tag))
+        self._log_pending += 1
+        self.after(0, self._tab_log, self._convert_log, text, tag)
 
     _LOG_MAX_LINES = 250      # truncate when exceeded
     _LOG_KEEP_LINES = 200     # lines to keep after truncation
 
-    @staticmethod
-    def _tab_log(log_box, text, tag=None):
+    def _tab_log(self, log_box, text, tag=None):
         log_box.config(state="normal")
         if tag: log_box.insert("end", text, tag)
         else:   log_box.insert("end", text)
@@ -1063,6 +1067,13 @@ class App(tk.Tk):
             log_box.delete("1.0", keep_from)
         log_box.see("end")
         log_box.config(state="disabled")
+        self._log_pending -= 1
+        # Warn if the after(0) queue is congested (> 100 pending)
+        if self._log_pending > 100:
+            log_box.config(state="normal")
+            log_box.insert("end", f"  ⚠ GUI backlog: {self._log_pending} pending\n", "warn")
+            log_box.see("end")
+            log_box.config(state="disabled")
 
 
 if __name__ == "__main__":
