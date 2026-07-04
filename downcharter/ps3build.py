@@ -251,7 +251,7 @@ def _extract_spans_from_track(mid, track_name: str, folder: str) -> list:
     try:
         from . import audio as _audio
         if _audio.available():
-            stems = _audio.find_vocal_stems(folder)
+            stems = _audio.resolve_vocal_audio(folder)
             if stems:
                 va = _audio.voice_activity(stems)
     except Exception:

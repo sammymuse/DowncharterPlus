@@ -682,16 +682,10 @@ def process_midi(
                 from . import audio as _audio_va
                 if _audio_va.available():
                     song_folder = os.path.dirname(os.path.abspath(src_path))
-                    vocal_paths = _audio_va.find_vocal_audio(song_folder)
+                    vocal_paths = _audio_va.resolve_vocal_audio(song_folder)
                     va = None
                     if vocal_paths:
                         va = _audio_va.voice_activity(vocal_paths)
-                    elif vocal_paths is None:
-                        for f in os.listdir(song_folder):
-                            if f.lower().endswith(".mogg"):
-                                va = _audio_va.voice_activity_from_mogg(
-                                    os.path.join(song_folder, f))
-                                break
                     if va is not None:
                         voice_fill = _audio_va.voice_active_ticks(va, tempo_map, tpb)
                         if voice_fill:
@@ -1061,16 +1055,9 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
         try:
             from . import audio as _audio
             if _audio.available():
-                vocal = _audio.find_vocal_audio(folder)
+                vocal = _audio.resolve_vocal_audio(folder)
                 if vocal:
                     va = _audio.voice_activity(vocal)
-                elif vocal is None:
-                    # No separated stems — try extracting vocal channels from .mogg
-                    for f in os.listdir(folder):
-                        if f.lower().endswith(".mogg"):
-                            va = _audio.voice_activity_from_mogg(
-                                os.path.join(folder, f))
-                            break
         except Exception:
             va = None
 

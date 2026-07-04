@@ -81,6 +81,106 @@ def find_vocal_audio(folder: str) -> list[str] | None:
     return []
 
 
+# ── Vocal separation via MDX-NET (fallback when no isolated stems) ─────
+
+_VOCAL_CACHE_NAME = ".downcharter_vocals.wav"
+
+
+def _vocal_cache_path(folder: str) -> str:
+    return os.path.join(folder, _VOCAL_CACHE_NAME)
+
+
+def _cache_is_fresh(cache_path: str, source_paths: list[str]) -> bool:
+    """True if the cache file exists and is newer than all sources."""
+    if not os.path.isfile(cache_path):
+        return False
+    try:
+        ctime = os.path.getmtime(cache_path)
+        return all(os.path.isfile(p) and os.path.getmtime(p) <= ctime
+                   for p in source_paths)
+    except Exception:
+        return False
+
+
+def resolve_vocal_audio(
+    folder: str,
+    sr: int = 48000,
+    model_path: str | None = None,
+) -> list[str] | None:
+    """Find or create vocal audio for a song folder.
+
+    Returns a single-element list (path to a vocal audio file) for use with
+    ``voice_activity()``, or ``None`` if no vocal audio can be found.
+
+    Priority:
+    1. Isolated vocal stems (``Vocal.ogg`` / ``vocals.wav``) → returned directly
+    2. A ``.mogg`` → extract vocal channels → cache to ``.downcharter_vocals.wav``
+    3. MDX-NET separation on the full mix → cache to ``.downcharter_vocals.wav``
+    4. Nothing works → ``None``
+
+    The cache file avoids re-extraction / re-separation on repeated runs;
+    it is invalidated when any source file is newer.
+    """
+    # Priority 1: already-separated stems
+    stems = find_vocal_stems(folder)
+    if stems:
+        return stems
+
+    cache = _vocal_cache_path(folder)
+
+    # Priority 2: .mogg channel extraction
+    if os.path.isdir(folder):
+        for f in os.listdir(folder):
+            if not f.lower().endswith(".mogg"):
+                continue
+            mogg_path = os.path.join(folder, f)
+            if _cache_is_fresh(cache, [mogg_path]):
+                return [cache]
+            try:
+                result = load_vocal_from_mogg(mogg_path)
+            except Exception:
+                result = None
+            if result is not None:
+                mono, _sr = result
+                try:
+                    import soundfile as sf
+                    sf.write(cache, mono, _sr)
+                    return [cache]
+                except Exception:
+                    pass
+            break  # only the first .mogg
+
+    # Priority 3: MDX-NET separation
+    try:
+        from .separate import separate_vocals
+    except Exception:
+        return None
+    try:
+        import numpy as np
+        mix_paths = find_song_audio(folder)
+        if mix_paths:
+            if _cache_is_fresh(cache, mix_paths):
+                return [cache]
+            # Use the first audio file as the full mix
+            if len(mix_paths) == 1:
+                mono, file_sr = load_mono(mix_paths[0])
+            else:
+                mono, file_sr = load_mono_mix(mix_paths)
+            if mono is not None and file_sr:
+                # Make stereo (same signal both channels) for MDX-NET
+                stereo = np.column_stack([mono, mono])
+                vocals = separate_vocals(stereo, sr=file_sr, model_path=model_path)
+                if vocals is not None:
+                    mono_vocals = vocals.mean(axis=1).astype(np.float32)
+                    import soundfile as sf
+                    sf.write(cache, mono_vocals, file_sr)
+                    return [cache]
+    except Exception:
+        pass
+
+    return None
+
+
 def load_vocal_from_mogg(
     mogg_path: str,
     vocal_channels: tuple[int, int] = _MOGG_VOCAL_CHANNELS,
