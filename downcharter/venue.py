@@ -603,17 +603,20 @@ _LIGHT_CADENCE = {"calm": 6.5, "mid": 3.5, "high": 1.9}
 # Learned from 20 official venue songs — each section kind has a characteristic
 # density regardless of energy tier. The energy factor then adjusts within the kind.
 _KIND_CADENCE: dict[str, float] = {
-    "verse":     7.5,   # sparse — verse is restrained
-    "prechorus": 4.5,   # building up
-    "chorus":    2.8,   # dense, the "money" section
-    "bridge":    3.5,   # transitional
-    "intro":     5.0,   # establishing
-    "outro":     4.5,
-    "riff":      2.5,   # high-energy riff
-    "breakdown": 3.0,
-    "build":     2.2,   # peak of tension
-    "drop":      1.8,   # maximum intensity
-    "default":   4.5,
+    # Increased vs old values to reduce trigger density for lights.
+    # With mini-cluster at first trigger only, we need ~2× KIND_CADENCE
+    # to hit ~4 events/secção target (was 15 with full clusters at every trigger).
+    "verse":     12.0,   # was 7.5
+    "prechorus": 8.0,    # was 4.5
+    "chorus":    6.0,    # was 2.8 — key change for 4 evt/sec
+    "bridge":    6.0,    # was 3.5
+    "intro":     8.0,    # was 5.0
+    "outro":     8.0,    # was 4.5
+    "riff":      5.0,    # was 2.5
+    "breakdown": 5.0,    # was 3.0
+    "build":     4.0,    # was 2.2
+    "drop":      3.5,    # was 1.8
+    "default":   8.0,
 }
 
 # Energy tier adjustment multiplier (gentler than the flat cadence was)
@@ -909,8 +912,16 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
             base = _warmth_pool(pool_by_kind.get(energy, pool_by_kind.get("calm", [])), s.warmth)
         else:
             base = _warmth_pool(pool_by_kind, s.warmth)
+        # allow_strobe: song has actual strobe spans (blast/double-bass content)?
+        # If not, filter strobe_* from BOTH base pool AND accents — strobe comes
+        # from explicit spans only, not random selection. This reduces strobe from
+        # 100% to ~47% of songs (matching official).
+        if not strobe_spans:
+            base = [p for p in base if p not in ("strobe_fast", "strobe_slow")]
         accents = ([SPECIAL_LIGHTING[s.kind]] if s.kind in SPECIAL_LIGHTING
                    else _warmth_pool(_section_lights(theme, s), s.warmth))
+        if not strobe_spans:
+            accents = [p for p in accents if p not in ("strobe_fast", "strobe_slow")]
         # ── Motivo por grupo (repetição estrutural, dev/repetition_stats.json:
         # oficiais reutilizam o look — Jaccard same-group 0.53 vs 0.18, 1.º preset
         # igual 57%). 1.ª ocorrência GRAVA a sequência; repetições REPETEM-NA.
@@ -959,7 +970,9 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
                 placed.append(tick)
                 last = preset
                 continue
-            # ── Mini-cluster: emit 2-3 rapid changes per step ──
+            # ── Mini-cluster: emit 2-3 rapid changes ONLY at the first trigger (i==0).
+            # Official venues use burst at entry, then sparse single events.
+            # This prevents the 2-3× multiplier that was causing 15 evt/sec vs target 4.
             local = _env_tier(env, tick) if env else energy
             cluster_gaps = _LIGHT_CLUSTER_PAT.get(local, [0.5])
             # Clímax (último chorus): +1 flip por cluster ≈ a densidade 1.57×
@@ -986,6 +999,9 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
                 i += 1
                 if gi < len(cluster_gaps):
                     tt += max(1, int(tpb * cluster_gaps[gi]))
+                # After the first trigger, emit only 1 event per trigger (single preset)
+                if gi == 0 and i > 1:
+                    break
     # Keyframes [next]: the MANUAL presets (verse/chorus/manual_*/dischord/stomp) are
     # STATIC until a keyframe advances them. The official venues keyframe them ~1×
     # per beat (snap to hits). AUTO presets (frenzy/flare/loop/strobe…) animate
@@ -1653,9 +1669,12 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
     #   dynamic: [0.5, 0.5, 0.5] = 4 events/cluster (burst-only), hold=6 bars
     #     → high density for shorter sections / autogen energy
     CLUSTER_PAT = {
-        "conservative": {"calm": [2.0],              "mid": [2.0],              "high": [2.0]},
-        "authored":     {"calm": [0.5, 0.5],         "mid": [0.5, 0.5],         "high": [0.5, 0.5]},
-        "dynamic":      {"calm": [0.5, 0.5, 0.5],    "mid": [0.5, 0.5, 0.5],    "high": [0.5, 0.5, 0.5]},
+        # authored [0.5, 0.5, 2.0]: intra-cluster gaps 0.5/0.5/2.0 beats → last gap is
+        # short (1-4 beats), giving ~50% burst / ~25% short / ~25% hold (target 63/24/13).
+        # The 2.0-beat gap flips the last intra-cluster gap from burst→short.
+        "conservative": {"calm": [2.0],                "mid": [2.0],                "high": [2.0]},
+        "authored":     {"calm": [0.5, 0.5, 2.0],    "mid": [0.5, 0.5, 2.0],    "high": [0.5, 0.5, 2.0]},
+        "dynamic":      {"calm": [0.5, 0.5, 0.5],      "mid": [0.5, 0.5, 0.5],      "high": [0.5, 0.5, 0.5]},
     }
     HOLD_BARS = {
         "conservative": {"calm": 16, "mid": 14, "high": 12},
@@ -1787,7 +1806,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Near", 0.0617),
 
-            ("D_Closeup_Hand", 0.0617),
+            ("D_Hand", 0.0617),
 
             ("B_Near", 0.0463),
 
@@ -1801,7 +1820,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BG_Near", 0.0382),
 
-            ("D_Closeup_Head", 0.0374),
+            ("D_Head", 0.0374),
 
             ("G_Near", 0.0341),
 
@@ -1809,7 +1828,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Behind", 0.0341),
 
-            ("G_Closeup_Hand", 0.0292),
+            ("G_Hand", 0.0292),
 
             ("GK_Near", 0.0260),
 
@@ -1821,19 +1840,19 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Behind", 0.0227),
 
-            ("K_Closeup_Hand", 0.0203),
+            ("K_Hand", 0.0203),
 
             ("V_Behind", 0.0195),
 
             ("KV_Near", 0.0171),
 
-            ("G_Closeup_Head", 0.0162),
+            ("G_Head", 0.0162),
 
             ("DV_Near", 0.0162),
 
             ("BG_Behind", 0.0138),
 
-            ("K_Closeup_Head", 0.0130),
+            ("K_Head", 0.0130),
 
             ("BK_Behind", 0.0130),
 
@@ -1857,7 +1876,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
         "mid": CoopDistribution(cuts=[
 
-            ("D_Closeup_Hand", 0.0682),
+            ("D_Hand", 0.0682),
 
             ("V_Closeup", 0.0618),
 
@@ -1869,7 +1888,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("Front_Near", 0.0391),
 
-            ("G_Closeup_Hand", 0.0391),
+            ("G_Hand", 0.0391),
 
             ("All_Near", 0.0377),
 
@@ -1885,9 +1904,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BV_Near", 0.0309),
 
-            ("D_Closeup_Head", 0.0305),
+            ("D_Head", 0.0305),
 
-            ("K_Closeup_Hand", 0.0300),
+            ("K_Hand", 0.0300),
 
             ("K_Near", 0.0246),
 
@@ -1919,9 +1938,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("DV_Near", 0.0132),
 
-            ("G_Closeup_Head", 0.0105),
+            ("G_Head", 0.0105),
 
-            ("K_Closeup_Head", 0.0105),
+            ("K_Head", 0.0105),
 
             ("G_Behind", 0.0095),
 
@@ -1935,7 +1954,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Closeup", 0.0755),
 
-            ("D_Closeup_Hand", 0.0561),
+            ("D_Hand", 0.0561),
 
             ("V_Near", 0.0542),
 
@@ -1949,11 +1968,11 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Near", 0.0445),
 
-            ("G_Closeup_Hand", 0.0416),
+            ("G_Hand", 0.0416),
 
             ("G_Near", 0.0407),
 
-            ("D_Closeup_Head", 0.0358),
+            ("D_Head", 0.0358),
 
             ("All_Behind", 0.0319),
 
@@ -1961,7 +1980,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Behind", 0.0300),
 
-            ("K_Closeup_Hand", 0.0271),
+            ("K_Hand", 0.0271),
 
             ("BK_Near", 0.0261),
 
@@ -1981,7 +2000,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Behind", 0.0165),
 
-            ("G_Closeup_Head", 0.0155),
+            ("G_Head", 0.0155),
 
             ("BG_Behind", 0.0145),
 
@@ -1993,7 +2012,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BK_Behind", 0.0116),
 
-            ("K_Closeup_Head", 0.0097),
+            ("K_Head", 0.0097),
 
             ("KV_Near", 0.0087),
 
@@ -2023,13 +2042,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("Front_Near", 0.0440),
 
-            ("D_Closeup_Hand", 0.0440),
+            ("D_Hand", 0.0440),
 
             ("BV_Near", 0.0384),
 
             ("GV_Near", 0.0356),
 
-            ("D_Closeup_Head", 0.0328),
+            ("D_Head", 0.0328),
 
             ("All_Near", 0.0309),
 
@@ -2043,7 +2062,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GK_Near", 0.0243),
 
-            ("G_Closeup_Hand", 0.0234),
+            ("G_Hand", 0.0234),
 
             ("BK_Near", 0.0234),
 
@@ -2061,7 +2080,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Far", 0.0169),
 
-            ("K_Closeup_Hand", 0.0159),
+            ("K_Hand", 0.0159),
 
             ("BD_Near", 0.0150),
 
@@ -2075,13 +2094,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("G_Behind", 0.0131),
 
-            ("G_Closeup_Head", 0.0131),
+            ("G_Head", 0.0131),
 
             ("K_Behind", 0.0131),
 
             ("BK_Behind", 0.0112),
 
-            ("K_Closeup_Head", 0.0103),
+            ("K_Head", 0.0103),
 
             ("GV_Behind", 0.0084),
 
@@ -2093,7 +2112,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Closeup", 0.0723),
 
-            ("D_Closeup_Hand", 0.0592),
+            ("D_Hand", 0.0592),
 
             ("B_Near", 0.0517),
 
@@ -2105,11 +2124,11 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("G_Near", 0.0357),
 
-            ("G_Closeup_Hand", 0.0343),
+            ("G_Hand", 0.0343),
 
             ("All_Near", 0.0329),
 
-            ("D_Closeup_Head", 0.0319),
+            ("D_Head", 0.0319),
 
             ("D_Behind", 0.0315),
 
@@ -2133,7 +2152,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Behind", 0.0188),
 
-            ("G_Closeup_Head", 0.0178),
+            ("G_Head", 0.0178),
 
             ("DG_Near", 0.0178),
 
@@ -2143,7 +2162,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("B_Behind", 0.0169),
 
-            ("K_Closeup_Hand", 0.0169),
+            ("K_Hand", 0.0169),
 
             ("KV_Near", 0.0164),
 
@@ -2155,7 +2174,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BV_Behind", 0.0117),
 
-            ("K_Closeup_Head", 0.0113),
+            ("K_Head", 0.0113),
 
             ("GV_Behind", 0.0066),
 
@@ -2167,9 +2186,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Closeup", 0.0739),
 
-            ("D_Closeup_Hand", 0.0721),
+            ("D_Hand", 0.0721),
 
-            ("D_Closeup_Head", 0.0597),
+            ("D_Head", 0.0597),
 
             ("V_Near", 0.0597),
 
@@ -2185,7 +2204,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GV_Near", 0.0356),
 
-            ("G_Closeup_Hand", 0.0356),
+            ("G_Hand", 0.0356),
 
             ("All_Behind", 0.0312),
 
@@ -2207,11 +2226,11 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GK_Near", 0.0240),
 
-            ("K_Closeup_Hand", 0.0187),
+            ("K_Hand", 0.0187),
 
             ("G_Near", 0.0178),
 
-            ("G_Closeup_Head", 0.0151),
+            ("G_Head", 0.0151),
 
             ("DV_Near", 0.0142),
 
@@ -2223,7 +2242,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("K_Behind", 0.0107),
 
-            ("K_Closeup_Head", 0.0089),
+            ("K_Head", 0.0089),
 
             ("BG_Behind", 0.0089),
 
@@ -2253,7 +2272,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("G_Near", 0.0765),
 
-            ("D_Closeup_Hand", 0.0656),
+            ("D_Hand", 0.0656),
 
             ("BG_Near", 0.0492),
 
@@ -2263,9 +2282,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Near", 0.0328),
 
-            ("G_Closeup_Hand", 0.0328),
+            ("G_Hand", 0.0328),
 
-            ("K_Closeup_Hand", 0.0328),
+            ("K_Hand", 0.0328),
 
             ("Front_Near", 0.0273),
 
@@ -2275,7 +2294,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Behind", 0.0273),
 
-            ("D_Closeup_Head", 0.0273),
+            ("D_Head", 0.0273),
 
             ("DG_Near", 0.0273),
 
@@ -2305,7 +2324,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("KV_Near", 0.0055),
 
-            ("G_Closeup_Head", 0.0055),
+            ("G_Head", 0.0055),
 
             ("GV_Behind", 0.0055),
 
@@ -2321,7 +2340,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Behind", 0.0576),
 
-            ("D_Closeup_Hand", 0.0542),
+            ("D_Hand", 0.0542),
 
             ("D_Near", 0.0508),
 
@@ -2329,11 +2348,11 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Behind", 0.0373),
 
-            ("D_Closeup_Head", 0.0373),
+            ("D_Head", 0.0373),
 
-            ("G_Closeup_Hand", 0.0373),
+            ("G_Hand", 0.0373),
 
-            ("K_Closeup_Hand", 0.0339),
+            ("K_Hand", 0.0339),
 
             ("V_Closeup", 0.0339),
 
@@ -2351,7 +2370,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GK_Near", 0.0237),
 
-            ("K_Closeup_Head", 0.0237),
+            ("K_Head", 0.0237),
 
             ("All_Far", 0.0237),
 
@@ -2363,7 +2382,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("Front_Behind", 0.0169),
 
-            ("G_Closeup_Head", 0.0169),
+            ("G_Head", 0.0169),
 
             ("GV_Near", 0.0136),
 
@@ -2393,11 +2412,11 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Closeup", 0.0552),
 
-            ("D_Closeup_Hand", 0.0491),
+            ("D_Hand", 0.0491),
 
             ("B_Near", 0.0491),
 
-            ("G_Closeup_Hand", 0.0429),
+            ("G_Hand", 0.0429),
 
             ("BG_Near", 0.0429),
 
@@ -2413,13 +2432,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GK_Near", 0.0307),
 
-            ("D_Closeup_Head", 0.0307),
+            ("D_Head", 0.0307),
 
             ("D_Near", 0.0307),
 
             ("Front_Behind", 0.0307),
 
-            ("K_Closeup_Hand", 0.0245),
+            ("K_Hand", 0.0245),
 
             ("BK_Near", 0.0245),
 
@@ -2433,7 +2452,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GK_Behind", 0.0184),
 
-            ("G_Closeup_Head", 0.0184),
+            ("G_Head", 0.0184),
 
             ("B_Behind", 0.0123),
 
@@ -2443,7 +2462,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("K_Behind", 0.0061),
 
-            ("K_Closeup_Head", 0.0061),
+            ("K_Head", 0.0061),
 
             ("BV_Near", 0.0061),
 
@@ -2465,13 +2484,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Closeup", 0.0687),
 
-            ("D_Closeup_Hand", 0.0601),
+            ("D_Hand", 0.0601),
 
             ("All_Far", 0.0515),
 
             ("GV_Near", 0.0472),
 
-            ("G_Closeup_Hand", 0.0472),
+            ("G_Hand", 0.0472),
 
             ("All_Behind", 0.0472),
 
@@ -2485,7 +2504,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BV_Near", 0.0386),
 
-            ("K_Closeup_Hand", 0.0386),
+            ("K_Hand", 0.0386),
 
             ("B_Near", 0.0386),
 
@@ -2497,7 +2516,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Near", 0.0258),
 
-            ("D_Closeup_Head", 0.0258),
+            ("D_Head", 0.0258),
 
             ("V_Behind", 0.0258),
 
@@ -2517,7 +2536,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("K_Behind", 0.0086),
 
-            ("K_Closeup_Head", 0.0086),
+            ("K_Head", 0.0086),
 
             ("GK_Behind", 0.0043),
 
@@ -2525,7 +2544,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BG_Behind", 0.0043),
 
-            ("G_Closeup_Head", 0.0043),
+            ("G_Head", 0.0043),
 
             ("B_Behind", 0.0043),
 
@@ -2539,7 +2558,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Near", 0.0700),
 
-            ("D_Closeup_Hand", 0.0678),
+            ("D_Hand", 0.0678),
 
             ("D_Behind", 0.0525),
 
@@ -2559,13 +2578,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Far", 0.0284),
 
-            ("G_Closeup_Hand", 0.0263),
+            ("G_Hand", 0.0263),
 
-            ("K_Closeup_Hand", 0.0263),
+            ("K_Hand", 0.0263),
 
             ("BV_Near", 0.0241),
 
-            ("D_Closeup_Head", 0.0219),
+            ("D_Head", 0.0219),
 
             ("BG_Near", 0.0219),
 
@@ -2585,7 +2604,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("K_Near", 0.0153),
 
-            ("G_Closeup_Head", 0.0131),
+            ("G_Head", 0.0131),
 
             ("K_Behind", 0.0131),
 
@@ -2603,7 +2622,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BK_Behind", 0.0066),
 
-            ("K_Closeup_Head", 0.0044),
+            ("K_Head", 0.0044),
 
         ]),
 
@@ -2611,7 +2630,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Near", 0.0950),
 
-            ("D_Closeup_Hand", 0.0724),
+            ("D_Hand", 0.0724),
 
             ("V_Closeup", 0.0633),
 
@@ -2639,17 +2658,17 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GK_Near", 0.0271),
 
-            ("D_Closeup_Head", 0.0271),
+            ("D_Head", 0.0271),
 
             ("BG_Near", 0.0271),
 
-            ("G_Closeup_Hand", 0.0271),
+            ("G_Hand", 0.0271),
 
-            ("K_Closeup_Hand", 0.0226),
+            ("K_Hand", 0.0226),
 
             ("DG_Near", 0.0226),
 
-            ("G_Closeup_Head", 0.0226),
+            ("G_Head", 0.0226),
 
             ("D_Behind", 0.0226),
 
@@ -2667,7 +2686,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GV_Near", 0.0136),
 
-            ("K_Closeup_Head", 0.0090),
+            ("K_Head", 0.0090),
 
             ("B_Behind", 0.0090),
 
@@ -2689,9 +2708,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Near", 0.0805),
 
-            ("G_Closeup_Hand", 0.0728),
+            ("G_Hand", 0.0728),
 
-            ("D_Closeup_Hand", 0.0690),
+            ("D_Hand", 0.0690),
 
             ("G_Near", 0.0651),
 
@@ -2707,7 +2726,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("Front_Near", 0.0421),
 
-            ("K_Closeup_Hand", 0.0383),
+            ("K_Hand", 0.0383),
 
             ("V_Closeup", 0.0383),
 
@@ -2725,13 +2744,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BD_Near", 0.0192),
 
-            ("D_Closeup_Head", 0.0192),
+            ("D_Head", 0.0192),
 
             ("V_Near", 0.0153),
 
             ("V_Behind", 0.0153),
 
-            ("G_Closeup_Head", 0.0153),
+            ("G_Head", 0.0153),
 
             ("BV_Near", 0.0153),
 
@@ -2739,7 +2758,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BV_Behind", 0.0115),
 
-            ("K_Closeup_Head", 0.0115),
+            ("K_Head", 0.0115),
 
             ("BG_Behind", 0.0115),
 
@@ -2759,9 +2778,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
         "mid": CoopDistribution(cuts=[
 
-            ("D_Closeup_Hand", 0.0746),
+            ("D_Hand", 0.0746),
 
-            ("G_Closeup_Hand", 0.0730),
+            ("G_Hand", 0.0730),
 
             ("D_Near", 0.0697),
 
@@ -2789,7 +2808,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Behind", 0.0299),
 
-            ("K_Closeup_Hand", 0.0282),
+            ("K_Hand", 0.0282),
 
             ("All_Behind", 0.0249),
 
@@ -2799,7 +2818,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BV_Near", 0.0199),
 
-            ("D_Closeup_Head", 0.0199),
+            ("D_Head", 0.0199),
 
             ("G_Behind", 0.0199),
 
@@ -2811,7 +2830,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("KV_Near", 0.0149),
 
-            ("G_Closeup_Head", 0.0133),
+            ("G_Head", 0.0133),
 
             ("GV_Near", 0.0116),
 
@@ -2825,7 +2844,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("K_Behind", 0.0066),
 
-            ("K_Closeup_Head", 0.0050),
+            ("K_Head", 0.0050),
 
             ("DV_Near", 0.0033),
 
@@ -2837,13 +2856,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Near", 0.0789),
 
-            ("D_Closeup_Hand", 0.0639),
+            ("D_Hand", 0.0639),
 
             ("D_Near", 0.0639),
 
             ("B_Near", 0.0602),
 
-            ("G_Closeup_Hand", 0.0564),
+            ("G_Hand", 0.0564),
 
             ("Front_Near", 0.0526),
 
@@ -2867,7 +2886,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GK_Near", 0.0263),
 
-            ("D_Closeup_Head", 0.0263),
+            ("D_Head", 0.0263),
 
             ("K_Near", 0.0263),
 
@@ -2887,9 +2906,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("DV_Near", 0.0150),
 
-            ("K_Closeup_Hand", 0.0150),
+            ("K_Hand", 0.0150),
 
-            ("G_Closeup_Head", 0.0113),
+            ("G_Head", 0.0113),
 
             ("All_Behind", 0.0113),
 
@@ -2913,9 +2932,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Near", 0.1765),
 
-            ("D_Closeup_Hand", 0.0686),
+            ("D_Hand", 0.0686),
 
-            ("G_Closeup_Hand", 0.0588),
+            ("G_Hand", 0.0588),
 
             ("BV_Near", 0.0490),
 
@@ -2925,7 +2944,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("DV_Near", 0.0392),
 
-            ("D_Closeup_Head", 0.0392),
+            ("D_Head", 0.0392),
 
             ("KV_Near", 0.0392),
 
@@ -2933,7 +2952,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("Front_Behind", 0.0294),
 
-            ("K_Closeup_Hand", 0.0294),
+            ("K_Hand", 0.0294),
 
             ("All_Near", 0.0294),
 
@@ -2945,7 +2964,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BD_Near", 0.0294),
 
-            ("G_Closeup_Head", 0.0294),
+            ("G_Head", 0.0294),
 
             ("BG_Near", 0.0196),
 
@@ -2953,7 +2972,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Far", 0.0196),
 
-            ("K_Closeup_Head", 0.0196),
+            ("K_Head", 0.0196),
 
             ("All_Behind", 0.0098),
 
@@ -2979,13 +2998,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Near", 0.0825),
 
-            ("G_Closeup_Hand", 0.0619),
+            ("G_Hand", 0.0619),
 
             ("V_Closeup", 0.0619),
 
             ("D_Near", 0.0567),
 
-            ("K_Closeup_Hand", 0.0515),
+            ("K_Hand", 0.0515),
 
             ("Front_Near", 0.0464),
 
@@ -2999,7 +3018,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("B_Near", 0.0361),
 
-            ("D_Closeup_Hand", 0.0361),
+            ("D_Hand", 0.0361),
 
             ("BK_Near", 0.0309),
 
@@ -3033,11 +3052,11 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("KV_Near", 0.0155),
 
-            ("G_Closeup_Head", 0.0155),
+            ("G_Head", 0.0155),
 
             ("G_Behind", 0.0103),
 
-            ("D_Closeup_Head", 0.0103),
+            ("D_Head", 0.0103),
 
             ("B_Behind", 0.0103),
 
@@ -3047,7 +3066,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("K_Behind", 0.0052),
 
-            ("K_Closeup_Head", 0.0052),
+            ("K_Head", 0.0052),
 
         ]),
 
@@ -3059,9 +3078,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BG_Near", 0.0467),
 
-            ("D_Closeup_Head", 0.0467),
+            ("D_Head", 0.0467),
 
-            ("K_Closeup_Hand", 0.0467),
+            ("K_Hand", 0.0467),
 
             ("G_Near", 0.0467),
 
@@ -3071,7 +3090,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("KV_Near", 0.0280),
 
-            ("D_Closeup_Hand", 0.0280),
+            ("D_Hand", 0.0280),
 
             ("V_Behind", 0.0280),
 
@@ -3087,7 +3106,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Behind", 0.0187),
 
-            ("G_Closeup_Head", 0.0187),
+            ("G_Head", 0.0187),
 
             ("B_Near", 0.0187),
 
@@ -3095,7 +3114,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("B_Behind", 0.0187),
 
-            ("G_Closeup_Hand", 0.0187),
+            ("G_Hand", 0.0187),
 
             ("All_Near", 0.0187),
 
@@ -3127,7 +3146,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("B_Near", 0.1000),
 
-            ("D_Closeup_Hand", 0.1000),
+            ("D_Hand", 0.1000),
 
             ("V_Near", 0.0600),
 
@@ -3139,7 +3158,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Behind", 0.0400),
 
-            ("G_Closeup_Hand", 0.0400),
+            ("G_Hand", 0.0400),
 
             ("BG_Near", 0.0400),
 
@@ -3151,9 +3170,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("K_Near", 0.0200),
 
-            ("K_Closeup_Hand", 0.0200),
+            ("K_Hand", 0.0200),
 
-            ("D_Closeup_Head", 0.0200),
+            ("D_Head", 0.0200),
 
             ("G_Behind", 0.0200),
 
@@ -3183,7 +3202,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Near", 0.0619),
 
-            ("D_Closeup_Hand", 0.0619),
+            ("D_Hand", 0.0619),
 
             ("All_Far", 0.0531),
 
@@ -3203,15 +3222,15 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("Front_Behind", 0.0265),
 
-            ("K_Closeup_Hand", 0.0177),
+            ("K_Hand", 0.0177),
 
             ("K_Near", 0.0177),
 
             ("D_Behind", 0.0177),
 
-            ("G_Closeup_Hand", 0.0177),
+            ("G_Hand", 0.0177),
 
-            ("D_Closeup_Head", 0.0177),
+            ("D_Head", 0.0177),
 
             ("All_Behind", 0.0177),
 
@@ -3229,7 +3248,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Behind", 0.0088),
 
-            ("G_Closeup_Head", 0.0088),
+            ("G_Head", 0.0088),
 
             ("DV_Near", 0.0088),
 
@@ -3251,13 +3270,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Near", 0.1795),
 
-            ("D_Closeup_Hand", 0.1026),
+            ("D_Hand", 0.1026),
 
             ("Front_Behind", 0.0769),
 
             ("D_Behind", 0.0769),
 
-            ("G_Closeup_Hand", 0.0769),
+            ("G_Hand", 0.0769),
 
             ("D_Near", 0.0513),
 
@@ -3277,7 +3296,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("DV_Near", 0.0256),
 
-            ("D_Closeup_Head", 0.0256),
+            ("D_Head", 0.0256),
 
             ("G_Near", 0.0256),
 
@@ -3295,9 +3314,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Near", 0.0852),
 
-            ("D_Closeup_Hand", 0.0852),
+            ("D_Hand", 0.0852),
 
-            ("G_Closeup_Hand", 0.0704),
+            ("G_Hand", 0.0704),
 
             ("All_Near", 0.0593),
 
@@ -3307,7 +3326,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("B_Near", 0.0407),
 
-            ("D_Closeup_Head", 0.0370),
+            ("D_Head", 0.0370),
 
             ("BV_Near", 0.0296),
 
@@ -3351,11 +3370,11 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("K_Near", 0.0148),
 
-            ("K_Closeup_Hand", 0.0111),
+            ("K_Hand", 0.0111),
 
             ("G_Behind", 0.0074),
 
-            ("K_Closeup_Head", 0.0037),
+            ("K_Head", 0.0037),
 
             ("BV_Behind", 0.0037),
 
@@ -3369,13 +3388,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Closeup", 0.0843),
 
-            ("D_Closeup_Hand", 0.0784),
+            ("D_Hand", 0.0784),
 
             ("V_Near", 0.0647),
 
             ("B_Near", 0.0529),
 
-            ("G_Closeup_Hand", 0.0510),
+            ("G_Hand", 0.0510),
 
             ("Front_Near", 0.0431),
 
@@ -3387,7 +3406,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("G_Behind", 0.0275),
 
-            ("D_Closeup_Head", 0.0275),
+            ("D_Head", 0.0275),
 
             ("BK_Near", 0.0255),
 
@@ -3417,7 +3436,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("DG_Near", 0.0176),
 
-            ("K_Closeup_Hand", 0.0157),
+            ("K_Hand", 0.0157),
 
             ("V_Behind", 0.0137),
 
@@ -3429,11 +3448,11 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Far", 0.0078),
 
-            ("G_Closeup_Head", 0.0059),
+            ("G_Head", 0.0059),
 
             ("K_Behind", 0.0039),
 
-            ("K_Closeup_Head", 0.0039),
+            ("K_Head", 0.0039),
 
             ("GV_Behind", 0.0020),
 
@@ -3445,7 +3464,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Near", 0.1145),
 
-            ("D_Closeup_Hand", 0.0705),
+            ("D_Hand", 0.0705),
 
             ("All_Near", 0.0661),
 
@@ -3453,7 +3472,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Behind", 0.0485),
 
-            ("G_Closeup_Hand", 0.0485),
+            ("G_Hand", 0.0485),
 
             ("D_Near", 0.0352),
 
@@ -3473,7 +3492,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BK_Near", 0.0264),
 
-            ("D_Closeup_Head", 0.0220),
+            ("D_Head", 0.0220),
 
             ("All_Far", 0.0220),
 
@@ -3485,9 +3504,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BD_Near", 0.0132),
 
-            ("G_Closeup_Head", 0.0132),
+            ("G_Head", 0.0132),
 
-            ("K_Closeup_Hand", 0.0132),
+            ("K_Hand", 0.0132),
 
             ("GV_Behind", 0.0088),
 
@@ -3529,17 +3548,17 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Near", 0.0595),
 
-            ("K_Closeup_Hand", 0.0595),
+            ("K_Hand", 0.0595),
 
             ("All_Behind", 0.0476),
 
-            ("D_Closeup_Head", 0.0476),
+            ("D_Head", 0.0476),
 
             ("GK_Near", 0.0357),
 
             ("BK_Near", 0.0357),
 
-            ("D_Closeup_Hand", 0.0357),
+            ("D_Hand", 0.0357),
 
             ("V_Closeup", 0.0357),
 
@@ -3547,7 +3566,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("K_Near", 0.0357),
 
-            ("G_Closeup_Hand", 0.0238),
+            ("G_Hand", 0.0238),
 
             ("BV_Behind", 0.0238),
 
@@ -3569,7 +3588,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Far", 0.0119),
 
-            ("G_Closeup_Head", 0.0119),
+            ("G_Head", 0.0119),
 
             ("K_Behind", 0.0119),
 
@@ -3597,7 +3616,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Near", 0.0411),
 
-            ("D_Closeup_Hand", 0.0411),
+            ("D_Hand", 0.0411),
 
             ("Front_Near", 0.0411),
 
@@ -3609,13 +3628,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("K_Near", 0.0342),
 
-            ("K_Closeup_Hand", 0.0342),
+            ("K_Hand", 0.0342),
 
             ("V_Closeup", 0.0342),
 
             ("BD_Near", 0.0274),
 
-            ("G_Closeup_Hand", 0.0274),
+            ("G_Hand", 0.0274),
 
             ("KV_Near", 0.0205),
 
@@ -3623,7 +3642,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Behind", 0.0137),
 
-            ("D_Closeup_Head", 0.0137),
+            ("D_Head", 0.0137),
 
             ("DV_Near", 0.0137),
 
@@ -3639,13 +3658,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("B_Behind", 0.0068),
 
-            ("K_Closeup_Head", 0.0068),
+            ("K_Head", 0.0068),
 
         ]),
 
         "close": CoopDistribution(cuts=[
 
-            ("D_Closeup_Head", 0.0794),
+            ("D_Head", 0.0794),
 
             ("V_Near", 0.0635),
 
@@ -3657,7 +3676,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Closeup", 0.0476),
 
-            ("D_Closeup_Hand", 0.0476),
+            ("D_Hand", 0.0476),
 
             ("G_Behind", 0.0476),
 
@@ -3665,13 +3684,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("DV_Near", 0.0317),
 
-            ("G_Closeup_Hand", 0.0317),
+            ("G_Hand", 0.0317),
 
             ("BD_Near", 0.0317),
 
             ("DG_Near", 0.0317),
 
-            ("K_Closeup_Hand", 0.0317),
+            ("K_Hand", 0.0317),
 
             ("Front_Near", 0.0317),
 
@@ -3721,7 +3740,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Near", 0.1045),
 
-            ("D_Closeup_Hand", 0.0746),
+            ("D_Hand", 0.0746),
 
             ("Front_Near", 0.0597),
 
@@ -3729,7 +3748,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Behind", 0.0597),
 
-            ("D_Closeup_Head", 0.0597),
+            ("D_Head", 0.0597),
 
             ("BV_Near", 0.0299),
 
@@ -3751,7 +3770,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Behind", 0.0149),
 
-            ("G_Closeup_Hand", 0.0149),
+            ("G_Hand", 0.0149),
 
             ("DV_Near", 0.0149),
 
@@ -3765,7 +3784,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
         "mid": CoopDistribution(cuts=[
 
-            ("D_Closeup_Hand", 0.0882),
+            ("D_Hand", 0.0882),
 
             ("V_Near", 0.0735),
 
@@ -3773,7 +3792,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Far", 0.0735),
 
-            ("G_Closeup_Hand", 0.0735),
+            ("G_Hand", 0.0735),
 
             ("BK_Near", 0.0588),
 
@@ -3785,9 +3804,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("G_Behind", 0.0294),
 
-            ("K_Closeup_Head", 0.0294),
+            ("K_Head", 0.0294),
 
-            ("D_Closeup_Head", 0.0294),
+            ("D_Head", 0.0294),
 
             ("BG_Behind", 0.0294),
 
@@ -3801,7 +3820,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GV_Near", 0.0294),
 
-            ("K_Closeup_Hand", 0.0294),
+            ("K_Hand", 0.0294),
 
             ("K_Near", 0.0147),
 
@@ -3831,7 +3850,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Behind", 0.0769),
 
-            ("G_Closeup_Head", 0.0769),
+            ("G_Head", 0.0769),
 
             ("D_Near", 0.0769),
 
@@ -3843,7 +3862,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GK_Near", 0.0385),
 
-            ("K_Closeup_Head", 0.0385),
+            ("K_Head", 0.0385),
 
             ("GV_Near", 0.0385),
 
@@ -3851,7 +3870,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("BD_Near", 0.0385),
 
-            ("D_Closeup_Head", 0.0385),
+            ("D_Head", 0.0385),
 
             ("V_Closeup", 0.0385),
 
@@ -3873,13 +3892,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GK_Near", 0.0727),
 
-            ("G_Closeup_Hand", 0.0545),
+            ("G_Hand", 0.0545),
 
             ("BK_Near", 0.0545),
 
             ("Front_Near", 0.0545),
 
-            ("K_Closeup_Head", 0.0364),
+            ("K_Head", 0.0364),
 
             ("K_Near", 0.0364),
 
@@ -3895,7 +3914,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Behind", 0.0364),
 
-            ("D_Closeup_Head", 0.0182),
+            ("D_Head", 0.0182),
 
             ("BK_Behind", 0.0182),
 
@@ -3907,7 +3926,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GV_Near", 0.0182),
 
-            ("K_Closeup_Hand", 0.0182),
+            ("K_Hand", 0.0182),
 
             ("DG_Near", 0.0182),
 
@@ -3915,9 +3934,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("GV_Behind", 0.0182),
 
-            ("G_Closeup_Head", 0.0182),
+            ("G_Head", 0.0182),
 
-            ("D_Closeup_Hand", 0.0182),
+            ("D_Hand", 0.0182),
 
             ("V_Near", 0.0182),
 
@@ -3927,7 +3946,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Near", 0.0945),
 
-            ("D_Closeup_Hand", 0.0709),
+            ("D_Hand", 0.0709),
 
             ("V_Near", 0.0709),
 
@@ -3939,7 +3958,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("V_Closeup", 0.0472),
 
-            ("D_Closeup_Head", 0.0472),
+            ("D_Head", 0.0472),
 
             ("BK_Near", 0.0315),
 
@@ -3957,9 +3976,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Behind", 0.0236),
 
-            ("K_Closeup_Hand", 0.0236),
+            ("K_Hand", 0.0236),
 
-            ("G_Closeup_Hand", 0.0236),
+            ("G_Hand", 0.0236),
 
             ("GK_Behind", 0.0236),
 
@@ -3985,9 +4004,9 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("DG_Near", 0.0079),
 
-            ("G_Closeup_Head", 0.0079),
+            ("G_Head", 0.0079),
 
-            ("K_Closeup_Head", 0.0079),
+            ("K_Head", 0.0079),
 
         ]),
 
@@ -3995,13 +4014,13 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("All_Behind", 0.1429),
 
-            ("D_Closeup_Hand", 0.1224),
+            ("D_Hand", 0.1224),
 
             ("All_Far", 0.0612),
 
             ("V_Behind", 0.0612),
 
-            ("G_Closeup_Hand", 0.0612),
+            ("G_Hand", 0.0612),
 
             ("V_Near", 0.0612),
 
@@ -4015,7 +4034,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("DG_Near", 0.0408),
 
-            ("K_Closeup_Hand", 0.0408),
+            ("K_Hand", 0.0408),
 
             ("V_Closeup", 0.0204),
 
@@ -4029,7 +4048,7 @@ _COOP_PDT: dict[str, dict[str, CoopDistribution]] = {
 
             ("D_Near", 0.0204),
 
-            ("D_Closeup_Head", 0.0204),
+            ("D_Head", 0.0204),
 
             ("Front_Near", 0.0204),
 
@@ -4447,14 +4466,18 @@ def select_coop_cut(
     inst_onsets: dict[str, list[int]] | None,
     cooldown_state: CoopCooldownState,
     level_pool: list[str],
+    min_framing_level: int = 0,
+    last_cut: str | None = None,
 ) -> str | None:
     """Seleciona um coop cut usando RNG pesado + contexto musical.
 
-    1. Obtém distribuição de (section_kind, position) da _COOP_PDT
+    1. Obtém TODA a distribuição de (section_kind, position) da _COOP_PDT
+       (NÃO filtra por level_pool — a PDT já é o pool por section kind)
     2. Aplica cooldown filter
     3. Calcula context_boosts (featured_inst, energy, position)
     4. RNG-weighted choice
-    5. Fallback para level_pool se falhar
+    5. Valida por _level_filter e _playing_framing (dinâmicos, por tick)
+    6. Fallback para level_pool se falhar validação
     """
     dist = _COOP_PDT.get(section_kind, {}).get(position)
     if not dist:
@@ -4463,17 +4486,14 @@ def select_coop_cut(
     if not dist or not dist.cuts:
         return rng.choice(level_pool) if level_pool else None
 
-    # Filtrar cuts que estão no level_pool (válidos para este momento)
-    valid_set = set(level_pool)
-    weighted_cuts = [(c, w) for c, w in dist.cuts if c in valid_set]
-
-    if not weighted_cuts:
-        return rng.choice(level_pool) if level_pool else None
+    # Usar TODA a PDT — sem interseção com SECTION_CAMERA
+    # (a PDT é a distribuição aprendida; level_pool só serve de fallback)
+    all_cuts = [(c, w) for c, w in dist.cuts]
 
     # Aplicar cooldown
     cooldown_ok = []
     cooldown_weights = []
-    for cut_name, base_weight in weighted_cuts:
+    for cut_name, base_weight in all_cuts:
         if cooldown_state.is_available(cut_name, tick, tpb, _COOP_INSTR):
             cooldown_ok.append(cut_name)
             cooldown_weights.append(base_weight)
@@ -4482,10 +4502,11 @@ def select_coop_cut(
         group_available = [c for c in level_pool if not _COOP_INSTR.get(c, set())]
         if group_available:
             return rng.choice(group_available)
+        valid_set = set(level_pool)
         return "All_Near" if "All_Near" in valid_set else (level_pool[0] if level_pool else None)
 
     # Calcular boosts
-    final_weights = []
+    final_cuts: list[tuple[str, float]] = []
     for cut_name in cooldown_ok:
         idx = cooldown_ok.index(cut_name)
         base_weight = cooldown_weights[idx]
@@ -4523,15 +4544,53 @@ def select_coop_cut(
             elif cut_name == "V_Closeup":
                 boost *= 1.1
 
-        final_weights.append(base_weight * boost)
+        final_cuts.append((cut_name, base_weight * boost))
+
+    if not final_cuts:
+        return rng.choice(level_pool) if level_pool else None
 
     # RNG-weighted choice
-    total = sum(final_weights)
+    total = sum(w for _, w in final_cuts)
     if total <= 0:
-        return rng.choice(cooldown_ok) if cooldown_ok else None
+        return rng.choice([c for c, _ in final_cuts]) if final_cuts else None
 
-    normalized = [w / total for w in final_weights]
-    return rng.choices(cooldown_ok, weights=normalized, k=1)[0]
+    cuts_only = [c for c, _ in final_cuts]
+    weights_only = [w for _, w in final_cuts]
+    normalized = [w / total for w in weights_only]
+    chosen = rng.choices(cuts_only, weights=normalized, k=1)[0]
+
+    # Validar por filtros dinâmicos (level + playing)
+    # _level_filter: Onyx level progression
+    if min_framing_level > 0:
+        candidates = _level_filter([chosen], min_framing_level, last_cut)
+        if not candidates:
+            # Tentar outros cuts por ordem de peso
+            for c, _ in sorted(final_cuts, key=lambda x: -x[1]):
+                if c == chosen:
+                    continue
+                cands = _level_filter([c], min_framing_level, last_cut)
+                if cands:
+                    chosen = cands[0]
+                    break
+            else:
+                return rng.choice(level_pool) if level_pool else None
+
+    # _playing_framing: instrumento a tocar?
+    if inst_onsets:
+        playing_pool = _playing_framing([chosen], tick, inst_onsets, tpb)
+        if not playing_pool:
+            # Tentar outro cut
+            for c, _ in sorted(final_cuts, key=lambda x: -x[1]):
+                if c == chosen:
+                    continue
+                pp = _playing_framing([c], tick, inst_onsets, tpb)
+                if pp:
+                    chosen = pp[0]
+                    break
+            else:
+                return rng.choice(level_pool) if level_pool else None
+
+    return chosen
 
 
 def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
@@ -4693,7 +4752,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
             else:
                 position = "entry"
 
-            # Probabilistic selection
+            # Probabilistic selection — usa toda a PDT (sem interseção com SECTION_CAMERA)
             cut = select_coop_cut(
                 section_kind=s.kind,
                 position=position,
@@ -4706,6 +4765,8 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 inst_onsets=inst_onsets,
                 cooldown_state=cd_state,
                 level_pool=level_pool,
+                min_framing_level=min_framing_level,
+                last_cut=last_cut,
             )
 
             # Anti-recency (se falhar, markov cycling de fallback)
@@ -4723,7 +4784,9 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                         rng=rng, featured_inst=feat, energy=energy,
                         section_leaders=leaders, tick=placed, tpb=tpb,
                         inst_onsets=inst_onsets, cooldown_state=cd_state,
-                        level_pool=level_pool)
+                        level_pool=level_pool,
+                        min_framing_level=min_framing_level,
+                        last_cut=last_cut)
                     if cut is None:
                         cut = _markov_choice(last_cut, level_pool, _CAMERA_MARKOV,
                                              level_pool[idx % len(level_pool)], rng=rng)
@@ -4838,7 +4901,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     # (e.g. directed_drums_lt + directed_guitar_cls). Add companions using
     # co-occurrence pairs learned from 100 official songs.
     from .cut_events import add_companion_shots
-    companions = add_companion_shots(accepted)
+    companions = add_companion_shots(accepted, rng=rng)
 
     # ── MERGE: directed wins near a framing slot; drop the filler within min_gap ──
     import bisect

@@ -2132,15 +2132,22 @@ def _ensure_companion_map():
     _COMPANION_OFF2INT = {v: k for k, v in DIRECTED_CUTS.items()}
 
 
-def add_companion_shots(accepted: list[tuple[int, str]]) -> list[tuple[int, str]]:
+def add_companion_shots(
+    accepted: list[tuple[int, str]],
+    rng: random.Random | None = None,
+) -> list[tuple[int, str]]:
     """Add best companion directed cut at the same tick as accepted primary cuts.
 
     Uses high-confidence co-occurrence pairs (P ≥ 0.30) learned from 100 songs.
     At most 1 companion per tick, matched to the highest probability pair.
+    When rng is provided, uses probabilistic firing (P = probability value).
 
     Returns list of (tick, D_xxx_cut) to merge into the accepted list.
     """
     _ensure_companion_map()
+
+    if rng is None:
+        rng = random.Random()
 
     companions: list[tuple[int, str]] = []
     seen_at: dict[int, set[str]] = {}
