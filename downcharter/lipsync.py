@@ -294,13 +294,43 @@ def align_word_phonemes(syllables: list[str], lang: str = "en") -> list[list[str
 # genuine gap (silence, phrase end, song boundary) gets the full close to {}.
 # Below this many seconds between two spans counts as "no real gap" (they're
 # meant to be exactly back-to-back per `_chart_vocals_from_lyrics`).
-_LEGATO_GAP_S = 0.12   # was 0.02: audio-trimmed span ends leave 0.08-0.3 s between
-                       # sung-legato syllables, so almost nothing qualified and the
-                       # mouth punched shut between every syllable (median episode
-                       # 0.10 s vs 0.2-3 s in official milos)
+_LEGATO_GAP_S = 0.02   # back-to-back only. _pad_spans already extends every span
+                       # by the 0.12 s transition, so tubes within 0.24 s MEET
+                       # (gap 0 → legato) and anything still gapped after padding
+                       # must close fully — officials close for any gap > ~0.24 s
+                       # (raising this to 0.12 on top of the padding chained whole
+                       # verses into 100 s+ open episodes; official max is ~8 s)
 _LEGATO_FLOOR = 0.35   # weight fraction kept at a legato boundary instead of 0
 _LEGATO_RELEASE_S = 0.12   # relaxed edge visemes close this long into the NEXT syllable
-_TRANSITION_S = 0.12   # mouth attack/release ramp (Magma/YARG autoLipsync transition)
+_TRANSITION_S = 0.12   # mouth attack/release ramp (Magma/YARG autoLipsync transition;
+                       # 0.10 swept marginally worse on the 15-official comparison)
+
+
+def _pad_spans(spans, pad: float = _TRANSITION_S):
+    """Magma/YARG autoLipsync model: the mouth opens ~0.12 s BEFORE the tube and
+    closes ~0.12 s AFTER it — the transition lives OUTSIDE the note, so the vowel
+    holds for the note's whole length. Tubes closer than 2*pad meet in the middle
+    of the gap (gap → 0 → the legato path keeps the mouth from closing between
+    them), which is why official milos sustain 0.5-4 s episodes across a phrase
+    while unpadded spans punched shut between every tube (measured: official
+    open median 55.6% vs our 29.5% before this).
+
+    Each gap donates at most `pad` to the closing ramp and at most `pad` to the
+    next opening ramp, split evenly, so padded spans never overlap."""
+    if not spans:
+        return spans
+    out = []
+    n = len(spans)
+    for i, sp in enumerate(spans):
+        s, e = sp[0], sp[1]
+        rest = tuple(sp[2:])
+        ns = s - (pad if i == 0
+                  else min(pad, max(0.0, (s - spans[i - 1][1]) / 2)))
+        ne = e + (pad if i + 1 == n
+                  else min(pad, max(0.0, (spans[i + 1][0] - e) / 2)))
+        ns = max(0.0, ns)
+        out.append((ns, max(ne, ns + 1e-3)) + rest)
+    return out
 
 
 def _scale_state(state: dict, f: float) -> dict:
@@ -579,7 +609,7 @@ def frames_from_spans(spans, song_len_s: float,
 
     When ``phrase_ends`` or ``vocal_notes`` are provided, facial animation keyframes
     (Blink, Squint, Eyebrows) are also embedded so they reach the game via the milo."""
-    spans = list(spans)
+    spans = _pad_spans(list(spans))
     shapes = _resolve_shapes(spans, lang)
     frames: dict[int, dict] = {}
     n = len(spans)
@@ -1072,7 +1102,7 @@ def lipsync_keyframes_from_spans(
     drives eyebrow expressions via :func:`generate_facial_keyframes`; the same
     per-syllable loudness gain carried in ``spans`` also feeds it, so belted/
     screamed passages stay expressive even when ``vocal_notes`` is flat (talky)."""
-    spans = list(spans)
+    spans = _pad_spans(list(spans))
     shapes = _resolve_shapes(spans, lang)
     out: list[tuple[float, str, int, str]] = []
     n = len(spans)
@@ -1102,27 +1132,35 @@ def lipsync_keyframes_from_spans(
         end_floor = (_LEGATO_FLOOR if i < n - 1
                      and spans[i + 1][0] - end <= _LEGATO_GAP_S else 0.0)
         pts = _syllable_points_g(t, end - t, shape, start_floor, end_floor)
-        out.extend(_keyframes_from_points(pts, gain))
         # Legato boundaries break the zero-bracketing every series otherwise
         # has, and a viseme keyframe ramps linearly to the NEXT keyframe of
         # that viseme no matter how far away it is (Onyx graph semantics — the
         # game does the same). Two dangling cases must be closed by hand:
         #
-        #  * relax-out: the edge visemes end at _LEGATO_FLOOR with no closing
-        #    zero — a viseme the next syllable doesn't use dangles at ~35%
-        #    until its next reuse, seconds or tens of seconds later ("mouth
-        #    never closes"). Close it shortly into the next syllable.
         #  * relax-in: with start_floor > 0 the series STARTS nonzero, so the
         #    viseme's previous keyframe — possibly 30 s back — ramps up across
         #    the whole gap (slow mouth-opening over silence). Pin a zero just
         #    before this syllable for visemes the previous syllable didn't use.
+        #    MUST be emitted BEFORE the series: when the zero lands at the same
+        #    timestamp as the series' entry keyframe (back-to-back padded
+        #    spans), the stable time-sort keeps emission order, and only a
+        #    (0, entry) twin order makes the previous segment ramp into the
+        #    zero — (entry, 0) re-creates the multi-second ramp.
+        #  * relax-out: the edge visemes end at _LEGATO_FLOOR with no closing
+        #    zero — a viseme the next syllable doesn't use dangles at ~35%
+        #    until its next reuse ("mouth never closes"). Close it shortly
+        #    into the next syllable.
         if start_floor > 0.0 and i > 0:
             prev_names = shape_names[i - 1]
             entry = pts[0][1]                         # the relaxed entry state
-            open_t = max(spans[i - 1][1], t - _LEGATO_RELEASE_S)
+            # The previous syllable doesn't use these visemes, so its window is
+            # free — back the zero into it (clamped to its start) for a real
+            # 0→entry ramp instead of a same-frame step.
+            open_t = max(spans[i - 1][0], t - _LEGATO_RELEASE_S)
             for nm, w in entry.items():
                 if w > 0 and nm not in prev_names:
                     out.append((open_t, nm, 0, "linear"))
+        out.extend(_keyframes_from_points(pts, gain))
         if end_floor > 0.0 and i + 1 < n:
             nxt_start, nxt_end = spans[i + 1][0], spans[i + 1][1]
             nxt_names = shape_names[i + 1]

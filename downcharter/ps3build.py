@@ -361,7 +361,17 @@ def _extract_spans_from_track(mid, track_name: str, folder: str) -> list:
         # strip the talky markers ('#'/'^') the chart carries; keep '-'/'=' (the
         # G2P syllable-grouping the milo path expects).
         text = best[1].rstrip("#^ ").strip() if best else ""
-        if not text or text in ("+", "*", "%"):
+        if text == "+":
+            # Melisma continuation: the singer HOLDS the previous syllable's
+            # vowel through this tube. Officials keep the mouth open across the
+            # whole melisma — extend the previous span instead of dropping the
+            # tube (dropping it left multi-second holes on held notes).
+            if spans:
+                p = spans[-1]
+                spans[-1] = (p[0], max(p[1], tick_to_ms(e_t, tempo_map, tpb) / 1000.0),
+                             p[2], p[3])
+            continue
+        if not text or text in ("*", "%"):
             continue
         s_s = tick_to_ms(s_t, tempo_map, tpb) / 1000.0
         e_s = tick_to_ms(e_t, tempo_map, tpb) / 1000.0
