@@ -4,6 +4,7 @@ Uses a fake session (mask=1.0 → identity) so tests run without the real model.
 """
 
 import threading
+import os
 import numpy as np
 import pytest
 
@@ -181,3 +182,71 @@ class TestModelConfig:
         assert cfg["hop"] == _MODEL_CONFIG["hop"]
         assert cfg["dim_f"] == _MODEL_CONFIG["dim_f"]
         assert cfg["dim_t"] == _MODEL_CONFIG["dim_t"]
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Resampling (_resample_np)
+# ══════════════════════════════════════════════════════════════════════
+
+class TestResample:
+
+    def test_roundtrip_preserves_length(self):
+        """48000 → 44100 → 48000 recovers the original sample count."""
+        from downcharter.audio import _resample_np
+        rng = np.random.RandomState(0)
+        for n in (1, 100, 48001, 480000):
+            src = rng.randn(n).astype(np.float32)
+            mid = _resample_np(src, 48000, 44100)
+            back = _resample_np(mid, 44100, 48000)
+            assert len(back) == len(src), (
+                f"n={n}: round-trip {len(src)} → {len(mid)} → {len(back)}")
+
+    def test_same_rate_identity(self):
+        """Same source and destination rate returns the same array."""
+        from downcharter.audio import _resample_np
+        src = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        out = _resample_np(src, 44100, 44100)
+        assert out is src  # same object, not a copy
+
+    def test_empty_array(self):
+        """Empty input stays empty."""
+        from downcharter.audio import _resample_np
+        src = np.array([], dtype=np.float32)
+        out = _resample_np(src, 48000, 44100)
+        assert len(out) == 0
+
+    def test_single_sample(self):
+        """Single-sample input produces at least 1 output sample."""
+        from downcharter.audio import _resample_np
+        src = np.array([42.0], dtype=np.float32)
+        out = _resample_np(src, 48000, 44100)
+        assert len(out) >= 1
+        assert out[0] == 42.0  # interp preserves endpoint
+
+    def test_dtype_preserved(self):
+        """Output dtype matches input dtype."""
+        from downcharter.audio import _resample_np
+        src = np.linspace(0, 1, 1000, dtype=np.float64)
+        out = _resample_np(src, 48000, 44100)
+        assert out.dtype == np.float64
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Audio helpers (find_song_audio cache exclusion)
+# ══════════════════════════════════════════════════════════════════════
+
+class TestFindSongAudio:
+
+    def test_excludes_vocal_cache(self, tmp_path):
+        """Cache files .downcharter_vocals_*.wav are excluded from stems."""
+        from downcharter.audio import find_song_audio, _VOCAL_CACHE_NAMES
+        # Create a song.ogg + cache files
+        for name in ("song.ogg",) + _VOCAL_CACHE_NAMES:
+            (tmp_path / name).write_bytes(b"fake audio")
+        stems = find_song_audio(str(tmp_path))
+        assert len(stems) == 1
+        assert stems[0].endswith("song.ogg")
+        # Verify no cache file is in the result
+        assert not any(
+            os.path.basename(s).startswith(".downcharter_") for s in stems
+        ), "Cache files leaked into stems"
