@@ -401,6 +401,8 @@ class App(tk.Tk):
                   self._do_hide_bg, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
         CheckTile(p_ctrl, "Vocal separation  (MDX-NET)  (recommended for lipsync and talkies)",
                   self._do_vocal_sep, color=RED, width=520, height=28).pack(anchor="w", pady=(0, 6))
+        self._lbl("⚠  Significantly increases processing time per song (~2-5 s each with GPU / 10-20 s on CPU)",
+                   p_ctrl).pack(anchor="w", padx=(26, 0), pady=(0, 6))
 
         tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(0, 12))
         btn_row = tk.Frame(p_ctrl, bg=BG)

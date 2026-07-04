@@ -12,6 +12,7 @@ pipeline stays intact.
 """
 from __future__ import annotations
 import os
+import sys
 import struct
 import io
 
@@ -152,6 +153,12 @@ def _try_mdx_separation(
             return None
         if _cache_is_fresh(mdx_cache, mix_paths):
             return [mdx_cache]
+
+        # Log start — visible in terminal (GUI captures process_folder's log_fn
+        # for the per-song "vocal source" line after processing).
+        song = os.path.basename(folder.strip("/\\")) or folder
+        sys.stderr.write(f"  [mdx] separating vocals: {song}...\n")
+
         if len(mix_paths) == 1:
             mono, file_sr = load_mono(mix_paths[0])
         else:
@@ -165,12 +172,15 @@ def _try_mdx_separation(
         stereo = np.stack([mono, mono], axis=0)  # (2, N) — shape expected by separate_vocals
         vocals = separate_vocals(stereo, sr=model_sr, model_path=model_path)
         if vocals is None:
+            sys.stderr.write(f"  [mdx]  failed (model or onnx issue)\n")
             return None
         mono_vocals = vocals.mean(axis=1).astype(np.float32)
         # Resample back to the original file rate for caching
         if file_sr != model_sr:
             mono_vocals = _resample_np(mono_vocals, model_sr, file_sr)
         if _atomic_write_cache(mdx_cache, mono_vocals, file_sr):
+            size_mb = os.path.getsize(mdx_cache) / 2**20
+            sys.stderr.write(f"  [mdx]  done ({size_mb:.1f} MB cached)\n")
             return [mdx_cache]
     except Exception:
         pass
