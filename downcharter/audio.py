@@ -58,53 +58,50 @@ def find_vocal_stems(folder: str) -> list[str]:
 
 
 def find_vocal_audio(folder: str) -> list[str] | None:
-    """Find vocal audio in a song folder.
-
-    Returns a list of paths (separated vocal stems) for direct use with
-    ``voice_activity()``, or ``None`` to indicate the caller should try
-    ``load_vocal_from_mogg()`` on the folder's ``.mogg`` instead.
-
-    Priority:
-    1. Separated vocal stems (``Vocal.ogg`` / ``vocals.wav``, no 'harm')
-       → returned directly
-    2. A ``.mogg`` in the folder → ``None`` (caller calls ``load_vocal_from_mogg``)
-    3. Nothing found → ``[]`` (no vocal audio at all → geometric fallback)
-    """
+    """Deprecated — use ``resolve_vocal_audio`` instead, which also handles
+    ``.mogg`` extraction and MDX-NET separation as fallback."""
     stems = find_vocal_stems(folder)
     if stems:
         return stems
-    # No separated stems — check for a .mogg to extract from.
     if os.path.isdir(folder):
         for f in os.listdir(folder):
             if f.lower().endswith(".mogg"):
-                return None  # signal: try load_vocal_from_mogg
+                return None
     return []
 
 
 # ── Vocal separation via MDX-NET (fallback when no isolated stems) ─────
 
-_VOCAL_CACHE_NAME = ".downcharter_vocals.wav"
+_VOCAL_CACHE_MOGG = ".downcharter_vocals_mogg.wav"
+_VOCAL_CACHE_MDX = ".downcharter_vocals_mdx.wav"
 
 
-def _vocal_cache_path(folder: str) -> str:
-    return os.path.join(folder, _VOCAL_CACHE_NAME)
-
-
-def _cache_is_fresh(cache_path: str, source_paths: list[str]) -> bool:
-    """True if the cache file exists and is newer than all sources."""
-    if not os.path.isfile(cache_path):
-        return False
+def _atomic_write_cache(cache_path: str, mono, sr: int) -> bool:
+    """Write ``mono`` to ``cache_path`` atomically via a temp file.
+    Returns True on success, False on any I/O or encoding error.
+    The temp file is cleaned up automatically (even on failure)."""
+    import soundfile as sf
+    import tempfile
+    folder = os.path.dirname(cache_path) or "."
     try:
-        ctime = os.path.getmtime(cache_path)
-        return all(os.path.isfile(p) and os.path.getmtime(p) <= ctime
-                   for p in source_paths)
+        tmp = tempfile.NamedTemporaryFile(dir=folder, suffix=".wav",
+                                          delete=False)
+        tmp.close()
+        sf.write(tmp.name, mono, sr)
+        # Validate the written file before committing
+        sf.info(tmp.name)
+        os.replace(tmp.name, cache_path)
+        return True
     except Exception:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
         return False
 
 
 def resolve_vocal_audio(
     folder: str,
-    sr: int = 48000,
     model_path: str | None = None,
 ) -> list[str] | None:
     """Find or create vocal audio for a song folder.
@@ -114,67 +111,61 @@ def resolve_vocal_audio(
 
     Priority:
     1. Isolated vocal stems (``Vocal.ogg`` / ``vocals.wav``) → returned directly
-    2. A ``.mogg`` → extract vocal channels → cache to ``.downcharter_vocals.wav``
-    3. MDX-NET separation on the full mix → cache to ``.downcharter_vocals.wav``
+    2. A ``.mogg`` → extract vocal channels → cache to ``.downcharter_vocals_mogg.wav``
+    3. MDX-NET separation on the full mix → cache to ``.downcharter_vocals_mdx.wav``
     4. Nothing works → ``None``
 
-    The cache file avoids re-extraction / re-separation on repeated runs;
-    it is invalidated when any source file is newer.
+    Each source type has its own cache file, invalidated independently when
+    the corresponding source file changes.  Cache files can be safely deleted.
     """
     # Priority 1: already-separated stems
     stems = find_vocal_stems(folder)
     if stems:
         return stems
 
-    cache = _vocal_cache_path(folder)
-
     # Priority 2: .mogg channel extraction
     if os.path.isdir(folder):
+        mogg_cache = os.path.join(folder, _VOCAL_CACHE_MOGG)
         for f in os.listdir(folder):
             if not f.lower().endswith(".mogg"):
                 continue
             mogg_path = os.path.join(folder, f)
-            if _cache_is_fresh(cache, [mogg_path]):
-                return [cache]
+            if _cache_is_fresh(mogg_cache, [mogg_path]):
+                return [mogg_cache]
             try:
                 result = load_vocal_from_mogg(mogg_path)
             except Exception:
                 result = None
             if result is not None:
                 mono, _sr = result
-                try:
-                    import soundfile as sf
-                    sf.write(cache, mono, _sr)
-                    return [cache]
-                except Exception:
-                    pass
-            break  # only the first .mogg
+                if _atomic_write_cache(mogg_cache, mono, _sr):
+                    return [mogg_cache]
+            # Try the next .mogg if the first one failed
 
     # Priority 3: MDX-NET separation
     try:
         from .separate import separate_vocals
-    except Exception:
+    except ImportError:
         return None
+    mdx_cache = os.path.join(folder, _VOCAL_CACHE_MDX)
     try:
         import numpy as np
         mix_paths = find_song_audio(folder)
         if mix_paths:
-            if _cache_is_fresh(cache, mix_paths):
-                return [cache]
+            if _cache_is_fresh(mdx_cache, mix_paths):
+                return [mdx_cache]
             # Use the first audio file as the full mix
             if len(mix_paths) == 1:
                 mono, file_sr = load_mono(mix_paths[0])
             else:
                 mono, file_sr = load_mono_mix(mix_paths)
             if mono is not None and file_sr:
-                # Make stereo (same signal both channels) for MDX-NET
                 stereo = np.column_stack([mono, mono])
                 vocals = separate_vocals(stereo, sr=file_sr, model_path=model_path)
                 if vocals is not None:
                     mono_vocals = vocals.mean(axis=1).astype(np.float32)
-                    import soundfile as sf
-                    sf.write(cache, mono_vocals, file_sr)
-                    return [cache]
+                    if _atomic_write_cache(mdx_cache, mono_vocals, file_sr):
+                        return [mdx_cache]
     except Exception:
         pass
 
