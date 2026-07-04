@@ -343,6 +343,7 @@ def separate_vocals(
             [S_real[0], S_imag[0], S_real[1], S_imag[1]], axis=0
         )  # (4, dim_f, dim_t)
         model_in = model_in[np.newaxis, :, :, :]  # (1, 4, dim_f, dim_t)  — already float32
+        assert model_in.dtype == np.float32, f"model_in should be float32, got {model_in.dtype}"
 
         # ── ONNX inference ────────────────────────────────────────────
         try:
@@ -388,4 +389,5 @@ def separate_vocals(
     # Clip to float32 range
     np.clip(out, -1.0, 1.0, out=out)
 
-    return out  # already float32
+    assert out.dtype == np.float32, f"out should be float32, got {out.dtype}"
+    return out

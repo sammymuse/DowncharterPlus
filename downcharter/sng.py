@@ -59,7 +59,7 @@ _RESERVED_NAMES: frozenset[str] = frozenset({
 
 
 def _sanitize_path(path: str) -> str:
-    """Sanitize an entire filesystem path by sanitizing each component.
+    r"""Sanitize an entire filesystem path by sanitizing each component.
 
     Handles:
       - Windows drive letters (e.g., 'Y:')
@@ -245,7 +245,8 @@ def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
                   + 8)                              # FileData section length field
 
     if xor_mask is None:
-        # Unmasked data — files are stored verbatim, no XOR applied.
+        # If xor_mask is None, data is stored unencrypted (valid for YARG/Clone Hero).
+        # Random mask (os.urandom) was the old behavior; zero mask is equivalent for YARG.
         header_mask = b"\x00" * 16
         index_body = bytearray()
         data_body = bytearray()

@@ -92,6 +92,33 @@ def _vocal_source_from_path(p: str) -> str:
     return "stems"
 
 
+def _clean_vocal_cache(mid_path: str, cache_path: str | None = None) -> None:
+    """Remove the vocal-separation cache file for this song.
+
+    If ``cache_path`` is given, only that file is removed (avoids race
+    conditions with concurrent processing).  Otherwise scans the song
+    folder for ``.downcharter_vocals_*.wav`` as fallback.
+
+    The cache is ~9 MB per song and is only needed during this song's
+    processing step (voice activity, syllable trimming).  Deleting after
+    each song keeps 1000-song batches lean.
+    """
+    if cache_path is not None:
+        try:
+            os.remove(cache_path)
+        except Exception as exc:
+            sys.stderr.write(f"  [cache] cleanup warning: {exc}\n")
+        return
+    # Fallback: scan the folder (legacy / unknown paths)
+    folder = os.path.dirname(os.path.abspath(mid_path))
+    for f in os.listdir(folder):
+        if f.startswith(".downcharter_vocals_") and f.endswith(".wav"):
+            try:
+                os.remove(os.path.join(folder, f))
+            except Exception as exc:
+                sys.stderr.write(f"  [cache] cleanup warning: {exc}\n")
+
+
 def _cache_is_fresh(cache_path: str, source_paths: list[str]) -> bool:
     """True if the cache file exists and is newer than all sources."""
     if not os.path.isfile(cache_path):
@@ -140,6 +167,16 @@ def _resample_np(src: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
     if src_sr == dst_sr or len(src) == 0:
         return src
     src = np.asarray(src, dtype=np.float32)
+    # Anti-aliasing lowpass for downsampling (src_sr/dst_sr > 1.1)
+    # Simple half-band FIR via numpy convolution.
+    ratio = src_sr / dst_sr
+    if ratio > 1.1 and len(src) > 50:
+        # Cutoff at 0.9 * dst_sr/2 (Nyquist of destination)
+        cutoff = int(round(min(len(src), 512) * 0.9 / ratio))
+        if cutoff >= 3:
+            kernel = np.hanning(cutoff * 2 - 1).astype(np.float32)
+            kernel = kernel / kernel.sum()
+            src = np.convolve(src, kernel, mode="same")
     n = max(1, int(round(len(src) * dst_sr / src_sr)))
     x_old = np.arange(len(src), dtype=np.float32)
     x_new = np.linspace(0, len(src) - 1, n, dtype=np.float32)
@@ -147,7 +184,7 @@ def _resample_np(src: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
 
 
 def _try_mdx_separation(
-    folder: str, model_path: str | None
+    folder: str, model_path: str | None, log_fn=None
 ) -> list[str] | None:
     """Attempt MDX-NET vocal separation on the full mix of ``folder``.
     
@@ -169,7 +206,11 @@ def _try_mdx_separation(
         # Log start — visible in terminal (GUI captures process_folder's log_fn
         # for the per-song "vocal source" line after processing).
         song = os.path.basename(folder.strip("/\\")) or folder
-        sys.stderr.write(f"  [mdx] separating vocals: {song}...\n")
+        msg = f"  [mdx] separating vocals: {song}...\n"
+        if log_fn:
+            log_fn(msg, "info")
+        else:
+            sys.stderr.write(msg)
 
         if len(mix_paths) == 1:
             mono, file_sr = load_mono(mix_paths[0])
@@ -186,19 +227,31 @@ def _try_mdx_separation(
         vocals = separate_vocals(stereo, sr=model_sr, model_path=model_path)
         del stereo
         if vocals is None:
-            sys.stderr.write(f"  [mdx]  failed (model or onnx issue)\n")
+            msg = f"  [mdx]  failed (model or onnx issue)\n"
+            if log_fn:
+                log_fn(msg, "err")
+            else:
+                sys.stderr.write(msg)
             return None
-        mono_vocals = vocals.mean(axis=1, dtype=np.float32)
+        mono_vocals = vocals.mean(axis=0, dtype=np.float32)
         # Resample back to the original file rate for caching
         if file_sr != model_sr:
             mono_vocals = _resample_np(mono_vocals, model_sr, file_sr)
         if _atomic_write_cache(mdx_cache, mono_vocals, file_sr):
             size_mb = os.path.getsize(mdx_cache) / 2**20
-            sys.stderr.write(f"  [mdx]  done ({size_mb:.1f} MB cached)\n")
+            msg = f"  [mdx]  done ({size_mb:.1f} MB cached)\n"
+            if log_fn:
+                log_fn(msg, "ok")
+            else:
+                sys.stderr.write(msg)
             return [mdx_cache]
     except Exception:
         import traceback
-        sys.stderr.write(f"  [mdx]  failed: {traceback.format_exc()}\n")
+        msg = f"  [mdx]  failed: {traceback.format_exc()}\n"
+        if log_fn:
+            log_fn(msg, "err")
+        else:
+            sys.stderr.write(msg)
         return None
 
 
@@ -206,6 +259,7 @@ def resolve_vocal_audio(
     folder: str,
     model_path: str | None = None,
     allow_separation: bool = True,
+    log_fn=None,
 ) -> list[str] | None:
     """Find or create vocal audio for a song folder.
 
@@ -227,6 +281,7 @@ def resolve_vocal_audio(
         model_path: Optional path to the MDX-NET ONNX model.
         allow_separation: If True (default), try MDX-NET separation as last
             resort when no stems or .mogg are available.
+        log_fn: Optional callback ``log_fn(msg, tag)`` for GUI logging.
     """
     # Priority 1: already-separated stems
     stems = find_vocal_stems(folder)
@@ -254,7 +309,7 @@ def resolve_vocal_audio(
 
     # Priority 3: MDX-NET separation (only when allow_separation=True)
     if allow_separation:
-        result = _try_mdx_separation(folder, model_path)
+        result = _try_mdx_separation(folder, model_path, log_fn=log_fn)
         if result is not None:
             return result
 
@@ -656,6 +711,9 @@ def _stft_mag(mono, sr: int, hop: int = 1024, win: int = 2048):
     import numpy as np
     if len(mono) < win:
         return np.zeros((0, win // 2 + 1), dtype="float32"), hop
+    # Ensure C-contiguous so stride arithmetic is valid
+    if not mono.flags["C_CONTIGUOUS"]:
+        mono = np.ascontiguousarray(mono, dtype=np.float32)
     n = 1 + (len(mono) - win) // hop
     strides = (mono.strides[0] * hop, mono.strides[0])
     shape = (n, win)

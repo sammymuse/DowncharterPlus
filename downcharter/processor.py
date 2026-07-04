@@ -22,6 +22,7 @@ from .venue import (
     build_beat_track, extend_beat_track, find_end_tick, phrase_end_ticks,
     build_crowd, find_pause_spans,
 )
+from .audio import _clean_vocal_cache, _vocal_source_from_path
 
 
 _AUDIO_ENERGY = {"calm": 0, "mid": 1, "high": 2}
@@ -695,7 +696,6 @@ def process_midi(
                         if vocal_paths:
                             # Identify source type for logging
                             p = vocal_paths[0]
-                            from .audio import _vocal_source_from_path
                             source = _vocal_source_from_path(p)
                             stats["vocal_sep_source"] = source
                             # Track the cache path so _clean_vocal_cache can
@@ -971,35 +971,6 @@ def process_midi(
 _VOCAL_TALKY_PITCH = 50          # note within the vocal range (36-84); irrelevant for talky
 
 
-def _clean_vocal_cache(mid_path: str, cache_path: str | None = None) -> None:
-    """Remove the vocal-separation cache file for this song.
-
-    If ``cache_path`` is given, only that file is removed (avoids race
-    conditions with concurrent processing).  Otherwise scans the song
-    folder for ``.downcharter_vocals_*.wav`` as fallback.
-
-    The cache is ~9 MB per song and is only needed during this song's
-    processing step (voice activity, syllable trimming).  Deleting after
-    each song keeps 1000-song batches lean.
-    """
-    if cache_path is not None:
-        try:
-            os.remove(cache_path)
-        except Exception as exc:
-            import sys
-            sys.stderr.write(f"  [cache] cleanup warning: {exc}\n")
-        return
-    # Fallback: scan the folder (legacy / unknown paths)
-    folder = os.path.dirname(os.path.abspath(mid_path))
-    for f in os.listdir(folder):
-        if f.startswith(".downcharter_vocals_") and f.endswith(".wav"):
-            try:
-                os.remove(os.path.join(folder, f))
-            except Exception as exc:
-                import sys
-                sys.stderr.write(f"  [cache] cleanup warning: {exc}\n")
-
-
 def _abs_phrase_ends(abs_evts: list[AbsEvent]) -> list[int]:
     """Ticks of the phrase-marker note_offs (105/106) in a list of AbsEvent."""
     open_at: dict[int, int] = {}
@@ -1115,7 +1086,6 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
                     folder, allow_separation=do_vocal_sep)
                 if vocal:
                     p = vocal[0]
-                    from .audio import _vocal_source_from_path
                     source = _vocal_source_from_path(p)
                     stats["vocal_sep_source"] = source
                     if source in ("mdx", "mogg"):

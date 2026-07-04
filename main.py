@@ -1057,7 +1057,7 @@ class App(tk.Tk):
         if tag: log_box.insert("end", text, tag)
         else:   log_box.insert("end", text)
         # Truncate if too many lines accumulate (keeps memory bounded)
-        total_lines = int(float(log_box.index("end-1c").split(".")[0]))
+        total_lines = int(log_box.index("end-1c").split(".")[0])
         if total_lines > App._LOG_MAX_LINES:
             keep_from = f"{total_lines - App._LOG_KEEP_LINES + 1}.0"
             log_box.delete("1.0", keep_from)
