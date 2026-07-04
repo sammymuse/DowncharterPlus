@@ -294,8 +294,13 @@ def align_word_phonemes(syllables: list[str], lang: str = "en") -> list[list[str
 # genuine gap (silence, phrase end, song boundary) gets the full close to {}.
 # Below this many seconds between two spans counts as "no real gap" (they're
 # meant to be exactly back-to-back per `_chart_vocals_from_lyrics`).
-_LEGATO_GAP_S = 0.02
+_LEGATO_GAP_S = 0.12   # was 0.02: audio-trimmed span ends leave 0.08-0.3 s between
+                       # sung-legato syllables, so almost nothing qualified and the
+                       # mouth punched shut between every syllable (median episode
+                       # 0.10 s vs 0.2-3 s in official milos)
 _LEGATO_FLOOR = 0.35   # weight fraction kept at a legato boundary instead of 0
+_LEGATO_RELEASE_S = 0.12   # relaxed edge visemes close this long into the NEXT syllable
+_TRANSITION_S = 0.12   # mouth attack/release ramp (Magma/YARG autoLipsync transition)
 
 
 def _scale_state(state: dict, f: float) -> dict:
@@ -328,8 +333,11 @@ def _syllable_points(t: float, dur: float, shape,
     between points creates the transitions (consonant↔vowel)."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
-    attack = min(0.04, dur * 0.25)
-    release = min(0.05, dur * 0.25)
+    # Official ramp: Magma/YARG autoLipsync use a 0.12 s transition. The old
+    # 0.04/0.05 s made the mouth snap open ("abre de repente"); short syllables
+    # still get the dur-limited ramp.
+    attack = min(_TRANSITION_S, dur * 0.25)
+    release = min(_TRANSITION_S, dur * 0.25)
     inner = max(1e-3, dur - attack - release)
     units = n_i + 3 + n_f          # the vowel is worth 3 units
     u = inner / units
@@ -384,7 +392,14 @@ def _facial_frames_from_keyframes(
         by_viseme.setdefault(viseme, []).append((time_s, weight, graph))
 
     for viseme, kfs in by_viseme.items():
-        kfs.sort(key=lambda x: x[0])  # sort by time
+        kfs.sort(key=lambda x: x[0])  # stable: same-time twins keep emission order
+        # Same-time twins (e.g. 0 then 157 at the same instant — a step) need NO
+        # dedup: the previous segment interpolates INTO the first twin (the
+        # bracketing zero) over an interval that truncates to the same frame,
+        # and the second twin's own segment carries the new value forward.
+        # Collapsing them to "last wins" eats the zero and makes the previous
+        # segment ramp toward the nonzero twin across the whole gap (a
+        # 26-second mouth-opening ramp in testing).
         n = len(kfs)
         for i, (t_i, w_i, g_i) in enumerate(kfs):
             start_frame = max(0, int(t_i * FPS))
@@ -643,8 +658,11 @@ def _syllable_points_g(t: float, dur: float, shape,
     this syllable connects to its neighbour with no real pause."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
-    attack = min(0.04, dur * 0.25)
-    release = min(0.05, dur * 0.25)
+    # Official ramp: Magma/YARG autoLipsync use a 0.12 s transition. The old
+    # 0.04/0.05 s made the mouth snap open ("abre de repente"); short syllables
+    # still get the dur-limited ramp.
+    attack = min(_TRANSITION_S, dur * 0.25)
+    release = min(_TRANSITION_S, dur * 0.25)
     inner = max(1e-3, dur - attack - release)
     u = inner / (n_i + 3 + n_f)        # the vowel is worth 3 units
     edge_start, edge_end = _edge_shapes(shape)
@@ -1059,6 +1077,20 @@ def lipsync_keyframes_from_spans(
     out: list[tuple[float, str, int, str]] = []
     n = len(spans)
     gains: list[tuple[float, float]] = []
+
+    def _shape_names(shape) -> set:
+        initial, (vmain, vend), final = shape
+        names: set = set(vmain)
+        if vend is not None:
+            names |= set(vend)
+        for st in (*initial, *final):
+            names |= set(st)
+        return names
+
+    # Precomputed once — the legato relax-in/out checks below look at the
+    # previous/next syllable's names for every boundary.
+    shape_names = [_shape_names(sh) for sh in shapes]
+
     for i, (sp, shape) in enumerate(zip(spans, shapes)):
         t, end = sp[0], sp[1]
         gain = sp[3] if len(sp) > 3 else 1.0
@@ -1069,8 +1101,37 @@ def lipsync_keyframes_from_spans(
                        and t - spans[i - 1][1] <= _LEGATO_GAP_S else 0.0)
         end_floor = (_LEGATO_FLOOR if i < n - 1
                      and spans[i + 1][0] - end <= _LEGATO_GAP_S else 0.0)
-        out.extend(_keyframes_from_points(
-            _syllable_points_g(t, end - t, shape, start_floor, end_floor), gain))
+        pts = _syllable_points_g(t, end - t, shape, start_floor, end_floor)
+        out.extend(_keyframes_from_points(pts, gain))
+        # Legato boundaries break the zero-bracketing every series otherwise
+        # has, and a viseme keyframe ramps linearly to the NEXT keyframe of
+        # that viseme no matter how far away it is (Onyx graph semantics — the
+        # game does the same). Two dangling cases must be closed by hand:
+        #
+        #  * relax-out: the edge visemes end at _LEGATO_FLOOR with no closing
+        #    zero — a viseme the next syllable doesn't use dangles at ~35%
+        #    until its next reuse, seconds or tens of seconds later ("mouth
+        #    never closes"). Close it shortly into the next syllable.
+        #  * relax-in: with start_floor > 0 the series STARTS nonzero, so the
+        #    viseme's previous keyframe — possibly 30 s back — ramps up across
+        #    the whole gap (slow mouth-opening over silence). Pin a zero just
+        #    before this syllable for visemes the previous syllable didn't use.
+        if start_floor > 0.0 and i > 0:
+            prev_names = shape_names[i - 1]
+            entry = pts[0][1]                         # the relaxed entry state
+            open_t = max(spans[i - 1][1], t - _LEGATO_RELEASE_S)
+            for nm, w in entry.items():
+                if w > 0 and nm not in prev_names:
+                    out.append((open_t, nm, 0, "linear"))
+        if end_floor > 0.0 and i + 1 < n:
+            nxt_start, nxt_end = spans[i + 1][0], spans[i + 1][1]
+            nxt_names = shape_names[i + 1]
+            relaxed = pts[-1][1]                      # the relaxed edge state
+            close_t = min(max(nxt_start, end) + _LEGATO_RELEASE_S,
+                          max(nxt_end, end + 1e-3))
+            for nm, w in relaxed.items():
+                if w > 0 and nm not in nxt_names:
+                    out.append((close_t, nm, 0, "linear"))
     if song_len_s is not None and song_len_s > 0:
         facial = generate_facial_keyframes(
             song_len_s, phrase_ends, facial_seed, vocal_notes, gains)

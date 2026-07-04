@@ -1212,10 +1212,19 @@ def build_spotlights(sections: list[Section], inst_onsets: dict[str, list[int]],
     out: list[AbsEvent] = []
     gap = tpb * 2                       # ~2 beat gap → natural pulse, matches official density ~225/song
     # gap calibration: 3b→0.60×, 2b→0.79×, 1b→2.27×. Sweet spot near 2b.
-    members = [m for m in SPOT_NOTE if inst_onsets.get(m)]
+
+    def _member_onsets(inst: str):
+        # The vocalist's spotlight follows REAL vocals (chart/lyrics), never the
+        # audio lead-band proxy — that proxy lights the singer's beam during
+        # guitar melodies, before a single note is sung.
+        if inst == "vocal":
+            return inst_onsets.get("_vocal_real")
+        return inst_onsets.get(inst)
+
+    members = [m for m in SPOT_NOTE if _member_onsets(m)]
     for s in sections:
         for inst in members:
-            ons = sorted(inst_onsets[inst])
+            ons = sorted(_member_onsets(inst))
             for a, b in _phrases(ons, s.start, s.end, gap):
                 out += _note_span(a, min(b + tpb // 2, s.end), SPOT_NOTE[inst])
     return out
@@ -4398,26 +4407,36 @@ def _guard_directed(cut: str, tick: int, tpb: int,
     Non-directed cuts and generic dramatic ones pass through intact."""
     if inst_onsets is None:
         return cut
+
+    def _ons(name: str):
+        # Vocal cuts must be judged against REAL vocals (chart/lyrics): the
+        # generic "vocal" list also carries the audio proxy (lead band,
+        # 300-3000 Hz), which lights up on guitar melodies — that's how a
+        # directed vocalist closeup fired 29 s before the first sung note.
+        if name == "vocal":
+            return inst_onsets.get("_vocal_real")
+        return inst_onsets.get(name)
+
     inst = _DIRECTED_INSTR.get(cut)
-    if inst is not None and not _playing_near(inst_onsets.get(inst), tick, tpb * 2):
+    if inst is not None and not _playing_near(_ons(inst), tick, tpb * 2):
         # ABSENT instrument (no chart at all) → there's no character to film, not even
         # idle: falls to framing (None). Only in a momentary PAUSE (it has notes
         # somewhere, but not here) does the _NP variant make sense — the character
         # exists, just stopped. (Vocals are the exception allowed elsewhere.)
-        if not inst_onsets.get(inst):
+        if not _ons(inst):
             return None
         # _NP shows the character idle; cuts with no _NP variant (closeups/cam) fall
         # to framing (None) instead of filming someone who isn't playing.
         return _DIRECTED_NP.get(cut)
     gesture = _DIRECTED_NOTPLAYING.get(cut)
-    if gesture is not None and _playing_near(inst_onsets.get(gesture), tick, tpb):
+    if gesture is not None and _playing_near(_ons(gesture), tick, tpb):
         # Gesture (crowd_g/crowd_b/drums_pnt/_np) with the instrument PLAYING nearby →
         # contradicts the charted animation; falls to framing (None).
         return None
     duo = _DIRECTED_DUO.get(cut)
     if duo is not None:
         # A duo requires BOTH members playing nearby; otherwise it falls to framing (None).
-        if not all(_playing_near(inst_onsets.get(d), tick, tpb * 2) for d in duo):
+        if not all(_playing_near(_ons(d), tick, tpb * 2) for d in duo):
             return None
     if cut in _DIRECTED_SING:
         # Crowd/sing-along requires REAL vocals (chart/lyrics) — the audio proxy

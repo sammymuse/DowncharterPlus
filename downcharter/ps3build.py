@@ -975,12 +975,26 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
                     vocal_notes.append((sec, n))
 
         # ── Extract spans from each vocal track ──────────────────────────
-        # PART VOCALS → LIPSYNC1, HARM1 → LIPSYNC2, HARM2 → LIPSYNC3, HARM3 → LIPSYNC4
-        vocal_tracks = ["PART VOCALS", "HARM1", "HARM2", "HARM3"]
-        all_spans: list[list] = []
-        for tr_name in vocal_tracks:
-            spans = _extract_spans_from_track(out_mid, tr_name, src_folder)
-            all_spans.append(spans)
+        # Official RB3 multi-milo layout (verified against the 100 official
+        # milos: entries are at most [part2, part3, song], song ALWAYS last,
+        # never a part4): song.lipsync = lead singer (PART VOCALS; HARM1 is
+        # the lead's double and never gets its own entry), part2 = HARM2,
+        # part3 = HARM3. Feeding lead+HARM1+2+3 produced a 4-entry milo with
+        # the lead duplicated — a layout no official game expects.
+        lead_spans = _extract_spans_from_track(out_mid, "PART VOCALS", src_folder)
+        if not lead_spans:
+            lead_spans = _extract_spans_from_track(out_mid, "HARM1", src_folder)
+        harm_spans = [_extract_spans_from_track(out_mid, tr, src_folder)
+                      for tr in ("HARM2", "HARM3")]
+        # Harmony-only edge case: with no lead spans, build_multi_lipsync would
+        # name the LAST harmony "song.lipsync" (lead) and shift the rest —
+        # promote the first non-empty harmony to lead instead.
+        if not lead_spans:
+            for k, hs in enumerate(harm_spans):
+                if hs:
+                    lead_spans, harm_spans[k] = hs, []
+                    break
+        all_spans: list[list] = [lead_spans] + harm_spans
 
         # Build multi-entry milo if any harmonies have lyrics; single-entry fallback.
         lipsync_list = _milo.build_multi_lipsync(
