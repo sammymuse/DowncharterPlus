@@ -18,6 +18,13 @@ def pytest_configure(config):
     )
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-slow", action="store_true", default=False,
+        help="Run slow tests (audio inference / model download)",
+    )
+
+
 @pytest.fixture
 def minimal_mid() -> mido.MidiFile:
     """A minimal 480 TPB MIDI with one empty track."""
