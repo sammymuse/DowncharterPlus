@@ -244,41 +244,30 @@ def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
                   + (8 + index_section_len)         # file-index section (with its len field)
                   + 8)                              # FileData section length field
 
-    if xor_mask is None:
-        # If xor_mask is None, data is stored unencrypted (valid for YARG/Clone Hero).
-        # Random mask (os.urandom) was the old behavior; zero mask is equivalent for YARG.
-        header_mask = b"\x00" * 16
-        index_body = bytearray()
-        total_data_size = sum(len(blob) for blob in files.values())
-        data_body = bytearray(total_data_size)
-        offset = data_start
-        write_pos = 0
-        for nb, blob in zip(names, files.values()):
-            index_body += struct.pack("<B", len(nb)) + nb
-            index_body += struct.pack("<Q", len(blob))
-            index_body += struct.pack("<Q", offset)
-            blob_len = len(blob)
-            data_body[write_pos:write_pos + blob_len] = blob
-            write_pos += blob_len
-            offset += blob_len
-    else:
-        import numpy as np
-        mask_arr = np.frombuffer(xor_mask, dtype=np.uint8)
-        header_mask = xor_mask
-        index_body = bytearray()
-        total_data_size = sum(len(blob) for blob in files.values())
-        data_body = bytearray(total_data_size)
-        offset = data_start
-        write_pos = 0
-        for nb, blob in zip(names, files.values()):
-            index_body += struct.pack("<B", len(nb)) + nb
-            index_body += struct.pack("<Q", len(blob))
-            index_body += struct.pack("<Q", offset)
-            masked = _xor_mask_bytes(blob, mask_arr)
-            blob_len = len(masked)
-            data_body[write_pos:write_pos + blob_len] = masked
-            write_pos += blob_len
-            offset += blob_len
+    # The XOR mask is NOT optional: readers (YARG SngFileStream / Clone Hero)
+    # ALWAYS decode with out[i] = in[i] ^ (mask[i & 15] ^ (i & 0xFF)), whatever
+    # the header mask says. A zero mask therefore still requires storing
+    # in[i] ^ (i & 0xFF) — storing plain bytes under a zero mask reads back as
+    # garbage (every byte flips except positions ≡ 0 mod 256). Regression
+    # 30564db did exactly that and YARG scanned whole libraries as
+    # "No notes found" / "Corruption"; verified against dev/sng_validate.py.
+    import numpy as np
+    header_mask = xor_mask if xor_mask is not None else b"\x00" * 16
+    mask_arr = np.frombuffer(header_mask, dtype=np.uint8)
+    index_body = bytearray()
+    total_data_size = sum(len(blob) for blob in files.values())
+    data_body = bytearray(total_data_size)
+    offset = data_start
+    write_pos = 0
+    for nb, blob in zip(names, files.values()):
+        index_body += struct.pack("<B", len(nb)) + nb
+        index_body += struct.pack("<Q", len(blob))
+        index_body += struct.pack("<Q", offset)
+        masked = _xor_mask_bytes(blob, mask_arr)
+        blob_len = len(masked)
+        data_body[write_pos:write_pos + blob_len] = masked
+        write_pos += blob_len
+        offset += blob_len
 
     index_section = (struct.pack("<Q", index_section_len)
                      + struct.pack("<Q", len(files)) + index_body)

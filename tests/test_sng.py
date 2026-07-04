@@ -32,6 +32,39 @@ def test_pack_sng_round_trip():
     assert blob[10:26] == mask
 
 
+def test_pack_sng_default_mask_reader_round_trip():
+    """xor_mask=None (what build_sng_song uses) must still store MASKED data:
+    YARG/CH always decode with mask[i&15] ^ (i&0xFF), so a zero header mask
+    requires in[i] ^ (i & 0xFF) on disk — plain bytes read back as garbage
+    (regression: 30564db shipped that; whole libraries scanned as
+    'No notes found')."""
+    files = {"notes.mid": b"MThd\x00\x00\x00\x06" + os.urandom(500),
+             "notes.chart": b"[Song]\r\n{\r\n}\r\n" + os.urandom(300)}
+    blob = _sng.pack_sng([("name", "x")], files)
+
+    header_mask = blob[10:26]
+    o = 26
+    meta_len = struct.unpack_from("<Q", blob, o)[0]
+    o += 8 + meta_len
+    idx_len, n_files = struct.unpack_from("<QQ", blob, o)
+    o += 16
+    seen = 0
+    for _ in range(n_files):
+        nl = blob[o]
+        o += 1
+        name = blob[o:o + nl].decode()
+        o += nl
+        size, pos = struct.unpack_from("<qq", blob, o)
+        o += 16
+        # Decode EXACTLY like the YARG reader (header mask, always applied).
+        recovered = _unmask(header_mask, blob[pos:pos + size])
+        assert recovered == files[name], name
+        # And the on-disk bytes must NOT be the plain input.
+        assert blob[pos:pos + size] != files[name], name
+        seen += 1
+    assert seen == len(files)
+
+
 def test_pack_sng_file_offsets_absolute():
     """contentsIndex must be absolute from the start of the .sng, not relative
     to the FileData body (regression: fixed in ef0c653)."""
