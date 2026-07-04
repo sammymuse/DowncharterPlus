@@ -33,6 +33,9 @@ def available() -> bool:
 # Stems that do NOT represent the band (don't add to the energy mix).
 _NON_BAND_STEMS = ("crowd", "click", "guide")
 
+# Cache filenames produced by resolve_vocal_audio — exclude from song audio.
+_VOCAL_CACHE_NAMES = (".downcharter_vocals_mogg.wav", ".downcharter_vocals_mdx.wav")
+
 # Filename keywords that mark an ISOLATED vocal stem.
 _VOCAL_STEM_KEYS = ("vocal", "vox")
 
@@ -112,6 +115,17 @@ def _atomic_write_cache(cache_path: str, mono, sr: int) -> bool:
         return False
 
 
+def _resample_np(src: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
+    """Linear resampling via ``np.interp`` — no scipy/librosa needed."""
+    import numpy as np
+    if src_sr == dst_sr or len(src) == 0:
+        return src
+    n = int(len(src) * dst_sr / src_sr)
+    x_old = np.arange(len(src))
+    x_new = np.linspace(0, len(src) - 1, n)
+    return np.interp(x_new, x_old, src).astype(src.dtype)
+
+
 def _try_mdx_separation(
     folder: str, model_path: str | None
 ) -> list[str] | None:
@@ -137,11 +151,18 @@ def _try_mdx_separation(
             mono, file_sr = load_mono_mix(mix_paths)
         if mono is None or not file_sr:
             return None
+        # MDX-NET model requires 44100 Hz — resample if needed
+        model_sr = 44100
+        if file_sr != model_sr:
+            mono = _resample_np(mono, file_sr, model_sr)
         stereo = np.column_stack([mono, mono])
-        vocals = separate_vocals(stereo, sr=file_sr, model_path=model_path)
+        vocals = separate_vocals(stereo, sr=model_sr, model_path=model_path)
         if vocals is None:
             return None
         mono_vocals = vocals.mean(axis=1).astype(np.float32)
+        # Resample back to the original file rate for caching
+        if file_sr != model_sr:
+            mono_vocals = _resample_np(mono_vocals, model_sr, file_sr)
         if _atomic_write_cache(mdx_cache, mono_vocals, file_sr):
             return [mdx_cache]
     except Exception:
@@ -412,7 +433,8 @@ def find_song_audio(folder: str) -> list[str]:
         return []
     moggs = [f for f in files if f.lower().endswith(".mogg")]
     stems = [f for f in files if not f.lower().endswith(".mogg")
-             and not any(k in os.path.basename(f).lower() for k in _NON_BAND_STEMS)]
+             and not any(k in os.path.basename(f).lower() for k in _NON_BAND_STEMS)
+             and os.path.basename(f) not in _VOCAL_CACHE_NAMES]
     # Prefer separate .ogg stems (more informative); otherwise the multichannel .mogg.
     if stems:
         return sorted(stems)
