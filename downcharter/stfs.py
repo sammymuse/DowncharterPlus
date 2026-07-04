@@ -432,6 +432,9 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
         log(f"    > mid: added "
             f"{'[music_start] ' if fx['music_start_added'] else ''}"
             f"{'[music_end]' if fx['music_end_added'] else ''}\n", "info")
+    # Collapse the track_name copies each to_abs→to_track stage accumulated
+    # (official mids carry exactly one per track).
+    out_mid = _convert.dedupe_track_names(out_mid)
     # Lead-in pad (magmaPad): RB3 needs >=6 beats (2.6s at 120 BPM) before the
     # first gem.  Pad is computed from the RAW source (like Onyx), not the
     # processed output.  Both MIDI and audio are padded so they stay in sync.

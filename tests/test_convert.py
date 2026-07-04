@@ -173,7 +173,8 @@ class TestSanitizeForRb:
         ])
         out, stats = _cv.sanitize_for_rb(mid)
         assert stats == {"overlaps_fixed": 0, "sysex_removed": 0,
-                         "tap_removed": 0, "ps_tracks_dropped": 0}
+                         "tap_removed": 0, "ps_tracks_dropped": 0,
+                         "lipsync_tracks_dropped": 0}
         assert len(out.tracks) == 2
 
     def test_ps_tracks_dropped(self):
@@ -185,6 +186,54 @@ class TestSanitizeForRb:
         out, stats = _cv.sanitize_for_rb(mid)
         assert stats["ps_tracks_dropped"] == 1
         assert len(out.tracks) == 1
+
+    def test_lipsync_tracks_dropped(self):
+        """LIPSYNC1..4 (our Onyx-intermediate viseme tracks) never ship in an
+        RB pack — RB3 reads lipsync from the .milo, and Onyx packs don't carry
+        the track (regression: it went in with 5000+ text events)."""
+        mid = _mid_from_tracks([
+            ("LIPSYNC1", [(0, 96, 100)]),
+            ("LIPSYNC2", [(0, 96, 100)]),
+            ("PART GUITAR", [(0, 96, 100)]),
+        ])
+        out, stats = _cv.sanitize_for_rb(mid)
+        assert stats["lipsync_tracks_dropped"] == 2
+        assert [t.name for t in out.tracks] == ["PART GUITAR"]
+
+
+# ── dedupe_track_names ──────────────────────────────────────────────────────────
+
+class TestDedupeTrackNames:
+    def test_keeps_first_and_timing(self):
+        """Repeated track_name metas are removed; their delta time is carried
+        into the next event so absolute positions are untouched."""
+        import mido
+        mid = mido.MidiFile(ticks_per_beat=480)
+        tr = mido.MidiTrack()
+        tr.append(mido.MetaMessage("track_name", name="PART GUITAR", time=0))
+        tr.append(mido.MetaMessage("track_name", name="PART GUITAR", time=10))
+        tr.append(mido.Message("note_on", note=96, velocity=100, time=20))
+        tr.append(mido.MetaMessage("track_name", name="PART GUITAR", time=5))
+        tr.append(mido.Message("note_off", note=96, velocity=0, time=15))
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        mid.tracks.append(tr)
+
+        out = _cv.dedupe_track_names(mid)
+        names = [m for m in out.tracks[0] if m.type == "track_name"]
+        assert len(names) == 1
+        # absolute ticks: note_on at 30, note_off at 50 (unchanged)
+        t = 0
+        abs_ticks = {}
+        for m in out.tracks[0]:
+            t += m.time
+            if m.type in ("note_on", "note_off"):
+                abs_ticks[m.type] = t
+        assert abs_ticks == {"note_on": 30, "note_off": 50}
+
+    def test_single_name_untouched(self):
+        mid = _mid_from_tracks([("PART GUITAR", [(0, 96, 100)])])
+        out = _cv.dedupe_track_names(mid)
+        assert [t.name for t in out.tracks] == ["PART GUITAR"]
 
 
 # ── normalize_source_midi ───────────────────────────────────────────────────────

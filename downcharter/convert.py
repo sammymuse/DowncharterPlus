@@ -771,21 +771,34 @@ def sanitize_for_rb(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
         does not recognise. Onyx never emits them; shipping one can crash RB3's
         song loader. We drop the whole track (matching Onyx's RB3 output).
 
+      * **LIPSYNC tracks** (``LIPSYNC1``..``LIPSYNC4``) — our Onyx-intermediate
+        viseme track (thousands of ``[<viseme> <weight>]`` text events). RB3 gets
+        its lipsync from the .milo, never from the MIDI; official/Onyx packs
+        never carry this track. Dropping it here keeps the RB pack layout
+        identical to Onyx (the YARG/CH .sng path never calls this function, so
+        the track still ships there for the future MIDI-lipsync support).
+
     Never mutates the input. Returns
-    (new_mid, {"overlaps_fixed", "sysex_removed", "tap_removed", "ps_tracks_dropped"}).
+    (new_mid, {"overlaps_fixed", "sysex_removed", "tap_removed",
+    "ps_tracks_dropped", "lipsync_tracks_dropped"}).
     """
     from collections import defaultdict, deque
     from .midi_utils import AbsEvent
 
     out = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
     overlaps_fixed = sysex_removed = tap_removed = ps_tracks_dropped = 0
+    lipsync_tracks_dropped = 0
 
     for track in mid.tracks:
         # Drop Phase-Shift-only tracks (e.g. PART REAL_DRUMS_PS) outright — RB3
         # can choke on a track name it doesn't know. (The standard RB pro-drums
         # track is "PART REAL_DRUMS", with no _PS suffix, and is kept.)
-        if (track.name or "").strip().upper().endswith("_PS"):
+        nm_up = (track.name or "").strip().upper()
+        if nm_up.endswith("_PS"):
             ps_tracks_dropped += 1
+            continue
+        if nm_up.startswith("LIPSYNC"):
+            lipsync_tracks_dropped += 1
             continue
         abs_evts = to_abs(track)
         last_tick = abs_evts[-1].abs_tick if abs_evts else 0
@@ -862,7 +875,36 @@ def sanitize_for_rb(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
                                     for t, m in merged]))
 
     return out, {"overlaps_fixed": overlaps_fixed, "sysex_removed": sysex_removed,
-                 "tap_removed": tap_removed, "ps_tracks_dropped": ps_tracks_dropped}
+                 "tap_removed": tap_removed, "ps_tracks_dropped": ps_tracks_dropped,
+                 "lipsync_tracks_dropped": lipsync_tracks_dropped}
+
+
+def dedupe_track_names(mid: mido.MidiFile) -> mido.MidiFile:
+    """Return a NEW MidiFile where each track keeps only its FIRST track_name
+    meta event.
+
+    Every to_abs→to_track pipeline stage carries the existing track_name events
+    through and then re-sets ``.name``, so the copies accumulate one per stage
+    (6 per track after the full RB convert chain). Official/Onyx mids carry
+    exactly one. The delta time of each removed event is added to the following
+    event so the timeline is untouched."""
+    out = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
+    for track in mid.tracks:
+        new = mido.MidiTrack()
+        seen = False
+        carry = 0
+        for m in track:
+            if m.type == "track_name":
+                if seen:
+                    carry += m.time
+                    continue
+                seen = True
+            if carry:
+                m = m.copy(time=m.time + carry)
+                carry = 0
+            new.append(m)
+        out.tracks.append(new)
+    return out
 
 
 # ── Onyx no-Magma fixups (PACK step only) ──────────────────────────────────────

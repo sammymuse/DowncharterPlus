@@ -716,6 +716,15 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
             continue
         if "COOP" in nm or "RHYTHM" in nm:
             continue
+        # Skip tracks that already carry ANY force markers: processed charts got
+        # them from the processor's apply_handmap, and many CH charts ship
+        # authored 101/102 SPANS. apply_handmap's dedup only checks same-tick
+        # starts, so re-applying dropped 1-tick markers INSIDE existing spans —
+        # same-pitch overlapping/stuck notes, the exact crash class
+        # sanitize_for_rb exists to remove (and it already ran above).
+        if any(m.type == "note_on" and getattr(m, "velocity", 0) > 0
+               and getattr(m, "note", None) in (101, 102) for m in tr):
+            continue
         events = to_abs(tr)
         new_events = apply_handmap(events, out_mid.ticks_per_beat)
         new_tr = to_track(new_events)
@@ -746,6 +755,16 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
         log(f"    ◇ mid: added "
             f"{'[music_start] ' if fx['music_start_added'] else ''}"
             f"{'[music_end]' if fx['music_end_added'] else ''}\n", "info")
+    # b5b) FINAL crash-safety pass: fix_init_markers (and apply_handmap, when it
+    #      ran) add notes AFTER the b2 sanitize, so re-run the overlap fixing to
+    #      guarantee no same-pitch stuck markers reach the game. Idempotent when
+    #      nothing was introduced. Then collapse the track_name copies each
+    #      to_abs→to_track stage accumulated (official mids carry exactly one).
+    out_mid, san2 = _convert.sanitize_for_rb(out_mid)
+    if san2["overlaps_fixed"]:
+        log(f"    ◇ mid: RB-safety (final) — fixed {san2['overlaps_fixed']} "
+            f"overlapping marker note(s)\n", "info")
+    out_mid = _convert.dedupe_track_names(out_mid)
     # b6) Lead-in pad (Onyx magmaPad): RB3 needs >=6 beats (2.6s at 120 BPM)
     #     before the first gem or it can reject/hang.  Pad is computed from the
     #     RAW source (like Onyx), not the processed output, because processing
