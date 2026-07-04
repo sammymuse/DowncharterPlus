@@ -235,19 +235,25 @@ def build_song_lipsync(spans, song_len_s: float, lang: str = "en",
     """CharLipSync bytes for the milo, from the same audio-guided syllable spans
     (`lip_spans` = [(start_s, end_s, text, gain)]) used for the LIPSYNC1 MIDI track.
 
-    Reuses `lipsync.frames_from_spans` (the dense 30 fps state path) so the milo's
-    inherently dense per-frame viseme states come straight from what we already
-    compute — no new lipsync logic.
+    Uses the sparse keyframes path (`lipsync_keyframes_from_spans`) which correctly
+    sustains vowels at full weight via 'hold' graph tokens — unlike the dense
+    `frames_from_spans` path whose 3-point control (attack → release → end) decays
+    the mouth throughout the syllable. The sparse keyframes are converted to dense
+    30fps frames via `_facial_frames_from_keyframes` (graph-aware interpolation:
+    'hold' = flat plateau, 'linear'/'ease' = smooth transitions) before serialising.
 
     When phrase_ends/vocal_notes are provided, facial animation keyframes
     (Blink, Squint, Eyebrows) are also embedded in the milo so they reach
     the game — not just the MIDI LIPSYNC1 track."""
-    frames, n_frames = _lip.frames_from_spans(
-        spans, song_len_s, lang,
+    keyframes = _lip.lipsync_keyframes_from_spans(
+        spans,
         phrase_ends=phrase_ends,
+        song_len_s=song_len_s,
         vocal_notes=vocal_notes,
         facial_seed=facial_seed,
     )
+    n_frames = max(1, int(math.ceil(song_len_s * _lip.FPS)) + 1)
+    frames = _lip._facial_frames_from_keyframes(keyframes, n_frames)
     return _serialize_lipsync(frames, n_frames)
 
 
