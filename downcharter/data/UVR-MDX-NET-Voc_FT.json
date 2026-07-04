@@ -1,0 +1,9 @@
+{
+    "n_fft": 7680,
+    "hop": 1024,
+    "dim_f": 3072,
+    "dim_t": 256,
+    "compensate": 1.02,
+    "description": "UVR-MDX-NET-Voc_FT model parameters",
+    "source": "https://github.com/TRvlvr/model_repo/releases/tag/all_public_uvr_models"
+}
