@@ -45,22 +45,36 @@ def _noop_log(msg, tag=None):
 # ── preview helper ────────────────────────────────────────────────────────────────
 
 def _count_vocal_parts(mid: mido.MidiFile) -> int:
-    """Number of vocal parts (lead + each non-empty HARM track).
-    Checks for non-empty HARM1/2/3 tracks (has notes or lyrics)."""
+    """RB3 ``vocal_parts`` from the MIDI, with Onyx's semantics: 0 = no vocals,
+    1 = lead only (PART VOCALS), 2/3 = harmonies (number of HARM tracks).
+    Lead + 3 HARMs is still 3 — RB3's maximum is 3, and 4 crashes the library
+    panel. A track only counts when it has actual vocal content (notes in the
+    36..84 gem range or lyric events): CH chart templates ship EMPTY
+    PART VOCALS/HARM tracks, and advertising a vocal part with no chart behind
+    it is another library-crash class."""
     if mid is None:
         return 0
-    count = 0
+
+    def _has_content(tr) -> bool:
+        for m in tr:
+            if (m.type == "note_on" and m.velocity > 0
+                    and 36 <= m.note <= 84):
+                return True
+            if m.type == "lyrics":
+                return True
+        return False
+
+    lead = False
+    harms = 0
     for tr in mid.tracks:
         nm = (tr.name or "").strip().upper()
-        if nm == "PART VOCALS":
-            # PART VOCALS always counts if it exists
-            count = 1
-        elif nm in ("HARM1", "HARM2", "HARM3"):
-            # Only count if the track has notes or lyrics
-            if any(m.type in ("note_on", "note_off", "lyrics", "lyric", "text")
-                   for m in tr):
-                count += 1
-    return count
+        if nm == "PART VOCALS" and _has_content(tr):
+            lead = True
+        elif nm in ("HARM1", "HARM2", "HARM3") and _has_content(tr):
+            harms += 1
+    if harms >= 2:
+        return min(harms, 3)
+    return 1 if (lead or harms) else 0
 
 
 def _first_chorus_start_ms(mid: mido.MidiFile) -> int | None:
@@ -115,7 +129,9 @@ def _first_chorus_start_ms(mid: mido.MidiFile) -> int | None:
 
     for i, (start_tick, name) in enumerate(abs_evts):
         if _classify(name) == "chorus":
-            return tick_to_ms(start_tick, tempo_map, tpb)
+            # tick_to_ms returns a float — the dta (preview a b) field is an
+            # INT (a float atom shipped in aed7e4b's dta output).
+            return int(round(tick_to_ms(start_tick, tempo_map, tpb)))
 
     return None
 
@@ -449,9 +465,13 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
     # instrument's tier for another.
     has_vox = "vocals" in inst_tracks
     # vocal_parts: honour ini if set; otherwise detect from HARM tracks in the midi.
+    # NEVER advertise vocal parts when vocals aren't exposed as a playable part
+    # (no tracks entry / rank 0): vocal_parts >= 1 with no vocals part is a
+    # known RB3 library-crash class. Cap at RB3's max of 3 either way.
     vocal_parts = _ini_int(meta, "vocal_parts")
     if vocal_parts is None or vocal_parts < 1:
         vocal_parts = _count_vocal_parts(out_mid)
+    vocal_parts = max(1, min(3, vocal_parts)) if has_vox else 0
     rank_g = _intensity_to_rank(meta.get("diff_guitar"), "guitar", charted=True) if "guitar" in inst_tracks else 0
     rank_b = _intensity_to_rank(meta.get("diff_bass"), "bass", charted=True) if "bass" in inst_tracks else 0
     rank_d = _intensity_to_rank(meta.get("diff_drums"), "drum", charted=True) if "drum" in inst_tracks else 0
@@ -494,9 +514,16 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
             preview_a = min(30000, max(0, song_len // 3))
         else:
             preview_a = 30000
+        # A late chorus must not push the 30 s window past the end of the
+        # audio: RB3 plays the preview in the library, and seeking beyond the
+        # mogg's end there is fatal.
+        if song_len:
+            preview_a = max(0, min(preview_a, song_len - 30000))
     preview_b = _ini_int(meta, "preview_end_time")
     if preview_b is None or preview_b <= preview_a:
         preview_b = preview_a + 30000
+    if song_len > preview_a:
+        preview_b = min(preview_b, song_len)
 
     # rank block: keys line only when keys are actually charted.
     rank_lines = [f"      (drum {rank_d})", f"      (guitar {rank_g})",
@@ -798,29 +825,8 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
             f"track(s) (e.g. PART REAL_DRUMS_PS)\n", "info")
     # b3) Guitar/bass hand position map: generate force-HOPO (101/102) markers
     #     on Expert guitar/bass tracks throughout the whole song, not just at the
-    #     first note cluster. No-op if markers already exist.
-    from .guitar_handmap import apply_handmap
-    from .midi_utils import to_abs, to_track
-    for i, tr in enumerate(out_mid.tracks):
-        nm = (tr.name or "").strip().upper()
-        if "GUITAR" not in nm and "BASS" not in nm:
-            continue
-        if "COOP" in nm or "RHYTHM" in nm:
-            continue
-        # Skip tracks that already carry ANY force markers: processed charts got
-        # them from the processor's apply_handmap, and many CH charts ship
-        # authored 101/102 SPANS. apply_handmap's dedup only checks same-tick
-        # starts, so re-applying dropped 1-tick markers INSIDE existing spans —
-        # same-pitch overlapping/stuck notes, the exact crash class
-        # sanitize_for_rb exists to remove (and it already ran above).
-        if any(m.type == "note_on" and getattr(m, "velocity", 0) > 0
-               and getattr(m, "note", None) in (101, 102) for m in tr):
-            continue
-        events = to_abs(tr)
-        new_events = apply_handmap(events, out_mid.ticks_per_beat)
-        new_tr = to_track(new_events)
-        new_tr.name = tr.name
-        out_mid.tracks[i] = new_tr
+    #     first note cluster. Skips tracks that already carry force markers.
+    out_mid = _convert.apply_handmap_tracks(out_mid)
     # b4) Init markers at the first note cluster for all guitar/bass tracks.
     #     Onyx edgesBRE — force-HOPO (101/102/89/90/77/78/65/66) + lane notes.
     out_mid = _convert.fix_init_markers(out_mid)

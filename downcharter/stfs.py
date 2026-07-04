@@ -411,6 +411,10 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     if san.get("ps_tracks_dropped"):
         log(f"    > mid: dropped {san['ps_tracks_dropped']} Phase-Shift-only "
             f"track(s) (e.g. PART REAL_DRUMS_PS)\n", "info")
+    # Hand position map + init markers — the same b3/b4 stages as the PS3-folder
+    # builder, so the CON plays identically (force-HOPO/strum coverage included).
+    out_mid = _convert.apply_handmap_tracks(out_mid)
+    out_mid = _convert.fix_init_markers(out_mid)
     # Onyx no-Magma fixups: empty overdrive (fixNotelessOD) + drum [mix] events.
     out_mid, fx = _convert.apply_rb_fixups(out_mid)
     if fx["noteless_od_removed"] or fx["drum_mix_added"]:
@@ -432,6 +436,13 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
         log(f"    > mid: added "
             f"{'[music_start] ' if fx['music_start_added'] else ''}"
             f"{'[music_end]' if fx['music_end_added'] else ''}\n", "info")
+    # FINAL crash-safety pass (same as PS3 b5b): apply_handmap_tracks and
+    # fix_init_markers add notes AFTER the first sanitize, so re-run the overlap
+    # fixing to guarantee no same-pitch stuck markers reach the game.
+    out_mid, san2 = _convert.sanitize_for_rb(out_mid)
+    if san2["overlaps_fixed"]:
+        log(f"    > mid: RB-safety (final) - fixed {san2['overlaps_fixed']} "
+            f"overlapping marker note(s)\n", "info")
     # Collapse the track_name copies each to_abs→to_track stage accumulated
     # (official mids carry exactly one per track).
     out_mid = _convert.dedupe_track_names(out_mid)

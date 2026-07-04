@@ -879,6 +879,32 @@ def sanitize_for_rb(mid: mido.MidiFile) -> tuple[mido.MidiFile, dict]:
                  "lipsync_tracks_dropped": lipsync_tracks_dropped}
 
 
+def apply_handmap_tracks(mid: mido.MidiFile) -> mido.MidiFile:
+    """Run guitar_handmap.apply_handmap over every guitar/bass track that has
+    NO force markers yet (in place, returns `mid`).
+
+    Tracks that already carry ANY 101/102 are skipped: processed charts got
+    their markers from the processor, and many CH charts ship authored force
+    SPANS — apply_handmap's dedup only checks same-tick starts, so re-applying
+    drops 1-tick markers INSIDE existing spans (same-pitch overlapping/stuck
+    notes, an RB3 crash class). Shared by the PS3-folder and CON builders so
+    both produce the same gameplay."""
+    from .guitar_handmap import apply_handmap
+    for i, tr in enumerate(mid.tracks):
+        nm = (tr.name or "").strip().upper()
+        if "GUITAR" not in nm and "BASS" not in nm:
+            continue
+        if "COOP" in nm or "RHYTHM" in nm:
+            continue
+        if any(m.type == "note_on" and getattr(m, "velocity", 0) > 0
+               and getattr(m, "note", None) in (101, 102) for m in tr):
+            continue
+        new_tr = to_track(apply_handmap(to_abs(tr), mid.ticks_per_beat))
+        new_tr.name = tr.name
+        mid.tracks[i] = new_tr
+    return mid
+
+
 def dedupe_track_names(mid: mido.MidiFile) -> mido.MidiFile:
     """Return a NEW MidiFile where each track keeps only its FIRST track_name
     meta event.
