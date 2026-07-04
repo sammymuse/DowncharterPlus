@@ -603,7 +603,7 @@ def build_con_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
         log(f"    ◇ dta: patched ({'2x' if name_2x else '1x'})\n", "info")
     elif mogg_layout is not None:
         out_dta, dta_codec = _build_dta(meta, shortname, mogg_layout, name_2x,
-                                        charted, has_art=has_art)
+                                        charted, has_art=has_art, out_mid=out_mid)
         files["songs/songs.dta"] = out_dta.encode(dta_codec, "replace")
         log(f"    ◇ dta: generated from song.ini ({'2x' if name_2x else '1x'})\n", "info")
     else:

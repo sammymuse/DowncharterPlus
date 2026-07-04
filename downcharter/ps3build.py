@@ -42,6 +42,84 @@ def _noop_log(msg, tag=None):
     pass
 
 
+# ── preview helper ────────────────────────────────────────────────────────────────
+
+def _count_vocal_parts(mid: mido.MidiFile) -> int:
+    """Number of vocal parts (lead + each non-empty HARM track).
+    Checks for non-empty HARM1/2/3 tracks (has notes or lyrics)."""
+    if mid is None:
+        return 0
+    count = 0
+    for tr in mid.tracks:
+        nm = (tr.name or "").strip().upper()
+        if nm == "PART VOCALS":
+            # PART VOCALS always counts if it exists
+            count = 1
+        elif nm in ("HARM1", "HARM2", "HARM3"):
+            # Only count if the track has notes or lyrics
+            if any(m.type in ("note_on", "note_off", "lyrics", "lyric", "text")
+                   for m in tr):
+                count += 1
+    return count
+
+
+def _first_chorus_start_ms(mid: mido.MidiFile) -> int | None:
+    """Tick (ms) of the first chorus section in `mid`, or None if no chorus found.
+    Reads section markers from the EVENTS track, classifies them, returns the start
+    tick of the first section whose kind is 'chorus'."""
+    # Section patterns from venue.py (avoid circular import for this one helper)
+    _SECTION_PATTERNS = [
+        ("intro",      ("intro",)),
+        ("outro",      ("outro", "end")),
+        ("prechorus",  ("prechorus", "pre_chorus", "pre-chorus")),
+        ("postchorus", ("postchorus", "post_chorus")),
+        ("chorus",     ("chorus", "refrain", "hook")),
+        ("verse",      ("verse",)),
+        ("bridge",     ("bridge",)),
+        ("solo",       ("solo", "lead")),
+        ("build",      ("build", "buildup", "rise")),
+        ("drop",       ("drop",)),
+        ("breakdown",  ("breakdown", "break")),
+    ]
+
+    def _classify(name: str) -> str:
+        n = name.lower()
+        for canon, keys in _SECTION_PATTERNS:
+            if any(k in n for k in keys):
+                return canon
+        return "default"
+
+    import re
+    _SECTION_RE = re.compile(r"\[\s*section\s+(.+?)\s*\]|\[\s*prc_(.+?)\s*\]")
+
+    events_track = next(
+        (tr for tr in mid.tracks if tr.name.strip().upper() == "EVENTS"), None)
+    if events_track is None:
+        return None
+
+    abs_evts: list[tuple[int, str]] = []
+    tick = 0
+    for m in events_track:
+        tick += m.time
+        if m.type in ("text", "marker") and getattr(m, "text", None):
+            mt = _SECTION_RE.search(m.text)
+            if mt:
+                abs_evts.append((tick, mt.group(1) or mt.group(2)))
+
+    if not abs_evts:
+        return None
+
+    abs_evts.sort()
+    tpb = mid.ticks_per_beat or 480
+    tempo_map = build_tempo_map(mid)
+
+    for i, (start_tick, name) in enumerate(abs_evts):
+        if _classify(name) == "chorus":
+            return tick_to_ms(start_tick, tempo_map, tpb)
+
+    return None
+
+
 # ── song.ini → songs.dta generation (YARG/CH source has no dta) ────────────────
 # Clone Hero / YARG genre strings → the RB3 genre SYMBOL the game knows. RB3 only
 # renders a fixed set of genre symbols; anything unknown falls back to "rock".
@@ -308,12 +386,15 @@ def _charted_instruments(mid) -> set:
 
 
 def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
-               charted: set | None = None, has_art: bool = False) -> tuple[str, str]:
+               charted: set | None = None, has_art: bool = False,
+               out_mid: mido.MidiFile | None = None) -> tuple[str, str]:
     """Generate a Rock Band 3 songs.dta from song.ini metadata + the mogg channel
     layout. `layout` = [(track_name, [ch...])] from mogg.build_mogg_from_stems.
     `charted` limits which instruments are exposed as playable (ranked) parts;
     audio stems for un-charted instruments stay as backing channels.
     `is_2x` True only for a genuine double-kick variant (drives the label + flag).
+    `out_mid` is the processed midi; when provided and preview_start_time is not in
+    the ini, the preview starts 2 seconds before the first chorus section.
 
     Returns (dta_text, codec) — write the text with `codec` so the file's bytes
     match its declared (encoding ...) node (Latin1 normally, UTF-8 if needed)."""
@@ -367,6 +448,10 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
     # Each diff_* in the ini is an independent 0-6 intensity — never borrow one
     # instrument's tier for another.
     has_vox = "vocals" in inst_tracks
+    # vocal_parts: honour ini if set; otherwise detect from HARM tracks in the midi.
+    vocal_parts = _ini_int(meta, "vocal_parts")
+    if vocal_parts is None or vocal_parts < 1:
+        vocal_parts = _count_vocal_parts(out_mid)
     rank_g = _intensity_to_rank(meta.get("diff_guitar"), "guitar", charted=True) if "guitar" in inst_tracks else 0
     rank_b = _intensity_to_rank(meta.get("diff_bass"), "bass", charted=True) if "bass" in inst_tracks else 0
     rank_d = _intensity_to_rank(meta.get("diff_drums"), "drum", charted=True) if "drum" in inst_tracks else 0
@@ -399,10 +484,16 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
     vols_s = " ".join("0.0" for _ in range(total_ch))
     cores_s = " ".join(cores)
     # preview: honour the ini's preview_start_time/preview_end_time (ms) when set;
-    # otherwise start a 30 s clip a third of the way in.
+    # otherwise start 2 s before the first chorus section, or a third of the song.
     preview_a = _ini_int(meta, "preview_start_time")
     if preview_a is None or preview_a < 0:
-        preview_a = min(30000, max(0, song_len // 3)) if song_len else 30000
+        chorus_ms = _first_chorus_start_ms(out_mid) if out_mid else None
+        if chorus_ms is not None:
+            preview_a = max(0, chorus_ms - 2000)   # 2 s before chorus
+        elif song_len:
+            preview_a = min(30000, max(0, song_len // 3))
+        else:
+            preview_a = 30000
     preview_b = _ini_int(meta, "preview_end_time")
     if preview_b is None or preview_b <= preview_a:
         preview_b = preview_a + 30000
@@ -457,7 +548,7 @@ def _build_dta(meta: dict, shortname: str, layout, is_2x: bool,
       (pans ({pans_s}))
       (vols ({vols_s}))
       (cores ({cores_s}))
-      (vocal_parts {1 if has_vox else 0})
+      (vocal_parts {vocal_parts})
       (drum_solo (seqs (kick.cue snare.cue tom1.cue tom2.cue crash.cue)))
       (drum_freestyle (seqs (kick.cue snare.cue hat.cue ride.cue crash.cue)))
       (hopo_threshold 170)
@@ -943,7 +1034,7 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
         log(f"    ◇ dta: patched ({'2x' if name_2x else '1x'})\n", "info")
     elif mogg_layout is not None:
         out_dta, dta_codec = _build_dta(meta, shortname, mogg_layout, name_2x,
-                                        charted, has_art=has_art)
+                                        charted, has_art=has_art, out_mid=out_mid)
         # Write with the codec _build_dta chose to match its (encoding ...) node:
         # Latin1 for normal titles (so YARG, which reads BOM-less files as Latin1,
         # gets them right), UTF-8 only for genuinely non-Latin1 text.
