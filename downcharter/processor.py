@@ -506,6 +506,7 @@ def process_midi(
         "audio_used": False, "audio_drums": False, "audio_lyrics": False,
         "audio_anim_instr": [],
         "vocal_sep_source": None,
+        "vocal_cache_path": None,  # set by resolve_vocal_audio callers
         "tracks_renamed": norm["tracks_renamed"], "sp_remapped": norm["sp_remapped"],
     }
 
@@ -697,6 +698,10 @@ def process_midi(
                             stats["vocal_sep_source"] = "mogg"
                         else:
                             stats["vocal_sep_source"] = "stems"
+                        # Track the cache path so _clean_vocal_cache can
+                        # delete only this song's cache (not all in folder).
+                        if stats["vocal_sep_source"] in ("mdx", "mogg"):
+                            stats["vocal_cache_path"] = p
                         va = _audio_va.voice_activity(vocal_paths)
                     if va is not None:
                         voice_fill = _audio_va.voice_active_ticks(va, tempo_map, tpb)
@@ -957,10 +962,9 @@ def process_midi(
         except Exception:
             pass
 
-    # Clean up vocal-separation cache files — they can be ~9 MB per song and
-    # are only needed during this song's processing (voice activity, syllable
-    # trimming). Deleting after each song keeps 1000-song batches lean.
-    _clean_vocal_cache(dst_path)
+    # Clean up vocal-separation cache file (~9 MB) — only needed during this
+    # song's processing. Deleting after each song keeps 1000-song batches lean.
+    _clean_vocal_cache(src_path, stats.get("vocal_cache_path"))
 
     return stats
 
@@ -968,13 +972,24 @@ def process_midi(
 _VOCAL_TALKY_PITCH = 50          # note within the vocal range (36-84); irrelevant for talky
 
 
-def _clean_vocal_cache(mid_path: str) -> None:
-    """Remove ``.downcharter_vocals_*.wav`` cache files from the song folder.
+def _clean_vocal_cache(mid_path: str, cache_path: str | None = None) -> None:
+    """Remove the vocal-separation cache file for this song.
 
-    These are vocal-separation caches created by ``audio.resolve_vocal_audio``.
-    They are only needed during this song's processing step and would otherwise
-    accumulate (one ~9 MB file per processed song).
+    If ``cache_path`` is given, only that file is removed (avoids race
+    conditions with concurrent processing).  Otherwise scans the song
+    folder for ``.downcharter_vocals_*.wav`` as fallback.
+
+    The cache is ~9 MB per song and is only needed during this song's
+    processing step (voice activity, syllable trimming).  Deleting after
+    each song keeps 1000-song batches lean.
     """
+    if cache_path is not None:
+        try:
+            os.remove(cache_path)
+        except Exception:
+            pass
+        return
+    # Fallback: scan the folder (legacy / unknown paths)
     folder = os.path.dirname(os.path.abspath(mid_path))
     for f in os.listdir(folder):
         if f.startswith(".downcharter_vocals_") and f.endswith(".wav"):
@@ -1105,6 +1120,8 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
                         stats["vocal_sep_source"] = "mogg"
                     elif stats.get("vocal_sep_source") is None:
                         stats["vocal_sep_source"] = "stems"
+                    if stats.get("vocal_sep_source") in ("mdx", "mogg"):
+                        stats["vocal_cache_path"] = p
                     va = _audio.voice_activity(vocal)
         except Exception:
             va = None
@@ -1698,14 +1715,6 @@ def revert_folder(folder: str, log_fn,
                     os.rename(backup, original)
                     reverted += 1
                     log_fn(f"  ↩ {os.path.relpath(original, folder)}\n", "ok")
-                except Exception as e:
-                    log_fn(f"  ✗ {f}: {e}\n", "err")
-            elif f.startswith(".downcharter_vocals_") and f.endswith(".wav"):
-                cache = os.path.join(root, f)
-                try:
-                    os.remove(cache)
-                    reverted += 1
-                    log_fn(f"  ✂ {f}\n", "info")
                 except Exception as e:
                     log_fn(f"  ✗ {f}: {e}\n", "err")
     if reverted == 0:
