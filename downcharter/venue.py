@@ -5245,7 +5245,14 @@ def build_animations(part_onsets: list[int], sections: list[Section], tpb: int,
         for a, b in idle_ranges:
             if a < cand < b:
                 idle_tick = idle_tick_for_range[(a, b)]
-                return max(on - beat, idle_tick + 1)
+                result = max(on - beat, idle_tick + 1)
+                # O max ainda pode cair dentro do idle range (ex: onset=163200,
+                # on-beat=162720, idle_range=(157200,163200) — 162720 está dentro).
+                # Se ainda está dentro, usar o onset directamente: a nota que começa
+                # é mais forte que qualquer cálculo preemptivo.
+                if any(a2 < result < b2 for a2, b2 in idle_ranges):
+                    return on
+                return result
         return cand
 
     # Official pattern: [idle] is placed ~1 beat after the last note, only when
