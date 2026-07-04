@@ -1647,21 +1647,20 @@ def build_postproc(sections: list[Section], theme: dict, tpb: int,
     climax_idx = getattr(design, 'climax_idx', None) if design else None
 
     # Calibrated against official p50=3 / p75=7 PP events per section:
-    #   conservative: [2.0] = 2 events/cluster, hold=10 bars → ~1-2 clusters/chorus
-    #     → targets p25 (1) to p50 (3) = sparse, artist barely touches lights
-    #   authored: [2.0] = 2 events/cluster, hold=8 bars → ~2-3 clusters/chorus
+    #   conservative: [2.0] = 2 events/cluster, hold=16 bars → very sparse
+    #   authored: [0.5, 0.5] = 3 events/cluster (burst-only), hold=10 bars
     #     → targets p50 (3) to p75 (7) = moderate, artist-aware density
-    #   dynamic: [0.5,0.5,2.0] = 4 events/cluster, hold=6 bars → ~3-4 clusters
-    #     → original dense behaviour for autogen/maximum-energy sections
+    #   dynamic: [0.5, 0.5, 0.5] = 4 events/cluster (burst-only), hold=6 bars
+    #     → high density for shorter sections / autogen energy
     CLUSTER_PAT = {
-        "conservative": {"calm": [2.0],           "mid": [2.0],           "high": [2.0]},
-        "authored":     {"calm": [0.5, 0.5],     "mid": [0.5, 0.5],     "high": [0.5, 0.5]},
-        "dynamic":      {"calm": [0.5, 0.5],     "mid": [0.5, 0.5, 0.5],"high": [0.5, 0.5, 0.5]},
+        "conservative": {"calm": [2.0],              "mid": [2.0],              "high": [2.0]},
+        "authored":     {"calm": [0.5, 0.5],         "mid": [0.5, 0.5],         "high": [0.5, 0.5]},
+        "dynamic":      {"calm": [0.5, 0.5, 0.5],    "mid": [0.5, 0.5, 0.5],    "high": [0.5, 0.5, 0.5]},
     }
     HOLD_BARS = {
         "conservative": {"calm": 16, "mid": 14, "high": 12},
-        "authored":     {"calm": 12, "mid": 10,  "high": 10},
-        "dynamic":      {"calm": 8,  "mid": 8,  "high": 8},
+        "authored":     {"calm": 10, "mid": 8,  "high": 8},
+        "dynamic":      {"calm": 6,  "mid": 6,  "high": 6},
     }
 
     for si, s in enumerate(sections):
@@ -4983,7 +4982,7 @@ _INTENSE_THEMES = {"metal", "punk"}
 # (puts the instrument down). Per-instrument thresholds derived from the 20 official
 # venues: drums/bass idle sooner (shorter rests visible), guitar holds longer
 # (flicker-prone on sparse riffs), vocal is the most rest-heavy (idle 21%).
-_IDLE_DOWNTIME = {"drums": 2, "bass": 2, "guitar": 6, "keys": 3, "vocal": 3}
+_IDLE_DOWNTIME = {"drums": 2, "bass": 2, "guitar": 6, "keys": 3, "vocal": 2}
 
 
 def phrase_end_ticks(track) -> list[int]:
