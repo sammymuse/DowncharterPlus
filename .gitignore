@@ -29,6 +29,10 @@ CustomsBookv1.pdf
 *.ogg
 *.mogg
 
+# ── MDX-NET ONNX model (67 MB, individual download) ──
+downcharter/data/UVR-MDX-NET-Voc_FT.onnx
+*.onnx
+
 # ── Dev-only tooling (calibration scripts, need the learn-set) ──
 dev/
 
