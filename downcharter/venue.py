@@ -916,12 +916,14 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
         # If not, filter strobe_* from BOTH base pool AND accents — strobe comes
         # from explicit spans only, not random selection. This reduces strobe from
         # 100% to ~47% of songs (matching official).
+        def _no_strobe(pool):
+            return [p for p in pool if p not in ("strobe_fast", "strobe_slow")]
         if not strobe_spans:
-            base = [p for p in base if p not in ("strobe_fast", "strobe_slow")]
+            base = _no_strobe(base)
         accents = ([SPECIAL_LIGHTING[s.kind]] if s.kind in SPECIAL_LIGHTING
                    else _warmth_pool(_section_lights(theme, s), s.warmth))
         if not strobe_spans:
-            accents = [p for p in accents if p not in ("strobe_fast", "strobe_slow")]
+            accents = _no_strobe(accents)
         # ── Motivo por grupo (repetição estrutural, dev/repetition_stats.json:
         # oficiais reutilizam o look — Jaccard same-group 0.53 vs 0.18, 1.º preset
         # igual 57%). 1.ª ocorrência GRAVA a sequência; repetições REPETEM-NA.
@@ -955,6 +957,7 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
                 triggers = [anchor] + [t for t in triggers if t > anchor]
         # ── Emit clusters at triggers ──
         i = 0
+        first_productive = True   # first non-pause/non-strobe trigger gets the full cluster
         for tick in triggers:
             if tick < s.start or tick >= s.end:
                 continue
@@ -970,9 +973,10 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
                 placed.append(tick)
                 last = preset
                 continue
-            # ── Mini-cluster: emit 2-3 rapid changes ONLY at the first trigger (i==0).
-            # Official venues use burst at entry, then sparse single events.
-            # This prevents the 2-3× multiplier that was causing 15 evt/sec vs target 4.
+            # ── Mini-cluster: emit 2-3 rapid changes ONLY at the first productive
+            # trigger (first_productive). Official venues use burst at entry, then sparse
+            # single events. This prevents the 2-3× multiplier that was causing 15 evt/sec
+            # vs target 4. Pause/strobe triggers (continue above) don't count as productive.
             local = _env_tier(env, tick) if env else energy
             cluster_gaps = _LIGHT_CLUSTER_PAT.get(local, [0.5])
             # Clímax (último chorus): +1 flip por cluster ≈ a densidade 1.57×
@@ -999,9 +1003,10 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
                 i += 1
                 if gi < len(cluster_gaps):
                     tt += max(1, int(tpb * cluster_gaps[gi]))
-                # After the first trigger, emit only 1 event per trigger (single preset)
-                if gi == 0 and i > 1:
+                # After the first productive trigger, emit only 1 event per trigger
+                if not first_productive:
                     break
+            first_productive = False
     # Keyframes [next]: the MANUAL presets (verse/chorus/manual_*/dischord/stomp) are
     # STATIC until a keyframe advances them. The official venues keyframe them ~1×
     # per beat (snap to hits). AUTO presets (frenzy/flare/loop/strobe…) animate
@@ -4150,9 +4155,8 @@ _COOP_INSTR: dict[str, set[str]] = {
     "BG_Near": {"bass", "guitar"}, "BG_Behind": {"bass", "guitar"},
     "DG_Near": {"drums", "guitar"}, "BD_Near": {"bass", "drums"},
     "GK_Near": {"guitar", "keys"}, "GK_Behind": {"guitar", "keys"},
-    "BV_Behind": {"bass", "vocal"}, "BV_Near": {"bass", "vocal"},
+    "BV_Behind": {"bass", "vocal"},
     "GV_Behind": {"guitar", "vocal"}, "KV_Behind": {"keys", "vocal"},
-    "BD_Near": {"bass", "drums"},
     # Group shots (always valid)
     "All_Near": set(), "All_Far": set(), "All_Behind": set(),
     "Front_Near": set(), "Front_Behind": set(),
@@ -4162,7 +4166,8 @@ _COOP_INSTR: dict[str, set[str]] = {
 def _playing_framing(pool: list[str], tick: int,
                      inst_onsets: dict[str, list[int]] | None,
                      tpb: int,
-                     idle_threshold: int = 4) -> list[str]:
+                     idle_threshold: int = 4,
+                     strict: bool = False) -> list[str]:
     """Filter framing pool: keep only cuts where featured instrument(s) are playing.
 
     Single-instrument cut → that instrument must have an onset within ±N beats.
@@ -4173,7 +4178,8 @@ def _playing_framing(pool: list[str], tick: int,
     (default 4 beats = 1 measure, matching the animation idle logic better
     than the old 2-beat window).
 
-    Falls back to group shots if the pool would be empty.
+    When strict=False (default), falls back to group shots if pool would be empty.
+    When strict=True, returns empty list to signal rejection — for single-candidate validation.
     """
     if not inst_onsets:
         return pool
@@ -4185,6 +4191,8 @@ def _playing_framing(pool: list[str], tick: int,
             result.append(cut)
         elif any(_playing_near(inst_onsets.get(i), tick, win) for i in insts):
             result.append(cut)
+    if strict:
+        return result
     # Fallback: group shots (nunca vazio — _GROUP_FRAMINGS tem 3)
     return result or [c for c in _GROUP_FRAMINGS] or ["All_Near"]
 
@@ -4420,10 +4428,12 @@ def _guard_directed(cut: str, tick: int, tpb: int,
     return cut
 
 
-def _level_filter(candidates: list[str], min_level: int, last_cut: str | None = None) -> list[str]:
+def _level_filter(candidates: list[str], min_level: int, last_cut: str | None = None,
+                  strict: bool = False) -> list[str]:
     """Filter cuts by Onyx level rule: level < min_level OR level == 0 if min == 0.
     
-    Falls back to all candidates if filter would empty the pool.
+    When strict=False (default), falls back to candidates if filter would empty the pool.
+    When strict=True, returns empty list to signal rejection — for single-candidate validation.
     """
     if not candidates:
         return candidates
@@ -4443,7 +4453,7 @@ def _level_filter(candidates: list[str], min_level: int, last_cut: str | None = 
             is_shared_duo = (c_level >= 2 and len(curr_insts) >= 2 and bool(shared))
             if is_shared_duo:
                 filtered.append(c)
-    return filtered if filtered else candidates
+    return filtered if filtered or strict else candidates
 
 
 def _coop_instrument(cut_name: str) -> str | None:
@@ -4488,15 +4498,13 @@ def select_coop_cut(
 
     # Usar TODA a PDT — sem interseção com SECTION_CAMERA
     # (a PDT é a distribuição aprendida; level_pool só serve de fallback)
-    all_cuts = [(c, w) for c, w in dist.cuts]
+    all_cuts = list(dist.cuts)
 
     # Aplicar cooldown
-    cooldown_ok = []
-    cooldown_weights = []
+    cooldown_ok: list[tuple[str, float]] = []
     for cut_name, base_weight in all_cuts:
         if cooldown_state.is_available(cut_name, tick, tpb, _COOP_INSTR):
-            cooldown_ok.append(cut_name)
-            cooldown_weights.append(base_weight)
+            cooldown_ok.append((cut_name, base_weight))
 
     if not cooldown_ok:
         group_available = [c for c in level_pool if not _COOP_INSTR.get(c, set())]
@@ -4507,9 +4515,7 @@ def select_coop_cut(
 
     # Calcular boosts
     final_cuts: list[tuple[str, float]] = []
-    for cut_name in cooldown_ok:
-        idx = cooldown_ok.index(cut_name)
-        base_weight = cooldown_weights[idx]
+    for cut_name, base_weight in cooldown_ok:
         boost = 1.0
 
         # featured_inst boost
@@ -4559,33 +4565,29 @@ def select_coop_cut(
     normalized = [w / total for w in weights_only]
     chosen = rng.choices(cuts_only, weights=normalized, k=1)[0]
 
-    # Validar por filtros dinâmicos (level + playing)
+    # Validar por filtros dinâmicos (strict=True: sem fallback interno)
     # _level_filter: Onyx level progression
     if min_framing_level > 0:
-        candidates = _level_filter([chosen], min_framing_level, last_cut)
-        if not candidates:
+        if not _level_filter([chosen], min_framing_level, last_cut, strict=True):
             # Tentar outros cuts por ordem de peso
             for c, _ in sorted(final_cuts, key=lambda x: -x[1]):
                 if c == chosen:
                     continue
-                cands = _level_filter([c], min_framing_level, last_cut)
-                if cands:
-                    chosen = cands[0]
+                if _level_filter([c], min_framing_level, last_cut, strict=True):
+                    chosen = c
                     break
             else:
                 return rng.choice(level_pool) if level_pool else None
 
     # _playing_framing: instrumento a tocar?
     if inst_onsets:
-        playing_pool = _playing_framing([chosen], tick, inst_onsets, tpb)
-        if not playing_pool:
+        if not _playing_framing([chosen], tick, inst_onsets, tpb, strict=True):
             # Tentar outro cut
             for c, _ in sorted(final_cuts, key=lambda x: -x[1]):
                 if c == chosen:
                     continue
-                pp = _playing_framing([c], tick, inst_onsets, tpb)
-                if pp:
-                    chosen = pp[0]
+                if _playing_framing([c], tick, inst_onsets, tpb, strict=True):
+                    chosen = c
                     break
             else:
                 return rng.choice(level_pool) if level_pool else None
@@ -4753,10 +4755,11 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
                 position = "entry"
 
             # Probabilistic selection — usa toda a PDT (sem interseção com SECTION_CAMERA)
+            _rng = rng or random.Random()
             cut = select_coop_cut(
                 section_kind=s.kind,
                 position=position,
-                rng=rng if rng else random,
+                rng=_rng,
                 featured_inst=feat,
                 energy=energy,
                 section_leaders=leaders,
@@ -4901,7 +4904,7 @@ def build_camera(sections: list[Section], tempo_map: list, time_sig_map: list,
     # (e.g. directed_drums_lt + directed_guitar_cls). Add companions using
     # co-occurrence pairs learned from 100 official songs.
     from .cut_events import add_companion_shots
-    companions = add_companion_shots(accepted, rng=rng)
+    companions = add_companion_shots(accepted)
 
     # ── MERGE: directed wins near a framing slot; drop the filler within min_gap ──
     import bisect
