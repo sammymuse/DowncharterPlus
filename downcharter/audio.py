@@ -182,11 +182,13 @@ def _try_mdx_separation(
         if file_sr != model_sr:
             mono = _resample_np(mono, file_sr, model_sr)
         stereo = np.stack([mono, mono], axis=0)  # (2, N) — shape expected by separate_vocals
+        del mono
         vocals = separate_vocals(stereo, sr=model_sr, model_path=model_path)
+        del stereo
         if vocals is None:
             sys.stderr.write(f"  [mdx]  failed (model or onnx issue)\n")
             return None
-        mono_vocals = vocals.mean(axis=1).astype(np.float32)
+        mono_vocals = vocals.mean(axis=1, dtype=np.float32)
         # Resample back to the original file rate for caching
         if file_sr != model_sr:
             mono_vocals = _resample_np(mono_vocals, model_sr, file_sr)
@@ -567,12 +569,14 @@ def _decode_with_ffmpeg(src, ffmpeg_path):
 def load_mono(path: str):
     """Decode the audio to mono float32. Handles .mogg (header strip)."""
     if path.lower().endswith(".mogg"):
-        raw = open(path, "rb").read()
-        version = struct.unpack("<I", raw[:4])[0]
-        if version != 0x0A:
-            raise ValueError(f"encrypted mogg (version {version}) not supported")
-        offset = struct.unpack("<I", raw[4:8])[0]
-        data, sr = _read_all_or_blocks(io.BytesIO(raw[offset:]))
+        with open(path, "rb") as f:
+            header = f.read(8)
+            version = struct.unpack("<I", header[:4])[0]
+            if version != 0x0A:
+                raise ValueError(f"encrypted mogg (version {version}) not supported")
+            offset = struct.unpack("<I", header[4:8])[0]
+            f.seek(offset)
+            data, sr = _read_all_or_blocks(io.BytesIO(f.read()))
     else:
         data, sr = _read_all_or_blocks(path)
     return data.mean(axis=1), sr
@@ -586,21 +590,20 @@ def load_mono_mix(paths: list[str]):
     if not paths:
         raise ValueError("no stems")
     base_sr = None
-    mixes: list = []
+    mix = None
     for p in paths:
         mono, sr = load_mono(p)
         if base_sr is None:
             base_sr = sr
         elif sr != base_sr and len(mono):
-            # simple linear resampling to the base sr
-            n = int(len(mono) * base_sr / sr)
-            mono = np.interp(np.linspace(0, len(mono), n, endpoint=False),
-                             np.arange(len(mono)), mono).astype("float32")
-        mixes.append(mono)
-    n = min(len(m) for m in mixes)
-    mix = np.zeros(n, dtype="float32")
-    for m in mixes:
-        mix += m[:n]
+            mono = _resample_np(mono, sr, base_sr)
+        if mix is None:
+            mix = mono.copy()
+        else:
+            n = min(len(mix), len(mono))
+            mix[:n] += mono[:n]
+    if mix is None:
+        return None, None
     return mix, base_sr
 
 
@@ -654,8 +657,10 @@ def _stft_mag(mono, sr: int, hop: int = 1024, win: int = 2048):
     if len(mono) < win:
         return np.zeros((0, win // 2 + 1), dtype="float32"), hop
     n = 1 + (len(mono) - win) // hop
-    idx = np.arange(win)[None, :] + hop * np.arange(n)[:, None]
-    frames = mono[idx] * np.hanning(win).astype("float32")
+    strides = (mono.strides[0] * hop, mono.strides[0])
+    shape = (n, win)
+    frames = np.lib.stride_tricks.as_strided(mono, shape=shape, strides=strides, writeable=False)
+    frames = frames * np.hanning(win).astype(np.float32)
     return np.abs(np.fft.rfft(frames, axis=1)).astype("float32"), hop
 
 

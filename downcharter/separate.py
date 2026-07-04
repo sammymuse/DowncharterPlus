@@ -342,7 +342,7 @@ def separate_vocals(
         model_in = np.stack(
             [S_real[0], S_imag[0], S_real[1], S_imag[1]], axis=0
         )  # (4, dim_f, dim_t)
-        model_in = model_in[np.newaxis, :, :, :].astype(np.float32)  # (1, 4, dim_f, dim_t)
+        model_in = model_in[np.newaxis, :, :, :]  # (1, 4, dim_f, dim_t)  — already float32
 
         # ── ONNX inference ────────────────────────────────────────────
         try:
@@ -388,4 +388,4 @@ def separate_vocals(
     # Clip to float32 range
     np.clip(out, -1.0, 1.0, out=out)
 
-    return out.astype(np.float32)
+    return out  # already float32
