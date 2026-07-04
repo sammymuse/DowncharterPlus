@@ -214,9 +214,7 @@ def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
     `metadata` is an ordered iterable of (key, value) string pairs.
     `files` maps a relative filename (max 255 bytes UTF-8) to its raw bytes.
     """
-    if xor_mask is None:
-        xor_mask = os.urandom(16)
-    if len(xor_mask) != 16:
+    if xor_mask is not None and len(xor_mask) != 16:
         raise ValueError("xor_mask must be 16 bytes")
 
     # ── Metadata section ──────────────────────────────────────────────────────
@@ -230,7 +228,7 @@ def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
         count += 1
     meta_section = struct.pack("<Q", len(meta_body) + 8) + struct.pack("<Q", count) + meta_body
 
-    # ── FileIndex + masked FileData ───────────────────────────────────────────
+    # ── FileIndex + Data ──────────────────────────────────────────────────────
     # contentsIndex is the ABSOLUTE offset of the file's data from the start of
     # the whole .sng (verified against the reference encoder), not relative to
     # the FileData body. The index body has a fixed size once filenames are
@@ -246,19 +244,31 @@ def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
                   + (8 + index_section_len)         # file-index section (with its len field)
                   + 8)                              # FileData section length field
 
-    import numpy as np
-
-    mask_arr = np.frombuffer(xor_mask, dtype=np.uint8)
-
-    index_body = bytearray()
-    data_body = bytearray()
-    offset = data_start
-    for nb, blob in zip(names, files.values()):
-        index_body += struct.pack("<B", len(nb)) + nb
-        index_body += struct.pack("<Q", len(blob))
-        index_body += struct.pack("<Q", offset)
-        data_body += _xor_mask_bytes(blob, mask_arr)
-        offset += len(blob)
+    if xor_mask is None:
+        # Unmasked data — files are stored verbatim, no XOR applied.
+        header_mask = b"\x00" * 16
+        index_body = bytearray()
+        data_body = bytearray()
+        offset = data_start
+        for nb, blob in zip(names, files.values()):
+            index_body += struct.pack("<B", len(nb)) + nb
+            index_body += struct.pack("<Q", len(blob))
+            index_body += struct.pack("<Q", offset)
+            data_body += blob
+            offset += len(blob)
+    else:
+        import numpy as np
+        mask_arr = np.frombuffer(xor_mask, dtype=np.uint8)
+        header_mask = xor_mask
+        index_body = bytearray()
+        data_body = bytearray()
+        offset = data_start
+        for nb, blob in zip(names, files.values()):
+            index_body += struct.pack("<B", len(nb)) + nb
+            index_body += struct.pack("<Q", len(blob))
+            index_body += struct.pack("<Q", offset)
+            data_body += _xor_mask_bytes(blob, mask_arr)
+            offset += len(blob)
 
     index_section = (struct.pack("<Q", index_section_len)
                      + struct.pack("<Q", len(files)) + index_body)
@@ -267,7 +277,7 @@ def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
     out = bytearray()
     out += MAGIC
     out += struct.pack("<I", VERSION)
-    out += xor_mask
+    out += header_mask
     out += meta_section
     out += index_section
     out += data_section

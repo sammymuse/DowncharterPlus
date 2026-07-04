@@ -16,6 +16,8 @@ import sys
 import struct
 import io
 
+import numpy as np
+
 from .midi_utils import tick_to_ms
 
 _AUDIO_EXTS = (".ogg", ".opus", ".wav", ".flac", ".mp3", ".mogg")
@@ -80,6 +82,16 @@ _VOCAL_CACHE_MDX = ".downcharter_vocals_mdx.wav"
 _VOCAL_CACHE_NAMES = (_VOCAL_CACHE_MOGG, _VOCAL_CACHE_MDX)
 
 
+def _vocal_source_from_path(p: str) -> str:
+    """Return 'mdx', 'mogg', or 'stems' based on cache file name."""
+    bn = os.path.basename(p)
+    if bn == _VOCAL_CACHE_MDX:
+        return "mdx"
+    if bn == _VOCAL_CACHE_MOGG:
+        return "mogg"
+    return "stems"
+
+
 def _cache_is_fresh(cache_path: str, source_paths: list[str]) -> bool:
     """True if the cache file exists and is newer than all sources."""
     if not os.path.isfile(cache_path):
@@ -119,19 +131,19 @@ def _atomic_write_cache(cache_path: str, mono, sr: int) -> bool:
 def _resample_np(src: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
     """Linear resampling via ``np.interp`` — no scipy/librosa needed.
 
-    Note: linear interpolation without an anti-aliasing lowpass filter
-    may cause aliasing on downsampling (frequencies above the target
-    Nyquist fold back into the audible range).  For the MDX-NET model
-    this is acceptable because the input is a full-band mix and the
-    model's internal STFT provides its own frequency selectivity.
+    NOTE: linear interpolation without an anti-aliasing lowpass filter may
+    cause aliasing on downsampling.  For the MDX-NET model this is
+    acceptable because the input is a full-band mix and the model's
+    internal STFT provides frequency selectivity.  If scipy is available,
+    ``scipy.signal.resample_poly`` would be a higher-quality alternative.
     """
-    import numpy as np
     if src_sr == dst_sr or len(src) == 0:
         return src
+    src = np.asarray(src, dtype=np.float32)
     n = max(1, int(round(len(src) * dst_sr / src_sr)))
-    x_old = np.arange(len(src))
-    x_new = np.linspace(0, len(src) - 1, n)
-    return np.interp(x_new, x_old, src).astype(src.dtype)
+    x_old = np.arange(len(src), dtype=np.float32)
+    x_new = np.linspace(0, len(src) - 1, n, dtype=np.float32)
+    return np.interp(x_new, x_old, src).astype(np.float32)
 
 
 def _try_mdx_separation(
@@ -183,8 +195,9 @@ def _try_mdx_separation(
             sys.stderr.write(f"  [mdx]  done ({size_mb:.1f} MB cached)\n")
             return [mdx_cache]
     except Exception:
-        pass
-    return None
+        import traceback
+        sys.stderr.write(f"  [mdx]  failed: {traceback.format_exc()}\n")
+        return None
 
 
 def resolve_vocal_audio(

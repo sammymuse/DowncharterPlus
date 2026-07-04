@@ -477,496 +477,495 @@ def process_midi(
       - Optional: MDX-NET vocal separation (do_vocal_sep)
     Returns statistics.
     """
+
+    stats = {"vocal_cache_path": None}
     try:
-        mid = mido.MidiFile(src_path)
-    except (ValueError, IOError):
-        # Some MIDIs (e.g. miracle) have sysex/data bytes outside 0..127.
-        # clip=True clamps them to the valid MIDI range instead of blowing up.
-        mid = mido.MidiFile(src_path, clip=True)
-    # RB3 requires 480 TPB; .chart imports keep the chart's native resolution
-    # (often 192). Normalise up-front so all downstream tick math AND the output
-    # are 480.
-    rescale_midi_tpb(mid, 480)
-    # Onyx-style source-format auto-detect: rename legacy tracks to RB names and
-    # remap FoF star-power (note 103) to RB overdrive (116). No-op on RB-format
-    # charts (incl. our own .chart imports). Runs before difficulty generation so
-    # the whole pipeline sees standard track names and overdrive on 116.
-    norm = normalize_source_midi(mid)
-    tpb = mid.ticks_per_beat
-    tempo_map = build_tempo_map(mid)
-    time_sig_map = build_time_sig_map(mid)
-    new_mid = mido.MidiFile(ticks_per_beat=tpb, type=mid.type)
-
-    stats = {
-        "total_kicks": 0, "converted_2x": 0, "doubles_kept": 0,
-        "tracks_processed": 0, "groove_warnings": [], "diffs_skipped": [],
-        "venue_events": 0, "venue_skipped": False,
-        "venue_theme": None, "anim_events": 0, "beat_added": False,
-        "beat_extended": False,
-        "audio_used": False, "audio_drums": False, "audio_lyrics": False,
-        "audio_anim_instr": [],
-        "vocal_sep_source": None,
-        "vocal_cache_path": None,  # set by resolve_vocal_audio callers
-        "tracks_renamed": norm["tracks_renamed"], "sp_remapped": norm["sp_remapped"],
-    }
-
-    # Signals for generating the venue
-    events_track: list[AbsEvent] = []
-    bre_spans: list[tuple[int, int]] = []
-    accent_src: list[AbsEvent] = []   # guitar events for accents
-    all_onsets: set[int] = set()      # onsets of ALL instruments (density)
-    part_onsets: dict[str, list[int]] = {}  # onsets per PART track (animations)
-    vocal_tracks: list[str] = []      # names of the vocal PART tracks (charted or lyrics-only)
-    has_beat = any(t.name.strip().upper() == "BEAT" for t in mid.tracks)
-    has_venue = any(t.name.strip().upper() == "VENUE" for t in mid.tracks)
-    song_end = 0
-
-    for track in mid.tracks:
-        track_name = track.name.strip().upper()
-        track_type = TRACK_TYPES.get(track_name)
-
-        events = to_abs(track)
-        if events:
-            song_end = max(song_end, events[-1].abs_tick)
-
-        # Capturing signals for the venue
-        if do_venue:
-            if track_name == "EVENTS":
-                events_track = events
-            # A real BRE is authored on the melodic tracks (notes 120–124). On DRUMS
-            # those notes are *drum fills* (activation lanes), not BREs → exclude.
-            if track_type == "guitar":
-                bre_spans += find_bre_spans(events)
-            # Accents: prefer PART GUITAR; otherwise the 1st guitar track
-            if track_type == "guitar" and (
-                    not accent_src or track_name == "PART GUITAR"):
-                accent_src = events
-            # Gameplay onsets (note < 103 excludes markers) of each instrument
-            if _part_instrument(track_name) is not None:
-                if _part_instrument(track_name) == "vocal":
-                    vocal_tracks.append(track.name)
-                ons = [e.abs_tick for e in events
-                       if e.msg.type == "note_on" and e.msg.velocity > 0
-                       and getattr(e.msg, "note", 999) < 103]
-                if ons:
-                    part_onsets[track.name] = ons
-                    all_onsets.update(ons)
-            if track_name == "VENUE":
-                # Option A: an existing VENUE is the author's work - keep it intact
-                # (copied below via the track_type-None path) and skip generating ours.
-                pass
-
-        new_track = mido.MidiTrack()
-        new_track.name = track.name
-        new_mid.tracks.append(new_track)
-
-        if track_type is None:
-            # Unrecognized track - copy intact (PS sysex preserved; see
-            # _restore_ps_sysex at the end to restore the 0xFF byte clamped by clip).
-            for msg in track:
-                if msg.type == "sysex":
-                    stats["sysex_kept"] = stats.get("sysex_kept", 0) + 1
-                new_track.append(msg.copy())
-            continue
-
-        stats["tracks_processed"] += 1
-
-        if track_type == "drums":
-            kick_note = _find_kick_note(track)
-            if do_expert_plus:
-                events, ks = _apply_expert_plus(
-                    events, kick_note, tempo_map, tpb, threshold_ms)
-                stats["total_kicks"]   += ks["total_kicks"]
-                stats["converted_2x"] += ks["converted"]
-                stats["doubles_kept"] += ks["doubles_kept"]
-
-            all_events = list(events)
-            # Option A: don't regenerate a difficulty the author already charted.
-            gen_diffs = []
-            for diff in diffs_to_gen:
-                if _diff_already_charted(events, diff):
-                    stats["diffs_skipped"].append(f"{track.name} {diff}")
-                else:
-                    gen_diffs.append(diff)
-            reduced_by_diff = reduce_drums_all(
-                events, gen_diffs, tempo_map, tpb, time_sig_map)
-            for diff in gen_diffs:
-                for ev in reduced_by_diff.get(diff, []):
-                    # Skip marker notes (103-127): they come from the original
-                    # track (all_events = list(events) above) and must not be
-                    # re-added per difficulty. Notes < 103 are regular gems.
-                    if ev.msg.type in ("note_on", "note_off") and ev.msg.note < 103:
-                        all_events.append(ev)
-
-        elif track_type == "guitar":
-            # Apply hand position map to Expert guitar/bass (generates 101/102
-            # force-HOPO/strum markers throughout the song, not just at start).
-            from .guitar_handmap import apply_handmap
-            events = apply_handmap(events, tpb)
-            all_events = list(events)
-            for diff in diffs_to_gen:
-                # Option A: don't regenerate a difficulty the author already charted.
-                if _diff_already_charted(events, diff):
-                    stats["diffs_skipped"].append(f"{track.name} {diff}")
-                    continue
-                reduced = reduce_guitar(events, diff, tempo_map, tpb, time_sig_map)
-                # Quality guard: flags reductions that lost the groove.
-                if diff in GROOVE_FLOOR:
-                    ok, score = groove_check(events, reduced, diff, tpb)
-                    if not ok:
-                        stats["groove_warnings"].append(
-                            f"{track.name} {diff}: groove {score:.0%} "
-                            f"(< {GROOVE_FLOOR[diff]:.0%})")
-                for ev in reduced:
-                    if ev.msg.type in ("note_on", "note_off"):
-                        all_events.append(ev)
-
-        # Sort and write to the single track. The sysex (e.g. Phase Shift "F0 50 53…",
-        # open/tap notes) are PRESERVED - mido reads them with clip (0xFF→0x7F) and
-        # _restore_ps_sysex restores the 0xFF in the final file so they end up like the
-        # original (which YARG reads fine).
-        all_events.sort(key=lambda e: e.abs_tick)
-        prev = 0
-        for ev in all_events:
-            if ev.msg.type == "sysex":
-                stats["sysex_kept"] = stats.get("sysex_kept", 0) + 1
-            new_track.append(ev.msg.copy(time=ev.abs_tick - prev))
-            prev = ev.abs_tick
-
-    if do_venue:
-        genre = load_genre(os.path.dirname(os.path.abspath(src_path)))
-        theme = genre_to_theme(genre)
-        accents = expert_accents(accent_src, tpb) if accent_src else []
-        onsets = sorted(all_onsets)
-        # Resolved sections (multi-instrument) - shared by venue+animations.
-        sections = resolve_sections(events_track, song_end, onsets, time_sig_map, tpb)
-        # AUDIO refinement (optional): mixes the real loudness with the structural
-        # energy. With no audio/libs, sections.energy stays None (MIDI-only intact).
-        stats["audio_used"] = _apply_audio_energy(
-            os.path.dirname(os.path.abspath(src_path)), sections, tempo_map, tpb,
-            mid, part_onsets, audio_path, theme)
-        # Drum hits for the lightshow (synced keyframes + pyro).
-        drum_onsets = sorted(
-            t for nm, ons in part_onsets.items()
-            if _part_instrument(nm) == "drums" for t in ons)
-        # Snare + toms (fills/rolls) for the strobe - no cymbals/hi-hat.
-        fill_onsets = _drum_fill_onsets(mid)
-        dbass_onsets = _double_bass_onsets(mid)         # double-bass to reinforce strobe
-        # Onsets per instrument (spotlights) + number of harmonies (sing-along).
-        inst_onsets: dict[str, list[int]] = {}
-        for nm, ons in part_onsets.items():
-            inst = _part_instrument(nm)
-            if inst:
-                inst_onsets.setdefault(inst, []).extend(ons)
-        for inst in inst_onsets:
-            inst_onsets[inst].sort()
-        n_harm = sum(1 for t in mid.tracks
-                     if t.name.strip().upper() in ("HARM1", "HARM2", "HARM3"))
-
-        # ── AUDIO Layers 1+2: enrich charts with few instruments ──────────────
-        # Layer 1: pseudo-drums from the audio when there's no PART DRUMS (lightshow/pyro).
-        # Layer 2: animate ABSENT instruments via per-band energy + lyrics.
-        pseudo_anim: dict[str, list[int]] = {}
-        present = set(inst_onsets)
-        # REAL vocals (charted or lyrics) enable crowd/sing-along; the audio proxy
-        # only enables directed performance/spotlight (no words to sing).
-        vocal_real = "vocal" in present
-
-        # Vocals from LYRICS (audio-independent): if there are no charted vocals but
-        # there are lyrics in the MIDI, the vocals are driven by them (sing-along/directed/anim).
-        lyrics = _gather_lyrics(mid)
-        # The lyrics track itself can have gaps the author never transcribed
-        # (unscripted screams/ad-libs, common in metal/metalcore) - those read as
-        # silence to idle-gap detection even though the singer is audibly still
-        # performing. Fill them with pseudo-onsets straight from the vocal stem's
-        # own RMS voice-activity, independent of any lyric/note event.
-        voice_fill: list[int] = []
-        if lyrics:
-            try:
-                from . import audio as _audio_va
-                if _audio_va.available():
-                    song_folder = os.path.dirname(os.path.abspath(src_path))
-                    vocal_paths = _audio_va.resolve_vocal_audio(
-                        song_folder, allow_separation=do_vocal_sep)
-                    va = None
-                    if vocal_paths:
-                        # Identify source type for logging
-                        p = vocal_paths[0]
-                        if p.endswith("_mdx.wav"):
-                            stats["vocal_sep_source"] = "mdx"
-                        elif p.endswith("_mogg.wav"):
-                            stats["vocal_sep_source"] = "mogg"
-                        else:
-                            stats["vocal_sep_source"] = "stems"
-                        # Track the cache path so _clean_vocal_cache can
-                        # delete only this song's cache (not all in folder).
-                        if stats["vocal_sep_source"] in ("mdx", "mogg"):
-                            stats["vocal_cache_path"] = p
-                        va = _audio_va.voice_activity(vocal_paths)
-                    if va is not None:
-                        voice_fill = _audio_va.voice_active_ticks(va, tempo_map, tpb)
-                        if voice_fill:
-                            stats["audio_vocal_fill"] = len(voice_fill)
-            except Exception:
-                voice_fill = []
-        if "vocal" not in present and lyrics:
-            merged = sorted(set(lyrics) | set(voice_fill))
-            inst_onsets.setdefault("vocal", merged)
-            vocal_real = True
-            stats["audio_lyrics"] = True
-            # PART VOCALS exists (lyrics) but has no gems → it didn't enter part_onsets,
-            # so the vocalist stayed ALWAYS idle (mood markers never injected).
-            # Drive the vocalist's animation from the LYRICS on the existing track itself.
-            vt = next((n for n in vocal_tracks
-                       if n.strip().upper() == "PART VOCALS"), None) \
-                or (vocal_tracks[0] if vocal_tracks else None)
-            if vt is not None:
-                part_onsets[vt] = merged       # → generate_animations animates the track
-            else:
-                pseudo_anim["vocal"] = merged   # no track → create a dedicated animation
-        elif "vocal" in present and lyrics:
-            # PARTIALLY charted vocals (e.g. only the chorus has melody notes, the
-            # rest is plain lyrics): merge the lyric onsets (+ voice-activity fill)
-            # into the real note onsets so idle-gap detection (build_animations)
-            # sees the full picture. Without this, gaps between charted notes read
-            # as idle even when lyrics/talky gems (_chart_vocals_from_lyrics) fill
-            # them in later - the vocalist's body froze in "idle" while singing.
-            merged = sorted(set(inst_onsets["vocal"]) | set(lyrics) | set(voice_fill))
-            inst_onsets["vocal"] = merged
-            vt = next((n for n in vocal_tracks
-                       if n.strip().upper() == "PART VOCALS"), None) \
-                or (vocal_tracks[0] if vocal_tracks else None)
-            if vt is not None and vt in part_onsets:
-                part_onsets[vt] = merged
-
-        from . import audio as _audio
-        a_paths = ([audio_path] if audio_path
-                   else _audio.find_song_audio(os.path.dirname(os.path.abspath(src_path))))
-        audio_accents = None
-        energy_env = None
-        audio_strobe = None
-        drop_ticks = None
-        band_activity: dict[str, list[int]] = {}
-        if _audio.available() and a_paths:
-            if not drum_onsets:                       # Layer 1
-                pd = _audio.percussive_onset_ticks(a_paths, tempo_map, tpb)
-                if pd:
-                    drum_onsets = pd
-                    stats["audio_drums"] = True
-            # Strong audio transients (chorus hits, crashes, stabs) → snap light
-            # changes / pyro to real musical hits, incl. audio-only ones.
-            audio_accents = _audio.flux_accents(a_paths, tempo_map, tpb)
-            if audio_accents:
-                stats["audio_accents"] = len(audio_accents)
-            # Color temperature per section from the audio timbre (spectral centroid):
-            # dark→warm, bright→cool. Sets s.warmth so the lightshow tints each section.
-            if sections:
-                warmth = _audio.section_brightness_tiers(
-                    a_paths, sections, tempo_map, tpb)
-                if warmth:
-                    for s, w in zip(sections, warmth):
-                        s.warmth = w
-                    stats["audio_warm"] = sum(1 for w in warmth if w == "warm")
-                    stats["audio_cool"] = sum(1 for w in warmth if w == "cool")
-            # Within-section energy envelope (sub-section composite score) → the light
-            # cadence speeds up in the loud half of a section, eases in the quiet half.
-            if sections:
-                energy_env = _audio.energy_envelope(
-                    a_paths, sections, tempo_map, tpb)
-                if energy_env:
-                    stats["audio_env_spans"] = len(energy_env)
-            # Sustained spectral-flux walls (blast/tremolo) → continuous strobe, even
-            # for audio-only walls the MIDI drums miss.
-            audio_strobe = _audio.flux_strobe_spans(a_paths, tempo_map, tpb)
-            if audio_strobe:
-                stats["audio_strobe_spans"] = len(audio_strobe)
-            # Blackout anchors = start of calm low-energy regions (ground-truth: the
-            # 20 official venues put blackout in calm states, not at a sharp fall).
-            if sections:
-                drop_ticks = _audio.calm_blackout_ticks(
-                    a_paths, sections, tempo_map, tpb)
-                if drop_ticks:
-                    stats["audio_blackout_calm"] = len(drop_ticks)
-            # Audio band activity for camera identity refinement
-            band_activity = {}
-            for band in ("bass", "drums", "lead"):
-                ba = _audio.band_activity_ticks(a_paths, tempo_map, tpb, band)
-                if ba:
-                    band_activity[band] = ba
-            if band_activity:
-                stats["audio_band_activity"] = list(band_activity.keys())
-            # Character ANIMATION from the audio: ONLY vocals. Animating an ABSENT
-            # bass/guitar/drums/keys creates a PART track with no charted gems -
-            # RB3 doesn't render the character (camera/animation pointing at nothing)
-            # and YARG doesn't even support characters. We only animate instruments
-            # with a REAL chart. Vocals are the exception: the "animation" is the
-            # mouth lipsync, which makes sense from the singing detected in the audio
-            # (or from the lyrics) even without charted gems - the vocalist sings.
-            # (Keys were already out for the same reason; now bass/guitar/drums follow
-            # the rule.)
-            if "vocal" not in present and not lyrics:  # no lyrics → 'lead' band
-                ba = _audio.band_activity_ticks(a_paths, tempo_map, tpb, "lead")
-                if ba:
-                    pseudo_anim["vocal"] = ba
-                    # Even without a chart/lyrics, we identified when there's singing →
-                    # enables directed_vocals + spotlight (but NOT crowd/sing: no words).
-                    inst_onsets.setdefault("vocal", ba)
-        stats["audio_anim_instr"] = sorted(pseudo_anim)
-        # Flag for the venue: only real vocals (chart/lyrics) authorize crowd/sing-along.
-        if vocal_real:
-            inst_onsets["_vocal_real"] = inst_onsets.get("vocal", [])
-
-        if has_venue:
-            # Option A: keep the author's existing VENUE (already copied intact) and
-            # don't generate ours. Animations/BEAT/[end] below still run as usual.
-            stats["venue_skipped"] = True
-        else:
-            venue_events = generate_venue(
-                events_track, bre_spans, song_end, tempo_map, time_sig_map, tpb,
-                theme, accents, onsets, sections=sections, drum_onsets=drum_onsets,
-                inst_onsets=inst_onsets, n_harm=n_harm, fill_onsets=fill_onsets,
-                dbass_onsets=dbass_onsets, audio_onsets=audio_accents,
-                energy_env=energy_env, audio_strobe_spans=audio_strobe,
-                drop_ticks=drop_ticks, band_activity=band_activity,
-                pp_style=pp_style)
-            new_mid.tracks.append(build_venue_track(venue_events))
-            stats["venue_events"] = len(venue_events)
-            stats["venue_theme"] = theme
-            # Crowd state events ([crowd_*]) belong on the EVENTS track (RB3/YARG read
-            # them there, NOT from VENUE). Tie them to the same energy map and inject.
-            if sections:
-                pause_spans = find_pause_spans(onsets, time_sig_map, tpb)
-                crowd_events = build_crowd(sections, tpb, pause_spans)
-                if crowd_events:
-                    ei = next((i for i, t in enumerate(new_mid.tracks)
-                               if t.name.strip().upper() == "EVENTS"), None)
-                    if ei is not None:
-                        new_mid.tracks[ei] = _inject_meta(new_mid.tracks[ei], crowd_events)
-                    else:
-                        new_mid.tracks.append(
-                            _inject_meta(_named_track("EVENTS"), crowd_events))
-                    stats["crowd_events"] = len(crowd_events)
-
-        # Per-PART-track character animations (mood markers).
-        # Vocal phrase ends (105/106) → the vocalist only lowers the mic at the end
-        # of the phrase, not 1 beat after the last syllable.
-        v_track = next((t for t in new_mid.tracks
-                        if t.name.strip().upper() == "PART VOCALS"), None)
-        v_pe = phrase_end_ticks(v_track) if v_track is not None else None
-        anim = generate_animations(part_onsets, sections, theme, tpb, time_sig_map,
-                                   vocal_phrase_ends=v_pe)
-        anim_total = 0
-        for i, tr in enumerate(new_mid.tracks):
-            markers = anim.get(tr.name)
-            if markers:
-                new_mid.tracks[i] = _inject_meta(tr, markers)
-                anim_total += len(markers)
-        # Layer 2: animation tracks for ABSENT instruments (audio/lyrics).
-        if pseudo_anim:
-            from .venue import build_animations, instrument_extras
-            existing = {t.name.strip().upper() for t in new_mid.tracks}
-            for inst, ons in pseudo_anim.items():
-                tname = _INST_TRACK[inst]
-                if tname.upper() in existing:
-                    continue
-                markers = build_animations(ons, sections, tpb, time_sig_map, inst)
-                markers += instrument_extras(inst, ons, sections, tpb)
-                if markers:
-                    new_mid.tracks.append(_build_anim_track(tname, markers))
-                    anim_total += len(markers)
-                    existing.add(tname.upper())
-        stats["anim_events"] = anim_total
-
-        # The instruments often stop BEFORE the audio really ends (outro, fade-out,
-        # ring-out). The [end] event and the BEAT pulse must reach the END OF THE AUDIO,
-        # otherwise the characters freeze and the camera drifts for the remaining seconds.
-        # Compute the audio end in ticks and use it as a floor for song_end.
-        song_end_audio = song_end
         try:
+            mid = mido.MidiFile(src_path)
+        except (ValueError, IOError):
+            # Some MIDIs (e.g. miracle) have sysex/data bytes outside 0..127.
+            # clip=True clamps them to the valid MIDI range instead of blowing up.
+            mid = mido.MidiFile(src_path, clip=True)
+        # RB3 requires 480 TPB; .chart imports keep the chart's native resolution
+        # (often 192). Normalise up-front so all downstream tick math AND the output
+        # are 480.
+        rescale_midi_tpb(mid, 480)
+        # Onyx-style source-format auto-detect: rename legacy tracks to RB names and
+        # remap FoF star-power (note 103) to RB overdrive (116). No-op on RB-format
+        # charts (incl. our own .chart imports). Runs before difficulty generation so
+        # the whole pipeline sees standard track names and overdrive on 116.
+        norm = normalize_source_midi(mid)
+        tpb = mid.ticks_per_beat
+        tempo_map = build_tempo_map(mid)
+        time_sig_map = build_time_sig_map(mid)
+        new_mid = mido.MidiFile(ticks_per_beat=tpb, type=mid.type)
+
+        stats = {
+            "total_kicks": 0, "converted_2x": 0, "doubles_kept": 0,
+            "tracks_processed": 0, "groove_warnings": [], "diffs_skipped": [],
+            "venue_events": 0, "venue_skipped": False,
+            "venue_theme": None, "anim_events": 0, "beat_added": False,
+            "beat_extended": False,
+            "audio_used": False, "audio_drums": False, "audio_lyrics": False,
+            "audio_anim_instr": [],
+            "vocal_sep_source": None,
+            "vocal_cache_path": None,  # set by resolve_vocal_audio callers
+            "tracks_renamed": norm["tracks_renamed"], "sp_remapped": norm["sp_remapped"],
+        }
+
+        # Signals for generating the venue
+        events_track: list[AbsEvent] = []
+        bre_spans: list[tuple[int, int]] = []
+        accent_src: list[AbsEvent] = []   # guitar events for accents
+        all_onsets: set[int] = set()      # onsets of ALL instruments (density)
+        part_onsets: dict[str, list[int]] = {}  # onsets per PART track (animations)
+        vocal_tracks: list[str] = []      # names of the vocal PART tracks (charted or lyrics-only)
+        has_beat = any(t.name.strip().upper() == "BEAT" for t in mid.tracks)
+        has_venue = any(t.name.strip().upper() == "VENUE" for t in mid.tracks)
+        song_end = 0
+
+        for track in mid.tracks:
+            track_name = track.name.strip().upper()
+            track_type = TRACK_TYPES.get(track_name)
+
+            events = to_abs(track)
+            if events:
+                song_end = max(song_end, events[-1].abs_tick)
+
+            # Capturing signals for the venue
+            if do_venue:
+                if track_name == "EVENTS":
+                    events_track = events
+                # A real BRE is authored on the melodic tracks (notes 120–124). On DRUMS
+                # those notes are *drum fills* (activation lanes), not BREs → exclude.
+                if track_type == "guitar":
+                    bre_spans += find_bre_spans(events)
+                # Accents: prefer PART GUITAR; otherwise the 1st guitar track
+                if track_type == "guitar" and (
+                        not accent_src or track_name == "PART GUITAR"):
+                    accent_src = events
+                # Gameplay onsets (note < 103 excludes markers) of each instrument
+                if _part_instrument(track_name) is not None:
+                    if _part_instrument(track_name) == "vocal":
+                        vocal_tracks.append(track.name)
+                    ons = [e.abs_tick for e in events
+                           if e.msg.type == "note_on" and e.msg.velocity > 0
+                           and getattr(e.msg, "note", 999) < 103]
+                    if ons:
+                        part_onsets[track.name] = ons
+                        all_onsets.update(ons)
+                if track_name == "VENUE":
+                    # Option A: an existing VENUE is the author's work - keep it intact
+                    # (copied below via the track_type-None path) and skip generating ours.
+                    pass
+
+            new_track = mido.MidiTrack()
+            new_track.name = track.name
+            new_mid.tracks.append(new_track)
+
+            if track_type is None:
+                # Unrecognized track - copy intact (PS sysex preserved; see
+                # _restore_ps_sysex at the end to restore the 0xFF byte clamped by clip).
+                for msg in track:
+                    if msg.type == "sysex":
+                        stats["sysex_kept"] = stats.get("sysex_kept", 0) + 1
+                    new_track.append(msg.copy())
+                continue
+
+            stats["tracks_processed"] += 1
+
+            if track_type == "drums":
+                kick_note = _find_kick_note(track)
+                if do_expert_plus:
+                    events, ks = _apply_expert_plus(
+                        events, kick_note, tempo_map, tpb, threshold_ms)
+                    stats["total_kicks"]   += ks["total_kicks"]
+                    stats["converted_2x"] += ks["converted"]
+                    stats["doubles_kept"] += ks["doubles_kept"]
+
+                all_events = list(events)
+                # Option A: don't regenerate a difficulty the author already charted.
+                gen_diffs = []
+                for diff in diffs_to_gen:
+                    if _diff_already_charted(events, diff):
+                        stats["diffs_skipped"].append(f"{track.name} {diff}")
+                    else:
+                        gen_diffs.append(diff)
+                reduced_by_diff = reduce_drums_all(
+                    events, gen_diffs, tempo_map, tpb, time_sig_map)
+                for diff in gen_diffs:
+                    for ev in reduced_by_diff.get(diff, []):
+                        # Skip marker notes (103-127): they come from the original
+                        # track (all_events = list(events) above) and must not be
+                        # re-added per difficulty. Notes < 103 are regular gems.
+                        if ev.msg.type in ("note_on", "note_off") and ev.msg.note < 103:
+                            all_events.append(ev)
+
+            elif track_type == "guitar":
+                # Apply hand position map to Expert guitar/bass (generates 101/102
+                # force-HOPO/strum markers throughout the song, not just at start).
+                from .guitar_handmap import apply_handmap
+                events = apply_handmap(events, tpb)
+                all_events = list(events)
+                for diff in diffs_to_gen:
+                    # Option A: don't regenerate a difficulty the author already charted.
+                    if _diff_already_charted(events, diff):
+                        stats["diffs_skipped"].append(f"{track.name} {diff}")
+                        continue
+                    reduced = reduce_guitar(events, diff, tempo_map, tpb, time_sig_map)
+                    # Quality guard: flags reductions that lost the groove.
+                    if diff in GROOVE_FLOOR:
+                        ok, score = groove_check(events, reduced, diff, tpb)
+                        if not ok:
+                            stats["groove_warnings"].append(
+                                f"{track.name} {diff}: groove {score:.0%} "
+                                f"(< {GROOVE_FLOOR[diff]:.0%})")
+                    for ev in reduced:
+                        if ev.msg.type in ("note_on", "note_off"):
+                            all_events.append(ev)
+
+            # Sort and write to the single track. The sysex (e.g. Phase Shift "F0 50 53…",
+            # open/tap notes) are PRESERVED - mido reads them with clip (0xFF→0x7F) and
+            # _restore_ps_sysex restores the 0xFF in the final file so they end up like the
+            # original (which YARG reads fine).
+            all_events.sort(key=lambda e: e.abs_tick)
+            prev = 0
+            for ev in all_events:
+                if ev.msg.type == "sysex":
+                    stats["sysex_kept"] = stats.get("sysex_kept", 0) + 1
+                new_track.append(ev.msg.copy(time=ev.abs_tick - prev))
+                prev = ev.abs_tick
+
+        if do_venue:
+            genre = load_genre(os.path.dirname(os.path.abspath(src_path)))
+            theme = genre_to_theme(genre)
+            accents = expert_accents(accent_src, tpb) if accent_src else []
+            onsets = sorted(all_onsets)
+            # Resolved sections (multi-instrument) - shared by venue+animations.
+            sections = resolve_sections(events_track, song_end, onsets, time_sig_map, tpb)
+            # AUDIO refinement (optional): mixes the real loudness with the structural
+            # energy. With no audio/libs, sections.energy stays None (MIDI-only intact).
+            stats["audio_used"] = _apply_audio_energy(
+                os.path.dirname(os.path.abspath(src_path)), sections, tempo_map, tpb,
+                mid, part_onsets, audio_path, theme)
+            # Drum hits for the lightshow (synced keyframes + pyro).
+            drum_onsets = sorted(
+                t for nm, ons in part_onsets.items()
+                if _part_instrument(nm) == "drums" for t in ons)
+            # Snare + toms (fills/rolls) for the strobe - no cymbals/hi-hat.
+            fill_onsets = _drum_fill_onsets(mid)
+            dbass_onsets = _double_bass_onsets(mid)         # double-bass to reinforce strobe
+            # Onsets per instrument (spotlights) + number of harmonies (sing-along).
+            inst_onsets: dict[str, list[int]] = {}
+            for nm, ons in part_onsets.items():
+                inst = _part_instrument(nm)
+                if inst:
+                    inst_onsets.setdefault(inst, []).extend(ons)
+            for inst in inst_onsets:
+                inst_onsets[inst].sort()
+            n_harm = sum(1 for t in mid.tracks
+                         if t.name.strip().upper() in ("HARM1", "HARM2", "HARM3"))
+
+            # ── AUDIO Layers 1+2: enrich charts with few instruments ──────────────
+            # Layer 1: pseudo-drums from the audio when there's no PART DRUMS (lightshow/pyro).
+            # Layer 2: animate ABSENT instruments via per-band energy + lyrics.
+            pseudo_anim: dict[str, list[int]] = {}
+            present = set(inst_onsets)
+            # REAL vocals (charted or lyrics) enable crowd/sing-along; the audio proxy
+            # only enables directed performance/spotlight (no words to sing).
+            vocal_real = "vocal" in present
+
+            # Vocals from LYRICS (audio-independent): if there are no charted vocals but
+            # there are lyrics in the MIDI, the vocals are driven by them (sing-along/directed/anim).
+            lyrics = _gather_lyrics(mid)
+            # The lyrics track itself can have gaps the author never transcribed
+            # (unscripted screams/ad-libs, common in metal/metalcore) - those read as
+            # silence to idle-gap detection even though the singer is audibly still
+            # performing. Fill them with pseudo-onsets straight from the vocal stem's
+            # own RMS voice-activity, independent of any lyric/note event.
+            voice_fill: list[int] = []
+            if lyrics:
+                try:
+                    from . import audio as _audio_va
+                    if _audio_va.available():
+                        song_folder = os.path.dirname(os.path.abspath(src_path))
+                        vocal_paths = _audio_va.resolve_vocal_audio(
+                            song_folder, allow_separation=do_vocal_sep)
+                        va = None
+                        if vocal_paths:
+                            # Identify source type for logging
+                            p = vocal_paths[0]
+                            from .audio import _vocal_source_from_path
+                            source = _vocal_source_from_path(p)
+                            stats["vocal_sep_source"] = source
+                            # Track the cache path so _clean_vocal_cache can
+                            # delete only this song's cache (not all in folder).
+                            if source in ("mdx", "mogg"):
+                                stats["vocal_cache_path"] = p
+                            va = _audio_va.voice_activity(vocal_paths)
+                        if va is not None:
+                            voice_fill = _audio_va.voice_active_ticks(va, tempo_map, tpb)
+                            if voice_fill:
+                                stats["audio_vocal_fill"] = len(voice_fill)
+                except Exception:
+                    voice_fill = []
+            if "vocal" not in present and lyrics:
+                merged = sorted(set(lyrics) | set(voice_fill))
+                inst_onsets.setdefault("vocal", merged)
+                vocal_real = True
+                stats["audio_lyrics"] = True
+                # PART VOCALS exists (lyrics) but has no gems → it didn't enter part_onsets,
+                # so the vocalist stayed ALWAYS idle (mood markers never injected).
+                # Drive the vocalist's animation from the LYRICS on the existing track itself.
+                vt = next((n for n in vocal_tracks
+                           if n.strip().upper() == "PART VOCALS"), None) \
+                    or (vocal_tracks[0] if vocal_tracks else None)
+                if vt is not None:
+                    part_onsets[vt] = merged       # → generate_animations animates the track
+                else:
+                    pseudo_anim["vocal"] = merged   # no track → create a dedicated animation
+            elif "vocal" in present and lyrics:
+                # PARTIALLY charted vocals (e.g. only the chorus has melody notes, the
+                # rest is plain lyrics): merge the lyric onsets (+ voice-activity fill)
+                # into the real note onsets so idle-gap detection (build_animations)
+                # sees the full picture. Without this, gaps between charted notes read
+                # as idle even when lyrics/talky gems (_chart_vocals_from_lyrics) fill
+                # them in later - the vocalist's body froze in "idle" while singing.
+                merged = sorted(set(inst_onsets["vocal"]) | set(lyrics) | set(voice_fill))
+                inst_onsets["vocal"] = merged
+                vt = next((n for n in vocal_tracks
+                           if n.strip().upper() == "PART VOCALS"), None) \
+                    or (vocal_tracks[0] if vocal_tracks else None)
+                if vt is not None and vt in part_onsets:
+                    part_onsets[vt] = merged
+
             from . import audio as _audio
             a_paths = ([audio_path] if audio_path
                        else _audio.find_song_audio(os.path.dirname(os.path.abspath(src_path))))
-            dur_s = _audio.audio_duration_seconds(a_paths) if a_paths else None
-            if dur_s:
-                a_tick = ms_to_abs_tick(dur_s * 1000.0, tempo_map, tpb)
-                if a_tick > song_end_audio:
-                    song_end_audio = a_tick
-                    stats["end_extended_to_audio"] = True
-        except Exception:
-            pass
+            audio_accents = None
+            energy_env = None
+            audio_strobe = None
+            drop_ticks = None
+            band_activity: dict[str, list[int]] = {}
+            if _audio.available() and a_paths:
+                if not drum_onsets:                       # Layer 1
+                    pd = _audio.percussive_onset_ticks(a_paths, tempo_map, tpb)
+                    if pd:
+                        drum_onsets = pd
+                        stats["audio_drums"] = True
+                # Strong audio transients (chorus hits, crashes, stabs) → snap light
+                # changes / pyro to real musical hits, incl. audio-only ones.
+                audio_accents = _audio.flux_accents(a_paths, tempo_map, tpb)
+                if audio_accents:
+                    stats["audio_accents"] = len(audio_accents)
+                # Color temperature per section from the audio timbre (spectral centroid):
+                # dark→warm, bright→cool. Sets s.warmth so the lightshow tints each section.
+                if sections:
+                    warmth = _audio.section_brightness_tiers(
+                        a_paths, sections, tempo_map, tpb)
+                    if warmth:
+                        for s, w in zip(sections, warmth):
+                            s.warmth = w
+                        stats["audio_warm"] = sum(1 for w in warmth if w == "warm")
+                        stats["audio_cool"] = sum(1 for w in warmth if w == "cool")
+                # Within-section energy envelope (sub-section composite score) → the light
+                # cadence speeds up in the loud half of a section, eases in the quiet half.
+                if sections:
+                    energy_env = _audio.energy_envelope(
+                        a_paths, sections, tempo_map, tpb)
+                    if energy_env:
+                        stats["audio_env_spans"] = len(energy_env)
+                # Sustained spectral-flux walls (blast/tremolo) → continuous strobe, even
+                # for audio-only walls the MIDI drums miss.
+                audio_strobe = _audio.flux_strobe_spans(a_paths, tempo_map, tpb)
+                if audio_strobe:
+                    stats["audio_strobe_spans"] = len(audio_strobe)
+                # Blackout anchors = start of calm low-energy regions (ground-truth: the
+                # 20 official venues put blackout in calm states, not at a sharp fall).
+                if sections:
+                    drop_ticks = _audio.calm_blackout_ticks(
+                        a_paths, sections, tempo_map, tpb)
+                    if drop_ticks:
+                        stats["audio_blackout_calm"] = len(drop_ticks)
+                # Audio band activity for camera identity refinement
+                band_activity = {}
+                for band in ("bass", "drums", "lead"):
+                    ba = _audio.band_activity_ticks(a_paths, tempo_map, tpb, band)
+                    if ba:
+                        band_activity[band] = ba
+                if band_activity:
+                    stats["audio_band_activity"] = list(band_activity.keys())
+                # Character ANIMATION from the audio: ONLY vocals. Animating an ABSENT
+                # bass/guitar/drums/keys creates a PART track with no charted gems -
+                # RB3 doesn't render the character (camera/animation pointing at nothing)
+                # and YARG doesn't even support characters. We only animate instruments
+                # with a REAL chart. Vocals are the exception: the "animation" is the
+                # mouth lipsync, which makes sense from the singing detected in the audio
+                # (or from the lyrics) even without charted gems - the vocalist sings.
+                # (Keys were already out for the same reason; now bass/guitar/drums follow
+                # the rule.)
+                if "vocal" not in present and not lyrics:  # no lyrics → 'lead' band
+                    ba = _audio.band_activity_ticks(a_paths, tempo_map, tpb, "lead")
+                    if ba:
+                        pseudo_anim["vocal"] = ba
+                        # Even without a chart/lyrics, we identified when there's singing →
+                        # enables directed_vocals + spotlight (but NOT crowd/sing: no words).
+                        inst_onsets.setdefault("vocal", ba)
+            stats["audio_anim_instr"] = sorted(pseudo_anim)
+            # Flag for the venue: only real vocals (chart/lyrics) authorize crowd/sing-along.
+            if vocal_real:
+                inst_onsets["_vocal_real"] = inst_onsets.get("vocal", [])
 
-        # [end] event: RB3 needs it to know where the song ends. Without it,
-        # the BEAT track runs out and the BandDirector leaves the characters in a
-        # slow drifting camera until the audio ends. The 20 official venues ALWAYS
-        # have [end] on the last tick. If it's missing, we inject it into EVENTS at the
-        # audio end.
-        if song_end > 0 and not _has_end_event(events_track):
-            ei = next((i for i, t in enumerate(new_mid.tracks)
-                       if t.name.strip().upper() == "EVENTS"), None)
-            end_ev = [AbsEvent(song_end_audio, mido.MetaMessage("text", text="[end]", time=0))]
-            if ei is not None:
-                new_mid.tracks[ei] = _inject_meta(new_mid.tracks[ei], end_ev)
+            if has_venue:
+                # Option A: keep the author's existing VENUE (already copied intact) and
+                # don't generate ours. Animations/BEAT/[end] below still run as usual.
+                stats["venue_skipped"] = True
             else:
-                new_mid.tracks.append(_inject_meta(_named_track("EVENTS"), end_ev))
-            stats["end_added"] = True
+                venue_events = generate_venue(
+                    events_track, bre_spans, song_end, tempo_map, time_sig_map, tpb,
+                    theme, accents, onsets, sections=sections, drum_onsets=drum_onsets,
+                    inst_onsets=inst_onsets, n_harm=n_harm, fill_onsets=fill_onsets,
+                    dbass_onsets=dbass_onsets, audio_onsets=audio_accents,
+                    energy_env=energy_env, audio_strobe_spans=audio_strobe,
+                    drop_ticks=drop_ticks, band_activity=band_activity,
+                    pp_style=pp_style)
+                new_mid.tracks.append(build_venue_track(venue_events))
+                stats["venue_events"] = len(venue_events)
+                stats["venue_theme"] = theme
+                # Crowd state events ([crowd_*]) belong on the EVENTS track (RB3/YARG read
+                # them there, NOT from VENUE). Tie them to the same energy map and inject.
+                if sections:
+                    pause_spans = find_pause_spans(onsets, time_sig_map, tpb)
+                    crowd_events = build_crowd(sections, tpb, pause_spans)
+                    if crowd_events:
+                        ei = next((i for i, t in enumerate(new_mid.tracks)
+                                   if t.name.strip().upper() == "EVENTS"), None)
+                        if ei is not None:
+                            new_mid.tracks[ei] = _inject_meta(new_mid.tracks[ei], crowd_events)
+                        else:
+                            new_mid.tracks.append(
+                                _inject_meta(_named_track("EVENTS"), crowd_events))
+                        stats["crowd_events"] = len(crowd_events)
 
-        # BEAT track (pulse): if the song doesn't have one, we create it. If it does,
-        # we make sure it reaches the end - a BEAT that ends early (the case of the midi
-        # in the "beattrack" folder) leaves the characters FROZEN in-game, because the
-        # BandDirector stops receiving the pulse. In that case we extend it.
-        if song_end > 0:
-            end_tick = max(find_end_tick(events_track, song_end), song_end_audio)
-            if not has_beat:
-                new_mid.tracks.append(build_beat_track(end_tick, time_sig_map, tpb))
-                stats["beat_added"] = True
-            else:
-                bi = next((i for i, t in enumerate(new_mid.tracks)
-                           if t.name.strip().upper() == "BEAT"), None)
-                if bi is not None:
-                    ext = extend_beat_track(new_mid.tracks[bi], end_tick,
-                                            time_sig_map, tpb)
-                    if ext is not new_mid.tracks[bi]:
-                        new_mid.tracks[bi] = ext
-                        stats["beat_extended"] = True
+            # Per-PART-track character animations (mood markers).
+            # Vocal phrase ends (105/106) → the vocalist only lowers the mic at the end
+            # of the phrase, not 1 beat after the last syllable.
+            v_track = next((t for t in new_mid.tracks
+                            if t.name.strip().upper() == "PART VOCALS"), None)
+            v_pe = phrase_end_ticks(v_track) if v_track is not None else None
+            anim = generate_animations(part_onsets, sections, theme, tpb, time_sig_map,
+                                       vocal_phrase_ends=v_pe)
+            anim_total = 0
+            for i, tr in enumerate(new_mid.tracks):
+                markers = anim.get(tr.name)
+                if markers:
+                    new_mid.tracks[i] = _inject_meta(tr, markers)
+                    anim_total += len(markers)
+            # Layer 2: animation tracks for ABSENT instruments (audio/lyrics).
+            if pseudo_anim:
+                from .venue import build_animations, instrument_extras
+                existing = {t.name.strip().upper() for t in new_mid.tracks}
+                for inst, ons in pseudo_anim.items():
+                    tname = _INST_TRACK[inst]
+                    if tname.upper() in existing:
+                        continue
+                    markers = build_animations(ons, sections, tpb, time_sig_map, inst)
+                    markers += instrument_extras(inst, ons, sections, tpb)
+                    if markers:
+                        new_mid.tracks.append(_build_anim_track(tname, markers))
+                        anim_total += len(markers)
+                        existing.add(tname.upper())
+            stats["anim_events"] = anim_total
 
-    # Drummer limb animations (PART DRUMS notes 24-51): RB3 needs them authored or
-    # the drummer stays idle. Synthesise them HERE, into the notes.mid track, from the
-    # Expert gems - NOT at conversion time. No-op if the drums track is already animated.
-    if do_drum_anim:
-        try:
-            from . import convert as _convert
-            new_mid, drum_anim_stats = _convert.generate_drum_animations(new_mid)
-            if drum_anim_stats.get("added"):
-                stats["drum_anim_events"] = drum_anim_stats["added"]
-        except Exception:
-            pass
+            # The instruments often stop BEFORE the audio really ends (outro, fade-out,
+            # ring-out). The [end] event and the BEAT pulse must reach the END OF THE AUDIO,
+            # otherwise the characters freeze and the camera drifts for the remaining seconds.
+            # Compute the audio end in ticks and use it as a floor for song_end.
+            song_end_audio = song_end
+            try:
+                from . import audio as _audio
+                a_paths = ([audio_path] if audio_path
+                           else _audio.find_song_audio(os.path.dirname(os.path.abspath(src_path))))
+                dur_s = _audio.audio_duration_seconds(a_paths) if a_paths else None
+                if dur_s:
+                    a_tick = ms_to_abs_tick(dur_s * 1000.0, tempo_map, tpb)
+                    if a_tick > song_end_audio:
+                        song_end_audio = a_tick
+                        stats["end_extended_to_audio"] = True
+            except Exception:
+                pass
 
-    # Generate talkies: for songs with lyrics, chart PART VOCALS as talky/unpitched
-    # vocals (extended to the next syllable + gap). Onyx generates the lipsync itself
-    # from the length of these tubes in the .ini→RB3/PS3 build.
-    if (do_talkies or do_lipsync) and song_end > 0:
-        _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
-                       do_talkies=do_talkies, do_lipsync=do_lipsync,
-                       do_vocal_sep=do_vocal_sep)
+            # [end] event: RB3 needs it to know where the song ends. Without it,
+            # the BEAT track runs out and the BandDirector leaves the characters in a
+            # slow drifting camera until the audio ends. The 20 official venues ALWAYS
+            # have [end] on the last tick. If it's missing, we inject it into EVENTS at the
+            # audio end.
+            if song_end > 0 and not _has_end_event(events_track):
+                ei = next((i for i, t in enumerate(new_mid.tracks)
+                           if t.name.strip().upper() == "EVENTS"), None)
+                end_ev = [AbsEvent(song_end_audio, mido.MetaMessage("text", text="[end]", time=0))]
+                if ei is not None:
+                    new_mid.tracks[ei] = _inject_meta(new_mid.tracks[ei], end_ev)
+                else:
+                    new_mid.tracks.append(_inject_meta(_named_track("EVENTS"), end_ev))
+                stats["end_added"] = True
 
-    new_mid.save(dst_path)
-    if stats.get("sysex_kept"):
-        _restore_ps_sysex(dst_path)
+            # BEAT track (pulse): if the song doesn't have one, we create it. If it does,
+            # we make sure it reaches the end - a BEAT that ends early (the case of the midi
+            # in the "beattrack" folder) leaves the characters FROZEN in-game, because the
+            # BandDirector stops receiving the pulse. In that case we extend it.
+            if song_end > 0:
+                end_tick = max(find_end_tick(events_track, song_end), song_end_audio)
+                if not has_beat:
+                    new_mid.tracks.append(build_beat_track(end_tick, time_sig_map, tpb))
+                    stats["beat_added"] = True
+                else:
+                    bi = next((i for i, t in enumerate(new_mid.tracks)
+                               if t.name.strip().upper() == "BEAT"), None)
+                    if bi is not None:
+                        ext = extend_beat_track(new_mid.tracks[bi], end_tick,
+                                                time_sig_map, tpb)
+                        if ext is not new_mid.tracks[bi]:
+                            new_mid.tracks[bi] = ext
+                            stats["beat_extended"] = True
 
-    # Spam gate: measure PP/directed density and store for caller logging
-    if do_venue:
-        try:
-            from . import validate as _val
-            spam = _val._measure_spam(new_mid)
-            stats["spam_metrics"] = spam
-        except Exception:
-            pass
+        # Drummer limb animations (PART DRUMS notes 24-51): RB3 needs them authored or
+        # the drummer stays idle. Synthesise them HERE, into the notes.mid track, from the
+        # Expert gems - NOT at conversion time. No-op if the drums track is already animated.
+        if do_drum_anim:
+            try:
+                from . import convert as _convert
+                new_mid, drum_anim_stats = _convert.generate_drum_animations(new_mid)
+                if drum_anim_stats.get("added"):
+                    stats["drum_anim_events"] = drum_anim_stats["added"]
+            except Exception:
+                pass
 
-    # Clean up vocal-separation cache file (~9 MB) — only needed during this
-    # song's processing. Deleting after each song keeps 1000-song batches lean.
-    _clean_vocal_cache(src_path, stats.get("vocal_cache_path"))
+        # Generate talkies: for songs with lyrics, chart PART VOCALS as talky/unpitched
+        # vocals (extended to the next syllable + gap). Onyx generates the lipsync itself
+        # from the length of these tubes in the .ini→RB3/PS3 build.
+        if (do_talkies or do_lipsync) and song_end > 0:
+            _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
+                           do_talkies=do_talkies, do_lipsync=do_lipsync,
+                           do_vocal_sep=do_vocal_sep)
 
-    return stats
+        new_mid.save(dst_path)
+        if stats.get("sysex_kept"):
+            _restore_ps_sysex(dst_path)
+
+        # Spam gate: measure PP/directed density and store for caller logging
+        if do_venue:
+            try:
+                from . import validate as _val
+                spam = _val._measure_spam(new_mid)
+                stats["spam_metrics"] = spam
+            except Exception:
+                pass
+
+
+        return stats
+    finally:
+        _clean_vocal_cache(src_path, stats.get("vocal_cache_path"))
 
 
 _VOCAL_TALKY_PITCH = 50          # note within the vocal range (36-84); irrelevant for talky
@@ -986,8 +985,9 @@ def _clean_vocal_cache(mid_path: str, cache_path: str | None = None) -> None:
     if cache_path is not None:
         try:
             os.remove(cache_path)
-        except Exception:
-            pass
+        except Exception as exc:
+            import sys
+            sys.stderr.write(f"  [cache] cleanup warning: {exc}\n")
         return
     # Fallback: scan the folder (legacy / unknown paths)
     folder = os.path.dirname(os.path.abspath(mid_path))
@@ -995,8 +995,9 @@ def _clean_vocal_cache(mid_path: str, cache_path: str | None = None) -> None:
         if f.startswith(".downcharter_vocals_") and f.endswith(".wav"):
             try:
                 os.remove(os.path.join(folder, f))
-            except Exception:
-                pass
+            except Exception as exc:
+                import sys
+                sys.stderr.write(f"  [cache] cleanup warning: {exc}\n")
 
 
 def _abs_phrase_ends(abs_evts: list[AbsEvent]) -> list[int]:
@@ -1114,13 +1115,10 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
                     folder, allow_separation=do_vocal_sep)
                 if vocal:
                     p = vocal[0]
-                    if p.endswith("_mdx.wav"):
-                        stats["vocal_sep_source"] = "mdx"
-                    elif p.endswith("_mogg.wav"):
-                        stats["vocal_sep_source"] = "mogg"
-                    elif stats.get("vocal_sep_source") is None:
-                        stats["vocal_sep_source"] = "stems"
-                    if stats.get("vocal_sep_source") in ("mdx", "mogg"):
+                    from .audio import _vocal_source_from_path
+                    source = _vocal_source_from_path(p)
+                    stats["vocal_sep_source"] = source
+                    if source in ("mdx", "mogg"):
                         stats["vocal_cache_path"] = p
                     va = _audio.voice_activity(vocal)
         except Exception:

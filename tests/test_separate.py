@@ -224,11 +224,11 @@ class TestResample:
         assert out[0] == 42.0  # interp preserves endpoint
 
     def test_dtype_preserved(self):
-        """Output dtype matches input dtype."""
+        """Output dtype is always float32 (int32/float64 inputs are cast)."""
         from downcharter.audio import _resample_np
         src = np.linspace(0, 1, 1000, dtype=np.float64)
         out = _resample_np(src, 48000, 44100)
-        assert out.dtype == np.float64
+        assert out.dtype == np.float32
 
 
 # ══════════════════════════════════════════════════════════════════════
