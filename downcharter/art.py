@@ -218,9 +218,11 @@ def _encode_dxt1(rgb) -> bytes:
         r = (c >> 11) & 0x1F
         g = (c >> 5) & 0x3F
         b = c & 0x1F
-        r_f = ((r.astype(np.float64) << 3) | (r.astype(np.float64) >> 2))
-        g_f = ((g.astype(np.float64) << 2) | (g.astype(np.float64) >> 4))
-        b_f = ((b.astype(np.float64) << 3) | (b.astype(np.float64) >> 2))
+        # Shift/OR must happen on INTEGER dtypes (numpy has no left_shift
+        # ufunc for floats) — replicate the low bits first, cast after.
+        r_f = ((r << 3) | (r >> 2)).astype(np.float64)
+        g_f = ((g << 2) | (g >> 4)).astype(np.float64)
+        b_f = ((b << 3) | (b >> 2)).astype(np.float64)
         return np.stack([r_f, g_f, b_f], axis=-1)
 
     # ── 6. Least-squares refinement (3 iterations) ──────────────────────
@@ -335,7 +337,8 @@ def build_png_xbox(cover_path: str, size: int = _SIZE) -> bytes:
     ``.png_xbox`` (whose HMX header stays little-endian).
     """
     import numpy as np
-    data = np.frombuffer(build_png_ps3(cover_path, size), dtype=np.uint8)
+    # frombuffer over bytes is READ-ONLY — copy into a writable array first.
+    data = np.frombuffer(build_png_ps3(cover_path, size), dtype=np.uint8).copy()
     # Byte-swap every u16 word in the payload (skip the 32-byte HMX header)
     payload = data[32:]
     even_len = (len(payload) // 2) * 2
