@@ -273,6 +273,7 @@ class App(tk.Tk):
         self._do_hide_bg     = tk.BooleanVar(value=cfg.get("hide_bg", False))
         self._do_lipsync     = tk.BooleanVar(value=cfg.get("lipsync", False))      # talkies
         self._do_lipsync_trk = tk.BooleanVar(value=cfg.get("lipsync_track", False))  # LIPSYNC1 viseme track
+        self._do_vocal_sep   = tk.BooleanVar(value=cfg.get("vocal_sep", True))
         self._pp_style       = tk.StringVar(value=cfg.get("pp_style", "authored"))
         # ── Convert tab (native PS3 package generation) ──
         self._conv_folder = cfg.get("conv_folder", "") or ""
@@ -286,6 +287,7 @@ class App(tk.Tk):
                     self._do_medium, self._do_easy, self._do_venue, self._do_export_venue,
                     self._do_drum_anim,
                     self._do_hide_bg, self._do_lipsync, self._do_lipsync_trk,
+                    self._do_vocal_sep,
                     self._pp_style,
                     self._conv_pedal, self._do_sng_preserve_dirs):
             var.trace_add("write", lambda *_: self._save_settings())
@@ -409,6 +411,8 @@ class App(tk.Tk):
         self._lbl("EXTRAS", p_ctrl).pack(anchor="w", pady=(0, 6))
         CheckTile(p_ctrl, "Hide in-game background (image only)",
                   self._do_hide_bg, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        CheckTile(p_ctrl, "Vocal separation  (MDX-NET, .onnx model required)",
+                  self._do_vocal_sep, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
         tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(0, 12))
         btn_row = tk.Frame(p_ctrl, bg=BG)
@@ -486,6 +490,7 @@ class App(tk.Tk):
             "hide_bg":      bool(self._do_hide_bg.get()),
             "lipsync":      bool(self._do_lipsync.get()),
             "lipsync_track": bool(self._do_lipsync_trk.get()),
+            "vocal_sep":     bool(self._do_vocal_sep.get()),
             "pp_style":      self._pp_style.get(),
             "conv_folder":        self._conv_folder,
             "conv_out":           self._conv_out,
@@ -568,6 +573,7 @@ class App(tk.Tk):
         hide_bg = self._do_hide_bg.get()
         lipsync = self._do_lipsync.get()
         lipsync_trk = self._do_lipsync_trk.get()
+        vocal_sep = self._do_vocal_sep.get()
         pp_style = self._pp_style.get()
         diffs = [d for d, v in [("hard", self._do_hard),
                                   ("medium", self._do_medium),
@@ -584,6 +590,8 @@ class App(tk.Tk):
         if hide_bg: self._plog("  Hide background: yes (background.png/jpg → .bak)\n")
         if lipsync_trk: self._plog("  Lipsync: yes (LIPSYNC1 viseme track from lyrics)\n")
         if lipsync: self._plog("  Talkies: yes (talky vocals charted from lyrics)\n")
+        if vocal_sep: self._plog("  Vocal sep: yes (MDX-NET)\n")
+        else: self._plog("  Vocal sep: no\n")
         self._plog("\n")
         self._btn_conv.set_enabled(False); self._btn_rev.set_enabled(False)
         self._cancel.clear()
@@ -597,6 +605,7 @@ class App(tk.Tk):
                                do_drum_anim=drum_anim,
                                export_venue=self._do_export_venue.get(),
                                pp_style=pp_style,
+                               do_vocal_sep=vocal_sep,
                                cancel=self._cancel,
                                status_fn=lambda t: self._pstatus(f"Processing:  {t}"),
                                done_fn=lambda ok, err, tot: self._pstatus(

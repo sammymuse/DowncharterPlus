@@ -467,6 +467,7 @@ def process_midi(
     do_talkies: bool = False,
     do_drum_anim: bool = True,
     pp_style: str = "authored",
+    do_vocal_sep: bool = True,
 ) -> dict:
     """
     Process a MIDI file:
@@ -682,7 +683,8 @@ def process_midi(
                 from . import audio as _audio_va
                 if _audio_va.available():
                     song_folder = os.path.dirname(os.path.abspath(src_path))
-                    vocal_paths = _audio_va.resolve_vocal_audio(song_folder)
+                    vocal_paths = _audio_va.resolve_vocal_audio(
+                        song_folder, allow_separation=do_vocal_sep)
                     va = None
                     if vocal_paths:
                         va = _audio_va.voice_activity(vocal_paths)
@@ -929,7 +931,8 @@ def process_midi(
     # from the length of these tubes in the .ini→RB3/PS3 build.
     if (do_talkies or do_lipsync) and song_end > 0:
         _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
-                       do_talkies=do_talkies, do_lipsync=do_lipsync)
+                       do_talkies=do_talkies, do_lipsync=do_lipsync,
+                       do_vocal_sep=do_vocal_sep)
 
     new_mid.save(dst_path)
     if stats.get("sysex_kept"):
@@ -987,7 +990,8 @@ def _gen_phrase_notes(notes: list[tuple[int, int]], tpb: int) -> list[tuple[int,
 
 def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
                               tempo_map=None, folder: str | None = None,
-                              write_gems: bool = True) -> None:
+                              write_gems: bool = True,
+                              do_vocal_sep: bool = True) -> None:
     """Create unpitched gems (talky, lyric '#') in PART VOCALS from the lyrics,
     filling only the syllables NOT already covered by a real (manually pitched)
     note — a track can be partially charted (e.g. only the chorus has melody
@@ -1055,7 +1059,8 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
         try:
             from . import audio as _audio
             if _audio.available():
-                vocal = _audio.resolve_vocal_audio(folder)
+                vocal = _audio.resolve_vocal_audio(
+                    folder, allow_separation=do_vocal_sep)
                 if vocal:
                     va = _audio.voice_activity(vocal)
         except Exception:
@@ -1142,7 +1147,8 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
 
 
 def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
-                   do_talkies: bool = True, do_lipsync: bool = True) -> None:
+                   do_talkies: bool = True, do_lipsync: bool = True,
+                   do_vocal_sep: bool = True) -> None:
     """Two independent lipsync outputs from the lyrics, each toggled separately:
 
     1. Talky vocals in PART VOCALS (``do_talkies``) — the path RB/Onyx's `.ini` import
@@ -1163,7 +1169,8 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
         return
     folder = os.path.dirname(os.path.abspath(dst_path))
     spans = _chart_vocals_from_lyrics(new_mid, tpb, stats, tempo_map, folder,
-                                      write_gems=do_talkies) or []
+                                       write_gems=do_talkies,
+                                       do_vocal_sep=do_vocal_sep) or []
     if do_lipsync and spans and tempo_map is not None and song_end > 0:
         try:
             from . import lipsync as _lip
@@ -1377,6 +1384,7 @@ def process_folder(
     do_drum_anim: bool = True,
     export_venue: bool = False,
     pp_style: str = "authored",
+    do_vocal_sep: bool = True,
     cancel: object | None = None,
     status_fn: Callable[[str], Any] | None = None,
     done_fn: Callable[[int, int, int], Any] | None = None,
@@ -1430,7 +1438,8 @@ def process_folder(
                 shutil.copy2(path, backup)
             s = process_midi(path, path, diffs_to_gen, do_expert_plus,
                              threshold_ms, do_venue, None, do_lipsync, do_talkies,
-                             do_drum_anim=do_drum_anim, pp_style=pp_style)
+                             do_drum_anim=do_drum_anim, pp_style=pp_style,
+                             do_vocal_sep=do_vocal_sep)
             modified += 1
             skipped_total += len(s.get("diffs_skipped", []))
             if s.get("venue_skipped"):
