@@ -957,10 +957,31 @@ def process_midi(
         except Exception:
             pass
 
+    # Clean up vocal-separation cache files — they can be ~9 MB per song and
+    # are only needed during this song's processing (voice activity, syllable
+    # trimming). Deleting after each song keeps 1000-song batches lean.
+    _clean_vocal_cache(dst_path)
+
     return stats
 
 
 _VOCAL_TALKY_PITCH = 50          # note within the vocal range (36-84); irrelevant for talky
+
+
+def _clean_vocal_cache(mid_path: str) -> None:
+    """Remove ``.downcharter_vocals_*.wav`` cache files from the song folder.
+
+    These are vocal-separation caches created by ``audio.resolve_vocal_audio``.
+    They are only needed during this song's processing step and would otherwise
+    accumulate (one ~9 MB file per processed song).
+    """
+    folder = os.path.dirname(os.path.abspath(mid_path))
+    for f in os.listdir(folder):
+        if f.startswith(".downcharter_vocals_") and f.endswith(".wav"):
+            try:
+                os.remove(os.path.join(folder, f))
+            except Exception:
+                pass
 
 
 def _abs_phrase_ends(abs_evts: list[AbsEvent]) -> list[int]:
@@ -1677,6 +1698,14 @@ def revert_folder(folder: str, log_fn,
                     os.rename(backup, original)
                     reverted += 1
                     log_fn(f"  ↩ {os.path.relpath(original, folder)}\n", "ok")
+                except Exception as e:
+                    log_fn(f"  ✗ {f}: {e}\n", "err")
+            elif f.startswith(".downcharter_vocals_") and f.endswith(".wav"):
+                cache = os.path.join(root, f)
+                try:
+                    os.remove(cache)
+                    reverted += 1
+                    log_fn(f"  ✂ {f}\n", "info")
                 except Exception as e:
                     log_fn(f"  ✗ {f}: {e}\n", "err")
     if reverted == 0:
