@@ -129,6 +129,26 @@ def _noop_log(msg, tag=None):
     pass
 
 
+def _decode_ini_bytes(raw: bytes) -> str:
+    """Decode a song.ini's raw bytes, detecting UTF-16 (Windows editors like
+    Notepad commonly save .ini files that way) via BOM before falling back to
+    UTF-8 (BOM or not) and finally Latin-1 for un-BOM'd Western text. Reading
+    a UTF-16 file as UTF-8 doesn't raise — every other byte is a NUL, the
+    `[song]` header never matches, and the whole file silently yields zero
+    metadata pairs."""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        # "utf-16" (not "-le"/"-be") auto-detects endianness from the BOM
+        # AND strips it; decoding with an explicit variant leaves the BOM
+        # character (U+FEFF) glued to the first line.
+        return raw.decode("utf-16", errors="replace")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
 def _read_ini_pairs(path: str) -> list:
     """(key, value) pairs from a song.ini's [song] section, byte-faithful to the
     reference SNG encoder's IniParser so YARG/Clone Hero round-trip the metadata
@@ -142,29 +162,50 @@ def _read_ini_pairs(path: str) -> list:
     order: list[str] = []              # first-seen order
     in_song = False
     try:
-        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
-            for raw in f:
-                line = raw.strip()
-                if not line or line[0] in "#;":
-                    continue
-                if line.startswith("[") and line.endswith("]"):
-                    in_song = line[1:-1].strip().lower() == "song"
-                    continue
-                if not in_song or "=" not in line:
-                    continue
-                k, _, v = line.partition("=")
-                k = k.strip()
-                v = v.strip()
-                if not k:
-                    continue
-                lk = k.lower()
-                if lk not in canon:
-                    canon[lk] = k
-                    order.append(k)
-                values[canon[lk]] = v
+        with open(path, "rb") as f:
+            text = _decode_ini_bytes(f.read())
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line[0] in "#;":
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                in_song = line[1:-1].strip().lower() == "song"
+                continue
+            if not in_song or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip()
+            v = v.strip()
+            if not k:
+                continue
+            lk = k.lower()
+            if lk not in canon:
+                canon[lk] = k
+                order.append(k)
+            values[canon[lk]] = v
     except Exception:
         pass
     return [(k, values[k]) for k in order]
+
+
+def _xor_mask_bytes(blob: bytes, mask_arr) -> bytes:
+    """Vectorized XOR mask: out[i] = in[i] XOR (xorMask[i & 15] XOR (i & 0xFF)).
+
+    The combined mask value (xorMask[i & 15] ^ (i & 0xFF)) is periodic with
+    period 256 (lcm of 16 and 256), so a 256-byte pattern computed once and
+    tiled replaces the byte-by-byte Python loop with numpy array ops.
+    """
+    import numpy as np
+
+    n = len(blob)
+    if n == 0:
+        return b""
+    idx = np.arange(256, dtype=np.uint8)
+    pattern = mask_arr[idx & 0x0F] ^ idx
+    reps = (n + 255) // 256
+    full_pattern = np.tile(pattern, reps)[:n]
+    data = np.frombuffer(blob, dtype=np.uint8)
+    return np.bitwise_xor(data, full_pattern).tobytes()
 
 
 def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
@@ -205,6 +246,10 @@ def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
                   + (8 + index_section_len)         # file-index section (with its len field)
                   + 8)                              # FileData section length field
 
+    import numpy as np
+
+    mask_arr = np.frombuffer(xor_mask, dtype=np.uint8)
+
     index_body = bytearray()
     data_body = bytearray()
     offset = data_start
@@ -212,10 +257,7 @@ def pack_sng(metadata, files: dict, xor_mask: bytes | None = None) -> bytes:
         index_body += struct.pack("<B", len(nb)) + nb
         index_body += struct.pack("<Q", len(blob))
         index_body += struct.pack("<Q", offset)
-        masked = bytearray(len(blob))
-        for i, b in enumerate(blob):
-            masked[i] = b ^ (xor_mask[i & 0x0F] ^ (i & 0xFF))
-        data_body += masked
+        data_body += _xor_mask_bytes(blob, mask_arr)
         offset += len(blob)
 
     index_section = (struct.pack("<Q", index_section_len)
@@ -294,7 +336,7 @@ def build_sng_song(src_folder: str, log_fn=None, out_base: str | None = None) ->
         metadata = _read_ini_pairs(ini_path)
         log(f"    ◇ meta: {len(metadata)} song.ini field(s)\n", "info")
     else:
-        metadata = [(k, v) for k, v in meta.items()] or [("name", shortname)]
+        metadata = [("name", raw_folder_name)]
         log(f"    ! meta: no song.ini — minimal metadata\n", "warn")
 
     # 3) pack the SNG
