@@ -1127,7 +1127,10 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
             target = t + tpb                   # last with no phrase → ~1 beat
         # Confirm the sustain against the vocal audio: if the voice goes silent
         # before `target`, end the note there instead of faking a long sustain.
-        if va is not None:
+        # Audio confirmation: only trim if this syllable is NOT already covered by
+        # a real (manually charted) note. Pre-charted vocals define their own
+        # mouth-opening boundaries — we must not override them with audio trimming.
+        if va is not None and not _covered(t, t + tpb):
             start_s = tick_to_ms(t, tempo_map, tpb) / 1000.0
             ceil_s = tick_to_ms(target, tempo_map, tpb) / 1000.0
             off_s = _audio.voice_offset_s(va, start_s, ceil_s)
