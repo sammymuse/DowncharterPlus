@@ -1533,23 +1533,6 @@ def process_folder(
             elif do_venue and s.get("venue_skipped"):
                 log_fn(f"    ↷ venue: skipped (already authored)"
                        f" · animations: {s.get('anim_events', 0)}\n", "info")
-            # Spam gate warning: log if PP density falls outside official p25-p75 envelope
-            spam = s.get("spam_metrics")
-            if spam:
-                from . import validate as _val
-                bl = _val._SPAM_BASELINE
-                pp_vals = spam["pp_events_per_section"]
-                if pp_vals:
-                    med = sorted(pp_vals)[len(pp_vals) // 2]
-                    p25 = bl["pp_events_per_section"]["p25"]
-                    p75 = bl["pp_events_per_section"]["p75"]
-                    if med < p25 or med > p75:
-                        if med > p75:
-                            rec = "Conservative"
-                        else:
-                            rec = "Dynamic"
-                        log_fn(f"    ⚠ PP density {med}/section (med) outside p25-p75 "
-                               f"[{p25}-{p75}] - try PP style: {rec}\n", "warn")
             if s.get("vocals_charted"):
                 ph = s.get("vocal_phrases_gen")
                 ph_txt = f" + {ph} phrases" if ph else ""
