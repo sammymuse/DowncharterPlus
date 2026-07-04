@@ -242,7 +242,10 @@ def _try_mdx_separation(
             mono_vocals = _resample_np(mono_vocals, model_sr, file_sr)
         if _atomic_write_cache(mdx_cache, mono_vocals, file_sr):
             size_mb = os.path.getsize(mdx_cache) / 2**20
-            msg = f"  [mdx]  done ({size_mb:.1f} MB cached)\n"
+            from . import separate as _sep_mod
+            prov = getattr(_sep_mod, "last_provider", None)
+            prov_txt = f" · {prov}" if prov else ""
+            msg = f"  [mdx]  done ({size_mb:.1f} MB cached{prov_txt})\n"
             if log_fn:
                 log_fn(msg, "ok")
             else:

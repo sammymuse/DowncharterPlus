@@ -174,6 +174,12 @@ def _data_path() -> Path:
 #  ONNX session factory
 # ══════════════════════════════════════════════════════════════════════
 
+# Human-readable provider of the LAST session created ("GPU (DirectML)" or
+# "CPU"), surfaced in the per-song log so the user can tell where the
+# separation actually ran.
+last_provider: str | None = None
+
+
 def _make_session(
     model_path: str | Path,
     force_cpu: bool = False,
@@ -198,9 +204,16 @@ def _make_session(
 
     providers = []
     # DmlExecutionProvider is Windows-only; skip on Linux/Mac to avoid
-    # the unnecessary creation failure + exception noise.
+    # the unnecessary creation failure + exception noise. Also only request
+    # it when the installed onnxruntime actually ships it (the plain CPU
+    # wheel emits a UserWarning for unknown providers and falls back anyway).
     if not force_cpu and sys.platform == "win32":
-        providers.append("DmlExecutionProvider")
+        try:
+            avail = _ort.get_available_providers()
+        except Exception:
+            avail = []
+        if "DmlExecutionProvider" in avail:
+            providers.append("DmlExecutionProvider")
     providers.append("CPUExecutionProvider")
 
     try:
@@ -292,6 +305,9 @@ def separate_vocals(
     session, provider = _make_session(str(model_path), force_cpu=force_cpu)
     if session is None:
         return None
+    global last_provider
+    last_provider = ("GPU (DirectML)" if str(provider).startswith("Dml")
+                     else "CPU")
 
     # ── Window ────────────────────────────────────────────────────────
     window = _hann_window(n_fft).astype(np.float32)

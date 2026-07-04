@@ -25,6 +25,16 @@ from .venue import (
 from .audio import _clean_vocal_cache, _vocal_source_from_path
 
 
+def _mdx_provider() -> str | None:
+    """Provider of the last MDX separation ("GPU (DirectML)" / "CPU"), or None
+    if the separation never ran this process (e.g. a leftover cache was used)."""
+    try:
+        from . import separate as _sep
+        return _sep.last_provider
+    except Exception:
+        return None
+
+
 _AUDIO_ENERGY = {"calm": 0, "mid": 1, "high": 2}
 _ENERGY_NAME = {0: "calm", 1: "mid", 2: "high"}
 
@@ -510,6 +520,7 @@ def process_midi(
             "audio_used": False, "audio_drums": False, "audio_lyrics": False,
             "audio_anim_instr": [],
             "vocal_sep_source": None,
+            "vocal_sep_provider": None,  # "GPU (DirectML)" / "CPU" when MDX ran
             "vocal_cache_path": None,  # set by resolve_vocal_audio callers
             "tracks_renamed": norm["tracks_renamed"], "sp_remapped": norm["sp_remapped"],
         }
@@ -702,6 +713,8 @@ def process_midi(
                             # delete only this song's cache (not all in folder).
                             if source in ("mdx", "mogg"):
                                 stats["vocal_cache_path"] = p
+                            if source == "mdx":
+                                stats["vocal_sep_provider"] = _mdx_provider()
                             va = _audio_va.voice_activity(vocal_paths)
                         if va is not None:
                             voice_fill = _audio_va.voice_active_ticks(va, tempo_map, tpb)
@@ -1090,6 +1103,8 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
                     stats["vocal_sep_source"] = source
                     if source in ("mdx", "mogg"):
                         stats["vocal_cache_path"] = p
+                    if source == "mdx":
+                        stats["vocal_sep_provider"] = _mdx_provider()
                     va = _audio.voice_activity(vocal)
         except Exception:
             va = None
@@ -1143,10 +1158,19 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
             gain = _audio.syllable_gain(va, s_s, e_s) if va is not None else 1.0
             lip_spans.append((s_s, e_s, cur, gain))
 
+    # Record audio usage for the lipsync log line even when no gems are written
+    # (fully charted vocals): the viseme weights/ends above already used `va`.
+    if lip_spans:
+        stats["lipsync_audio"] = va is not None
+
     # When talkies are off, or every syllable is already covered by a real
     # (manually charted) note, don't touch PART VOCALS - just hand back the
-    # spans that drive the viseme track.
+    # spans that drive the viseme track. `trimmed` still belongs to the
+    # talkies line (it measures sustain ends the audio shortened), even when
+    # every syllable was already charted and no gems get written here.
     if not do_write or not gems:
+        if trimmed:
+            stats["vocals_trimmed"] = trimmed
         return lip_spans
 
     # phrase markers (105) if the track doesn't have them - RB needs them for the vocals.
@@ -1496,8 +1520,14 @@ def process_folder(
                        f" · animations: {s.get('anim_events', 0)}{audio}{extra}\n", "info")
             vsrc = s.get("vocal_sep_source")
             if vsrc:
-                log_fn(f"    ◇ vocal source: {vsrc}"
-                       f"{' (cache)' if vsrc in ('mdx', 'mogg') else ''}\n", "info")
+                prov = s.get("vocal_sep_provider")
+                if prov:
+                    note = f" · {prov}"
+                elif vsrc in ("mdx", "mogg"):
+                    note = " (cache)"
+                else:
+                    note = ""
+                log_fn(f"    ◇ vocal source: {vsrc}{note}\n", "info")
             elif do_venue and s.get("venue_skipped"):
                 log_fn(f"    ↷ venue: skipped (already authored)"
                        f" · animations: {s.get('anim_events', 0)}\n", "info")
@@ -1508,8 +1538,14 @@ def process_folder(
                 tr_txt = f" · {tr} trimmed by audio" if tr else ""
                 log_fn(f"    ◇ talkies: {s['vocals_charted']} charted vocals"
                        f"{ph_txt}{tr_txt}\n", "info")
+            elif s.get("vocals_trimmed"):
+                # Already fully charted (no gems to write) — the trims still
+                # happened, just against the manually authored note ends.
+                log_fn(f"    ◇ talkies: already charted"
+                       f" · {s['vocals_trimmed']} trimmed by audio\n", "info")
             if s.get("lipsync_events"):
-                log_fn(f"    ◇ lipsync: {s['lipsync_events']} viseme keyframes\n", "info")
+                au = " · audio-guided" if s.get("lipsync_audio") else ""
+                log_fn(f"    ◇ lipsync: {s['lipsync_events']} viseme keyframes{au}\n", "info")
             if s.get("lipsync_error"):
                 log_fn(f"    ✗ lipsync error: {s['lipsync_error']}\n", "err")
             for sk in s.get("diffs_skipped", []):

@@ -4,3 +4,12 @@ mido>=1.3
 numpy>=1.24
 soundfile>=0.12        # bundled libsndfile: reads .ogg/.opus/.wav/.flac/.mp3
 # GUI: tkinter (ships with Python, no extra dependency)
+
+# Optional: MDX-NET vocal separation (EXTRAS > Vocal separation toggle).
+# onnxruntime-directml provides the SAME "onnxruntime" import as plain
+# onnxruntime, but adds the DmlExecutionProvider (GPU via DirectML on any
+# DX12 card — NVIDIA/AMD/Intel). Do NOT install both packages together —
+# they both install into the "onnxruntime" module and will conflict; keep
+# only this one. CPU still works as a fallback if DirectML init fails.
+# Feature soft-fails (CPU-only pipeline unaffected) if this isn't installed.
+onnxruntime-directml>=1.24

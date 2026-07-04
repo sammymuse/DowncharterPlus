@@ -24,6 +24,19 @@ for pkg in ("soundfile",):
 
 hiddenimports += ["mido", "numpy"]
 
+# onnxruntime (optional, from onnxruntime-directml): needed for MDX-NET vocal
+# separation. collect_all bundles its native DLLs, INCLUDING the DirectML
+# provider shared library, so the packaged .exe can run separation on GPU
+# without a system Python install. Soft-skip if not installed at build time —
+# the feature already soft-fails at runtime (see downcharter/separate.py).
+try:
+    d, b, h = collect_all("onnxruntime")
+    datas += d
+    binaries += b
+    hiddenimports += h
+except Exception:
+    pass
+
 # Bundled data (CMUdict for English lipsync G2P) → keep the package layout so
 # lipsync._data_path() finds it at <_MEIPASS>/downcharter/data/.
 _dc_data = os.path.join("downcharter", "data")
