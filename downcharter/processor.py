@@ -1448,6 +1448,7 @@ def process_folder(
     export_venue: bool = False,
     pp_style: str = "authored",
     do_vocal_sep: bool = True,
+    mouth_openness: float = 1.0,
     cancel: object | None = None,
     status_fn: Callable[[str], Any] | None = None,
     done_fn: Callable[[int, int, int], Any] | None = None,
@@ -1502,7 +1503,8 @@ def process_folder(
             s = process_midi(path, path, diffs_to_gen, do_expert_plus,
                              threshold_ms, do_venue, None, do_lipsync, do_talkies,
                              do_drum_anim=do_drum_anim, pp_style=pp_style,
-                             do_vocal_sep=do_vocal_sep)
+                             do_vocal_sep=do_vocal_sep,
+                             mouth_openness=mouth_openness)
             modified += 1
             skipped_total += len(s.get("diffs_skipped", []))
             if s.get("venue_skipped"):

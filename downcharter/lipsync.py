@@ -352,9 +352,12 @@ def _pad_spans(spans, pad: float = _TRANSITION_S):
                 # the padded spans so the mouth stays visibly closed.
                 # The natural gap (from note durations) already provides
                 # closure when large enough; only top up when it's tight.
+                # The forward shift is capped at 0.02 s (~0.6 frame) to
+                # avoid shrinking very short syllables (0.08 s rap notes)
+                # into near-zero windows.
                 gap = s - spans[i - 1][1]
                 if gap < _WORD_CLOSE_S:
-                    ns = s + (_WORD_CLOSE_S - gap)
+                    ns = s + min(_WORD_CLOSE_S - gap, 0.02)
                 else:
                     ns = s  # natural gap already >= _WORD_CLOSE_S
 
@@ -412,25 +415,27 @@ def _syllable_points(t: float, dur: float, shape,
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     units = n_i + 3 + n_f          # the vowel is worth 3 units
-    u = max(0.03, inner / units)   # minimum 0.03 s per unit
+    u = inner / units
     edge_start, edge_end = _edge_shapes(shape)
 
+    def _clamp(cur):
+        return min(cur, t + dur - 1e-6)
     pts: list[tuple[float, dict]] = [(t, _scale_state(edge_start, start_floor))]
-    cur = t + attack
+    cur = _clamp(t + attack)
     for c in initial:
         pts.append((cur, c))
-        cur += u
+        cur = _clamp(cur + u)
     if vend is not None:           # diphthong: main → final
         pts.append((cur, vmain))
-        cur += 1.5 * u
+        cur = _clamp(cur + 1.5 * u)
         pts.append((cur, vend))
-        cur += 1.5 * u
+        cur = _clamp(cur + 1.5 * u)
     else:
         pts.append((cur, vmain))
-        cur += 3 * u
+        cur = _clamp(cur + 3 * u)
     for c in final:
         pts.append((cur, c))
-        cur += u
+        cur = _clamp(cur + u)
     pts.append((t + dur, _scale_state(edge_end, end_floor)))
     return pts
 
@@ -730,8 +735,7 @@ def _syllable_points_g(t: float, dur: float, shape,
     this syllable connects to its neighbour with no real pause.
 
     Smoothness: attack/release are at most 0.4× duration (was 0.25×) so the mouth
-    doesn't snap between shapes — short syllables still get a visible transition.
-    Each consonant unit is at least 0.03 s (~1 frame at 30 fps)."""
+    doesn't snap between shapes — short syllables still get a visible transition."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
     # Official ramp: Magma/YARG autoLipsync use a 0.12 s transition.  Previously
@@ -741,20 +745,23 @@ def _syllable_points_g(t: float, dur: float, shape,
     attack = min(_TRANSITION_S, dur * 0.4)
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
-    # Minimum 0.03 s per unit so consonants last ~1 frame instead of snapping.
-    u = max(0.03, inner / (n_i + 3 + n_f))  # the vowel is worth 3 units
+    u = inner / (n_i + 3 + n_f)  # the vowel is worth 3 units
     edge_start, edge_end = _edge_shapes(shape)
+    # Monotonicity guard: every intermediate point must stay ≤ t+dur.
+    # The closing {} point at t+dur is appended last — always.
+    def _clamp(cur):
+        return min(cur, t + dur - 1e-6)
     pts: list[tuple[float, dict, str]] = [
         (t, _scale_state(edge_start, start_floor), "linear")]
-    cur = t + attack
+    cur = _clamp(t + attack)
     for c in initial:
         pts.append((cur, c, "linear"))
-        cur += u
+        cur = _clamp(cur + u)
     if vend is not None:               # diphthong: glide main → final (ease)
         pts.append((cur, vmain, "ease"))
-        cur += 1.5 * u
+        cur = _clamp(cur + 1.5 * u)
         pts.append((cur, vend, "linear"))
-        cur += 1.5 * u
+        cur = _clamp(cur + 1.5 * u)
     else:                              # monophthong: reach, HOLD the plateau, release
         pts.append((cur, vmain, "hold"))
         cur += 3 * u

@@ -385,6 +385,73 @@ def _extract_spans_from_track(mid, track_name: str, folder: str) -> list:
     return spans
 
 
+def build_lipsync_milo(out_mid, src_folder: str,
+                       mouth_openness: float = 1.0) -> tuple[bytes | None, int, int]:
+    """Build the lipsync milo BODY shared by the PS3-folder and CON builders
+    (the .milo_ps3 and .milo_xbox are byte-identical by design — divergent
+    copies of this block once shipped a 4-entry milo on one platform and a
+    3-entry one on the other).
+
+    ``mouth_openness`` is passed through to :func:`milo.build_multi_lipsync`.
+
+    Official RB3 multi-milo layout (verified against the 100 official milos:
+    entries are at most [part2, part3, song], song ALWAYS last, never a
+    part4): song.lipsync = lead singer (PART VOCALS; HARM1 is the lead's
+    double and never gets its own entry), part2 = HARM2, part3 = HARM3.
+
+    Returns ``(milo_bytes | None, total_spans, n_entries)`` — None when the
+    chart has no vocal content (caller decides the source-milo fallback)."""
+    from . import milo as _milo
+    from . import processor as _proc
+
+    # phrase_ends + vocal_notes from PART VOCALS drive the facial animation.
+    phrase_ends_s: list[float] = []
+    vocal_notes: list[tuple[float, int]] = []
+    pv = next((tr for tr in out_mid.tracks
+               if (tr.name or "").strip().upper() == "PART VOCALS"), None)
+    if pv is not None:
+        tpb = out_mid.ticks_per_beat
+        tempo_map = build_tempo_map(out_mid)
+        abs_pv = to_abs(pv)
+        pe_ticks = _proc._abs_phrase_ends(list(abs_pv))
+        phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
+                         for t in pe_ticks]
+        for e in abs_pv:
+            m = e.msg
+            n = getattr(m, "note", None)
+            if (m.type == "note_on" and getattr(m, "velocity", 0) > 0
+                    and n is not None and 36 <= n <= 84):
+                sec = tick_to_ms(e.abs_tick, tempo_map, tpb) / 1000.0
+                vocal_notes.append((sec, n))
+
+    lead_spans = _extract_spans_from_track(out_mid, "PART VOCALS", src_folder)
+    if not lead_spans:
+        lead_spans = _extract_spans_from_track(out_mid, "HARM1", src_folder)
+    harm_spans = [_extract_spans_from_track(out_mid, tr, src_folder)
+                  for tr in ("HARM2", "HARM3")]
+    # Harmony-only edge case: with no lead spans, build_multi_lipsync would
+    # name the LAST harmony "song.lipsync" (lead) and shift the rest —
+    # promote the first non-empty harmony to lead instead.
+    if not lead_spans:
+        for k, hs in enumerate(harm_spans):
+            if hs:
+                lead_spans, harm_spans[k] = hs, []
+                break
+    all_spans: list[list] = [lead_spans] + harm_spans
+
+    lipsync_list = _milo.build_multi_lipsync(
+        all_spans, out_mid.length,
+        phrase_ends=phrase_ends_s,
+        vocal_notes=vocal_notes,
+        facial_seed=42,
+        mouth_openness=mouth_openness,
+    )
+    if not lipsync_list:
+        return None, 0, 0
+    total_spans = sum(len(s) for s in all_spans if s)
+    return _milo.build_milo(lipsync_list), total_spans, len(lipsync_list)
+
+
 def _charted_instruments(mid) -> set:
     """Which RB instruments are actually charted in `mid` (by PART track + gems).
     Returns a subset of {drum, bass, guitar, keys, vocals}. An instrument audio
@@ -964,62 +1031,11 @@ def build_ps3_song(src_folder: str, mode: str, log_fn=None, art_size: int = 512,
     #    own animated mouth.
     milo_out = os.path.join(gen_dir, f"{shortname}.milo_ps3")
     try:
-        # Extract phrase_ends and vocal_notes from PART VOCALS for facial animation.
-        phrase_ends_s: list[float] = []
-        vocal_notes: list[tuple[float, int]] = []
-        pv = next((tr for tr in out_mid.tracks
-                   if (tr.name or "").strip().upper() == "PART VOCALS"), None)
-        if pv is not None:
-            tpb = out_mid.ticks_per_beat
-            tempo_map = build_tempo_map(out_mid)
-            abs_pv = to_abs(pv)
-            pe_ticks = _proc._abs_phrase_ends(list(abs_pv))
-            phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
-                             for t in pe_ticks]
-            for e in abs_pv:
-                m = e.msg
-                n = getattr(m, "note", None)
-                if (m.type == "note_on" and getattr(m, "velocity", 0) > 0
-                        and n is not None and 36 <= n <= 84):
-                    sec = tick_to_ms(e.abs_tick, tempo_map, tpb) / 1000.0
-                    vocal_notes.append((sec, n))
-
-        # ── Extract spans from each vocal track ──────────────────────────
-        # Official RB3 multi-milo layout (verified against the 100 official
-        # milos: entries are at most [part2, part3, song], song ALWAYS last,
-        # never a part4): song.lipsync = lead singer (PART VOCALS; HARM1 is
-        # the lead's double and never gets its own entry), part2 = HARM2,
-        # part3 = HARM3. Feeding lead+HARM1+2+3 produced a 4-entry milo with
-        # the lead duplicated — a layout no official game expects.
-        lead_spans = _extract_spans_from_track(out_mid, "PART VOCALS", src_folder)
-        if not lead_spans:
-            lead_spans = _extract_spans_from_track(out_mid, "HARM1", src_folder)
-        harm_spans = [_extract_spans_from_track(out_mid, tr, src_folder)
-                      for tr in ("HARM2", "HARM3")]
-        # Harmony-only edge case: with no lead spans, build_multi_lipsync would
-        # name the LAST harmony "song.lipsync" (lead) and shift the rest —
-        # promote the first non-empty harmony to lead instead.
-        if not lead_spans:
-            for k, hs in enumerate(harm_spans):
-                if hs:
-                    lead_spans, harm_spans[k] = hs, []
-                    break
-        all_spans: list[list] = [lead_spans] + harm_spans
-
-        # Build multi-entry milo if any harmonies have lyrics; single-entry fallback.
-        lipsync_list = _milo.build_multi_lipsync(
-            all_spans, out_mid.length,
-            phrase_ends=phrase_ends_s,
-            vocal_notes=vocal_notes,
-            facial_seed=42,
-        )
-
-        if lipsync_list:
+        milo_bytes, total_spans, n_entries = build_lipsync_milo(out_mid, src_folder)
+        if milo_bytes:
             with open(milo_out, "wb") as f:
-                f.write(_milo.build_milo(lipsync_list))
-            n_entries = len(lipsync_list)
+                f.write(milo_bytes)
             entry_hint = f" ({n_entries} entry)" if n_entries > 1 else ""
-            total_spans = sum(len(s) for s in all_spans if s)
             log(f"    ◇ milo: built from {total_spans} audio-guided syllable(s)"
                 f"{entry_hint}\n", "info")
         elif milo_path:
