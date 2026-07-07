@@ -47,7 +47,10 @@ from .midi_utils import tick_to_ms
 
 FPS = 30
 
-# 34 canonical RB3 visemes (exact order from an official .lipsync).
+# Canonical RB3 visemes (34 base + extras found in official milos).
+# The first 34 match the static .lipsync format; extras (Brow_openmouthed,
+# exp_banger_roar_01) appear in some official milos and are tracked here so
+# the dynamic milo table can include them.
 VISEMES = [
     "Blink", "Brow_down", "Squint", "Brow_aggressive", "Size_hi", "Eat_hi",
     "Fave_lo", "Earth_lo", "If_lo", "Ox_hi", "Cage_hi", "Oat_lo", "Told_hi",
@@ -55,6 +58,10 @@ VISEMES = [
     "Roar_lo", "Bump_lo", "Oat_hi", "New_hi", "Wet_lo", "Though_hi", "Size_lo",
     "Eat_lo", "Church_hi", "Roar_hi", "Ox_lo", "Cage_lo", "Bump_hi", "Told_lo",
     "Wet_hi",
+    # Extras found in official milos (not in the 34-static list, but present
+    # in some songs' dynamic viseme tables):
+    "Brow_openmouthed",
+    "exp_banger_roar_01",
 ]
 _VIDX = {n: i for i, n in enumerate(VISEMES)}
 
@@ -300,10 +307,13 @@ _LEGATO_GAP_S = 0.02   # back-to-back only. _pad_spans already extends every spa
                        # must close fully — officials close for any gap > ~0.24 s
                        # (raising this to 0.12 on top of the padding chained whole
                        # verses into 100 s+ open episodes; official max is ~8 s)
-_LEGATO_FLOOR = 0.35   # weight fraction kept at a legato boundary instead of 0
+_LEGATO_FLOOR = 0.35   # weight fraction kept at a legato boundary (same-word) instead of 0
+_WORD_FLOOR = 0.0      # weight fraction at word boundaries (0 = fully closed)
 _LEGATO_RELEASE_S = 0.12   # relaxed edge visemes close this long into the NEXT syllable
-_TRANSITION_S = 0.12   # mouth attack/release ramp (Magma/YARG autoLipsync transition;
-                       # 0.10 swept marginally worse on the 15-official comparison)
+_MAX_SUSTAIN_S = 999.0      # effectively no cap — the vowel holds for the full tube duration
+_TRANSITION_S = 0.12        # mouth attack/release ramp (Magma/YARG autoLipsync transition;
+                            # 0.10 swept marginally worse on the 15-official comparison)
+_WORD_CLOSE_S = 0.05        # minimum mouth-closure duration at word boundaries (~1.5 frames)
 
 
 def _pad_spans(spans, pad: float = _TRANSITION_S):
@@ -315,8 +325,12 @@ def _pad_spans(spans, pad: float = _TRANSITION_S):
     while unpadded spans punched shut between every tube (measured: official
     open median 55.6% vs our 29.5% before this).
 
-    Each gap donates at most `pad` to the closing ramp and at most `pad` to the
-    next opening ramp, split evenly, so padded spans never overlap."""
+    At word boundaries (where ``_word_continues`` is False for the previous span),
+    the padding is asymmetrical: the current span's end gets NO forward padding and
+    the next span's start is SHIFTED forward by ``_WORD_CLOSE_S``.  This creates a
+    real gap between words where the mouth stays visibly closed — the singer's
+    micro-breath between words.  Without this gap, back-to-back spans at the same
+    tick produce at most 1 frame of closure (0.033 s), which the eye never sees."""
     if not spans:
         return spans
     out = []
@@ -324,10 +338,37 @@ def _pad_spans(spans, pad: float = _TRANSITION_S):
     for i, sp in enumerate(spans):
         s, e = sp[0], sp[1]
         rest = tuple(sp[2:])
-        ns = s - (pad if i == 0
-                  else min(pad, max(0.0, (s - spans[i - 1][1]) / 2)))
-        ne = e + (pad if i + 1 == n
-                  else min(pad, max(0.0, (spans[i + 1][0] - e) / 2)))
+
+        # ── Start padding ──────────────────────────────────────────────
+        if i == 0:
+            ns = s - pad
+        else:
+            prev_txt = spans[i - 1][2] if len(spans[i - 1]) > 2 else ""
+            if _word_continues(prev_txt):
+                gap = s - spans[i - 1][1]
+                ns = s - min(pad, max(0.0, gap / 2))
+            else:
+                # Word boundary: ensure at least _WORD_CLOSE_S gap between
+                # the padded spans so the mouth stays visibly closed.
+                # The natural gap (from note durations) already provides
+                # closure when large enough; only top up when it's tight.
+                gap = s - spans[i - 1][1]
+                if gap < _WORD_CLOSE_S:
+                    ns = s + (_WORD_CLOSE_S - gap)
+                else:
+                    ns = s  # natural gap already >= _WORD_CLOSE_S
+
+        # ── End padding ────────────────────────────────────────────────
+        cur_txt = sp[2] if len(sp) > 2 else ""
+        if i + 1 == n:
+            ne = e + pad
+        else:
+            if _word_continues(cur_txt):
+                gap = spans[i + 1][0] - e
+                ne = e + min(pad, max(0.0, gap / 2))
+            else:
+                ne = e  # word boundary: no forward pad into the gap
+
         ns = max(0.0, ns)
         out.append((ns, max(ne, ns + 1e-3)) + rest)
     return out
@@ -360,17 +401,18 @@ def _syllable_points(t: float, dur: float, shape,
     syllable connects to its neighbour with no real pause, so the mouth eases
     instead of fully closing); brief consonants; vowel sustained in the middle;
     diphthong drops from the main shape to the final one. Linear interpolation
-    between points creates the transitions (consonant↔vowel)."""
+    between points creates the transitions (consonant↔vowel).
+
+    Smoothness: attack/release at most 0.4× duration (was 0.25×); each consonant
+    unit at least 0.03 s. See :func:`_syllable_points_g` for the rationale."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
-    # Official ramp: Magma/YARG autoLipsync use a 0.12 s transition. The old
-    # 0.04/0.05 s made the mouth snap open ("abre de repente"); short syllables
-    # still get the dur-limited ramp.
-    attack = min(_TRANSITION_S, dur * 0.25)
-    release = min(_TRANSITION_S, dur * 0.25)
+    # Official ramp: Magma/YARG autoLipsync use a 0.12 s transition.
+    attack = min(_TRANSITION_S, dur * 0.4)
+    release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     units = n_i + 3 + n_f          # the vowel is worth 3 units
-    u = inner / units
+    u = max(0.03, inner / units)   # minimum 0.03 s per unit
     edge_start, edge_end = _edge_shapes(shape)
 
     pts: list[tuple[float, dict]] = [(t, _scale_state(edge_start, start_floor))]
@@ -685,16 +727,22 @@ def _syllable_points_g(t: float, dur: float, shape,
 
     `start_floor`/`end_floor` (see `_syllable_points`) relax to a partial-weight
     version of the syllable's own edge shape instead of fully closing to {} when
-    this syllable connects to its neighbour with no real pause."""
+    this syllable connects to its neighbour with no real pause.
+
+    Smoothness: attack/release are at most 0.4× duration (was 0.25×) so the mouth
+    doesn't snap between shapes — short syllables still get a visible transition.
+    Each consonant unit is at least 0.03 s (~1 frame at 30 fps)."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
-    # Official ramp: Magma/YARG autoLipsync use a 0.12 s transition. The old
-    # 0.04/0.05 s made the mouth snap open ("abre de repente"); short syllables
-    # still get the dur-limited ramp.
-    attack = min(_TRANSITION_S, dur * 0.25)
-    release = min(_TRANSITION_S, dur * 0.25)
+    # Official ramp: Magma/YARG autoLipsync use a 0.12 s transition.  Previously
+    # capped at 0.25× duration, short syllables had attack < 0.04 s — the mouth
+    # snapped open in under a frame.  0.4× gives a visible ramp even on fast
+    # syllables while leaving at least 20 % of the span for the vowel body.
+    attack = min(_TRANSITION_S, dur * 0.4)
+    release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
-    u = inner / (n_i + 3 + n_f)        # the vowel is worth 3 units
+    # Minimum 0.03 s per unit so consonants last ~1 frame instead of snapping.
+    u = max(0.03, inner / (n_i + 3 + n_f))  # the vowel is worth 3 units
     edge_start, edge_end = _edge_shapes(shape)
     pts: list[tuple[float, dict, str]] = [
         (t, _scale_state(edge_start, start_floor), "linear")]
@@ -768,7 +816,7 @@ def _simplify_series(ser: list[list]) -> list[list]:
 # Official RB3 milos carry Blink, Brow_*, Squint mixed with mouth shapes.
 
 _FACIAL_VISEMES = ("Blink", "Brow_aggressive", "Brow_down",
-                   "Brow_pouty", "Brow_up", "Squint")
+                   "Brow_openmouthed", "Brow_pouty", "Brow_up", "Squint")
 
 # Timing constants (seconds)
 _BLINK_INTERVAL = (2.0, 10.0)     # random uniform range
@@ -1083,8 +1131,16 @@ def lipsync_keyframes_from_spans(
     song_len_s: float | None = None,
     facial_seed: int | None = None,
     vocal_notes: list[tuple[float, int]] | None = None,
+    mouth_openness: float = 1.0,
 ) -> list[tuple[float, str, int, str]]:
     """(time_s, viseme, weight, graph) sparse keyframes for a LIPSYNC# MIDI track.
+
+    ``mouth_openness`` (0.0–1.0) scales the weight of every mouth viseme,
+    letting the user reduce the overall mouth activity for songs where the
+    singer barely moves their lips (spoken-word, rap, etc.).  At 1.0 the
+    mouth opens fully for each syllable (standard RB3 autoLipsync); at 0.5
+    the shapes are half as pronounced; at 0.0 the mouth stays visually
+    closed.  Facial animations (blink, squint, brows) are NOT affected.
 
     Production path. Same audio-guided spans as `lipsync_events_from_spans`, but emits
     sparse keyframes with Onyx graph tokens (held vowels = `hold`, diphthong glides =
@@ -1125,13 +1181,35 @@ def lipsync_keyframes_from_spans(
         t, end = sp[0], sp[1]
         gain = sp[3] if len(sp) > 3 else 1.0
         gains.append((t, gain))
-        if end - t <= 0:
+        raw_dur = end - t
+        if raw_dur <= 0:
             continue
-        start_floor = (_LEGATO_FLOOR if i > 0
-                       and t - spans[i - 1][1] <= _LEGATO_GAP_S else 0.0)
-        end_floor = (_LEGATO_FLOOR if i < n - 1
-                     and spans[i + 1][0] - end <= _LEGATO_GAP_S else 0.0)
-        pts = _syllable_points_g(t, end - t, shape, start_floor, end_floor)
+        # Word-boundary-aware articulation:
+        # Same-word syllables (connected by hyphen '=') keep the mouth partially open
+        # (legato). Different-word boundaries ALWAYS close the mouth fully — the singer
+        # takes a real breath/break between words, and the official RB3 autoLipsync
+        # model closes between every word, not just when the span exceeds a threshold.
+        if i > 0:
+            prev_continues = _word_continues(spans[i - 1][2])
+            if prev_continues:
+                start_floor = _LEGATO_FLOOR     # same word: partial legato
+            else:
+                start_floor = _WORD_FLOOR       # new word: start from closed
+        else:
+            start_floor = 0.0                   # first syllable: start closed
+
+        if i < n - 1:
+            this_continues = _word_continues(spans[i][2])
+            if this_continues:
+                end_floor = _LEGATO_FLOOR       # same word: keep mouth partially open
+                dur = raw_dur                   # hold vowel for full span (no cap)
+            else:
+                end_floor = _WORD_FLOOR         # word boundary: ALWAYS close fully
+                dur = raw_dur                   # hold vowel for full span (no cap)
+        else:
+            end_floor = 0.0                     # last span: close fully at end
+            dur = raw_dur                       # hold vowel for full span (no cap)
+        pts = _syllable_points_g(t, dur, shape, start_floor, end_floor)
         # Legato boundaries break the zero-bracketing every series otherwise
         # has, and a viseme keyframe ramps linearly to the NEXT keyframe of
         # that viseme no matter how far away it is (Onyx graph semantics — the
@@ -1160,7 +1238,29 @@ def lipsync_keyframes_from_spans(
             for nm, w in entry.items():
                 if w > 0 and nm not in prev_names:
                     out.append((open_t, nm, 0, "linear"))
-        out.extend(_keyframes_from_points(pts, gain))
+        # mouth_openness scales the weight of all mouth visemes, letting
+        # the user reduce overall mouth activity per song.
+        out.extend(_keyframes_from_points(pts, gain * mouth_openness))
+        # ── Word-boundary closure hold ──────────────────────────────────
+        # The mouth must stay visibly closed for at least _WORD_CLOSE_S
+        # at every word boundary.  Without this, the closures are only 1
+        # frame deep (0.033 s) because back-to-back spans share the same
+        # boundary tick, and the next span's attack interpolation (over
+        # _TRANSITION_S = 0.12 s) makes a mouth viseme non-zero within
+        # the very next frame — the eye never sees a closed mouth.
+        #
+        # We close every viseme that is still active at the last real
+        # articulation point (``pts[-2]`` — the point before the closing
+        # ``{}``) and hold it at zero for _WORD_CLOSE_S seconds.
+        # This pins ALL active visemes to 0 simultaneously, so the
+        # between-word gap registers as genuinely closed.
+        if end_floor == _WORD_FLOOR and i + 1 < n and len(pts) >= 2:
+            last_real = pts[-2][1]  # the last non-{} state
+            close_at = end
+            hold_until = end + _WORD_CLOSE_S
+            for nm in sorted(last_real):
+                out.append((close_at, nm, 0, "linear"))
+                out.append((hold_until, nm, 0, "linear"))
         if end_floor > 0.0 and i + 1 < n:
             nxt_start, nxt_end = spans[i + 1][0], spans[i + 1][1]
             nxt_names = shape_names[i + 1]

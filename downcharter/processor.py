@@ -479,6 +479,7 @@ def process_midi(
     do_drum_anim: bool = True,
     pp_style: str = "authored",
     do_vocal_sep: bool = True,
+    mouth_openness: float = 1.0,
 ) -> dict:
     """
     Process a MIDI file:
@@ -960,7 +961,8 @@ def process_midi(
         if (do_talkies or do_lipsync) and song_end > 0:
             _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
                            do_talkies=do_talkies, do_lipsync=do_lipsync,
-                           do_vocal_sep=do_vocal_sep)
+                           do_vocal_sep=do_vocal_sep,
+                           mouth_openness=mouth_openness)
 
         new_mid.save(dst_path)
         if stats.get("sysex_kept"):
@@ -1203,7 +1205,8 @@ def _chart_vocals_from_lyrics(new_mid, tpb: int, stats,
 
 def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
                    do_talkies: bool = True, do_lipsync: bool = True,
-                   do_vocal_sep: bool = True) -> None:
+                   do_vocal_sep: bool = True,
+                   mouth_openness: float = 1.0) -> None:
     """Two independent lipsync outputs from the lyrics, each toggled separately:
 
     1. Talky vocals in PART VOCALS (``do_talkies``) - the path RB/Onyx's `.ini` import
@@ -1216,6 +1219,10 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
        `LoadLipsyncFromMilo` has a TODO to parse lipsync from MIDI). Timing/weight are
        audio-guided from the same spans as (1), beating both engines' built-in
        geometric generators.
+
+    ``mouth_openness`` (0.0–1.0) is passed through to
+    :func:`lipsync_keyframes_from_spans`; at 1.0 the mouth opens fully for each
+    syllable, at 0.0 it stays visually closed.  Facial animation is not affected.
 
     The spans are computed from the lyrics regardless; ``write_gems`` only controls
     whether PART VOCALS is rewritten, so the LIPSYNC1 track can be generated without
@@ -1255,6 +1262,7 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
                 song_len_s=song_len_s,
                 vocal_notes=vocal_notes or None,
                 facial_seed=42,  # deterministic for reproducible builds
+                mouth_openness=mouth_openness,
             )
             if keyframes:
                 tr = _build_lipsync_track(keyframes, tempo_map, tpb)

@@ -231,9 +231,12 @@ def _serialize_lipsync(frames: dict[int, dict], n_frames: int) -> bytes:
 def build_song_lipsync(spans, song_len_s: float, lang: str = "en",
                         phrase_ends: list[float] | None = None,
                         vocal_notes: list[tuple[float, int]] | None = None,
-                        facial_seed: int | None = None) -> bytes:
+                        facial_seed: int | None = None,
+                        mouth_openness: float = 1.0) -> bytes:
     """CharLipSync bytes for the milo, from the same audio-guided syllable spans
     (`lip_spans` = [(start_s, end_s, text, gain)]) used for the LIPSYNC1 MIDI track.
+
+    ``mouth_openness`` is passed through to :func:`lipsync_keyframes_from_spans`.
 
     Uses the sparse keyframes path (`lipsync_keyframes_from_spans`) which correctly
     sustains vowels at full weight via 'hold' graph tokens — unlike the dense
@@ -251,6 +254,7 @@ def build_song_lipsync(spans, song_len_s: float, lang: str = "en",
         song_len_s=song_len_s,
         vocal_notes=vocal_notes,
         facial_seed=facial_seed,
+        mouth_openness=mouth_openness,
     )
     n_frames = max(1, int(math.ceil(song_len_s * _lip.FPS)) + 1)
     frames = _lip._facial_frames_from_keyframes(keyframes, n_frames)
@@ -260,21 +264,27 @@ def build_song_lipsync(spans, song_len_s: float, lang: str = "en",
 def build_milo_from_spans(spans, song_len_s: float, lang: str = "en",
                            phrase_ends: list[float] | None = None,
                            vocal_notes: list[tuple[float, int]] | None = None,
-                           facial_seed: int | None = None) -> bytes:
-    """Convenience: spans → complete .milo ready to write to disk."""
+                           facial_seed: int | None = None,
+                           mouth_openness: float = 1.0) -> bytes:
+    """Convenience: spans → complete .milo ready to write to disk.
+    ``mouth_openness`` is passed through to :func:`build_song_lipsync`."""
     return build_milo(build_song_lipsync(
         spans, song_len_s, lang,
         phrase_ends=phrase_ends,
         vocal_notes=vocal_notes,
         facial_seed=facial_seed,
+        mouth_openness=mouth_openness,
     ))
 
 
 def build_multi_lipsync(spans_list: list, song_len_s: float, lang: str = "en",
                          phrase_ends: list[float] | None = None,
                          vocal_notes: list[tuple[float, int]] | None = None,
-                         facial_seed: int | None = None) -> list[bytes]:
+                         facial_seed: int | None = None,
+                         mouth_openness: float = 1.0) -> list[bytes]:
     """Build N lipsync byte blobs from N span lists (lead + HARM1 + HARM2 + HARM3).
+
+    ``mouth_openness`` is passed through to :func:`build_song_lipsync`.
 
     Each list may be empty (a track with no lyrics produces no lipsync entry).
     Returns entries in the order expected by build_milo for the RB3 multi-entry
@@ -291,6 +301,7 @@ def build_multi_lipsync(spans_list: list, song_len_s: float, lang: str = "en",
                 phrase_ends=phrase_ends,
                 vocal_notes=vocal_notes,
                 facial_seed=seed,
+                mouth_openness=mouth_openness,
             )
             if i == 0:
                 lead = blob   # first vocal track = lead / PART VOCALS
