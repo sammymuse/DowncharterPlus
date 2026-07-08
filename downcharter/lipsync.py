@@ -443,27 +443,39 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     reaches the vowel shape and STAYS there before transitioning to final consonants.
     
     CONSONANT SPEED: Officials make consonant transitions very fast (1-2 frames).
-    We use 0.01s (~0.3 frames) for consonants so they're nearly instant."""
+    We use 0.01s (~0.3 frames) for consonants so they're nearly instant.
+    
+    VISEME BLENDING: Officials use 4-6 visemes simultaneously. We blend all
+    consonants into a single shape to create richer mouth shapes."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
     attack = min(_TRANSITION_S, dur * 0.4)
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     
+    # VISEME BLENDING: Blend all consonants into a single shape
+    # Officials use 4-6 visemes simultaneously
+    initial_blended = _blend_visemes(initial)
+    final_blended = _blend_visemes(final)
+    
     # Consonants are smooth (officials: 4-6 frames)
     cons_dur = 0.70  # ~21 frames, very smooth transition
-    vowel_dur = inner - (n_i + n_f) * cons_dur
+    # Only 2 consonant groups now (initial + final) instead of n_i + n_f
+    vowel_dur = inner - 2 * cons_dur
     if vowel_dur < 0.033:  # at least 1 frame for vowel
         vowel_dur = 0.033
-        cons_dur = max(0.01, (inner - vowel_dur) / max(1, n_i + n_f))
+        cons_dur = max(0.01, (inner - vowel_dur) / 2)
     
     def _clamp(cur):
         return min(cur, t + dur - 1e-6)
     pts: list[tuple[float, dict]] = [(t, {})]
     cur = _clamp(t + attack)
-    for c in initial:
-        pts.append((cur, c))
+    
+    # Initial consonants (blended into one point)
+    if initial_blended:
+        pts.append((cur, initial_blended))
         cur = _clamp(cur + cons_dur)
+    
     if vend is not None:           # diphthong: main → final
         pts.append((cur, vmain))
         cur = _clamp(cur + vowel_dur * 0.4)
@@ -479,11 +491,55 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
         hold_dur = max(0.033, vowel_dur * 0.6)  # at least 1 frame
         pts.append((_clamp(cur + hold_dur), vmain))  # HOLD point
         cur = _clamp(cur + vowel_dur)
-    for c in final:
-        pts.append((cur, c))
+    
+    # Final consonants (blended into one point)
+    if final_blended:
+        pts.append((cur, final_blended))
         cur = _clamp(cur + cons_dur)
+    
     pts.append((t + dur, {}))
     return pts
+
+
+def _blend_visemes(shapes: list[dict], weights: list[float] | None = None) -> dict:
+    """Blend multiple viseme shapes into a single shape.
+    
+    Officials use 4-6 visemes simultaneously. We replicate this by blending
+    multiple viseme shapes with different weights.
+    
+    Args:
+        shapes: List of viseme shapes to blend
+        weights: Optional weights for each shape (default: equal weights)
+    
+    Returns:
+        Blended viseme shape
+    """
+    if not shapes:
+        return {}
+    
+    if weights is None:
+        weights = [1.0 / len(shapes)] * len(shapes)
+    
+    # Normalize weights
+    total_weight = sum(weights)
+    if total_weight > 0:
+        weights = [w / total_weight for w in weights]
+    
+    # Collect all visemes from all shapes
+    all_visemes = set()
+    for shape in shapes:
+        all_visemes.update(shape.keys())
+    
+    # Blend weights for each viseme
+    blended = {}
+    for viseme in all_visemes:
+        weight_sum = 0.0
+        for shape, weight in zip(shapes, weights):
+            if viseme in shape:
+                weight_sum += shape[viseme] * weight
+        blended[viseme] = int(weight_sum)
+    
+    return blended
 
 
 def _lerp_state(a: dict, b: dict, f: float) -> dict:
@@ -815,20 +871,27 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
 
     Smoothness: Uses `ease` (sigmoid curves) for all transitions instead of `linear`.
     Officials prioritize smooth, fluid mouth movements over sharp transitions.
-    Each segment (consonant/vowel step) lasts at least 0.10 s (~3 frames @30fps)
-    for smooth transitions."""
+    
+    VISEME BLENDING: Officials use 4-6 visemes simultaneously. We blend all
+    consonants into a single shape to create richer mouth shapes."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
     attack = min(_TRANSITION_S, dur * 0.4)
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     
+    # VISEME BLENDING: Blend all consonants into a single shape
+    # Officials use 4-6 visemes simultaneously
+    initial_blended = _blend_visemes(initial)
+    final_blended = _blend_visemes(final)
+    
     # Smooth transitions: consonants and vowels use longer durations (officials: 4-6 frames)
-    cons_dur = 0.15  # ~4.5 frames, very smooth
-    vowel_dur = inner - (n_i + n_f) * cons_dur
+    cons_dur = 0.70  # ~21 frames, very smooth
+    # Only 2 consonant groups now (initial + final) instead of n_i + n_f
+    vowel_dur = inner - 2 * cons_dur
     if vowel_dur < 0.033:  # at least 1 frame for vowel
         vowel_dur = 0.033
-        cons_dur = max(0.01, (inner - vowel_dur) / max(1, n_i + n_f))
+        cons_dur = max(0.01, (inner - vowel_dur) / 2)
     
     # Monotonicity guard: every intermediate point must stay ≤ t+dur.
     # The closing {} point at t+dur is appended last — always.
@@ -837,9 +900,12 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
     pts: list[tuple[float, dict, str]] = [
         (t, {}, "ease")]  # Use ease for smooth opening
     cur = _clamp(t + attack)
-    for c in initial:
-        pts.append((cur, c, "ease"))  # Smooth consonant transitions
+    
+    # Initial consonants (blended into one point)
+    if initial_blended:
+        pts.append((cur, initial_blended, "ease"))
         cur = _clamp(cur + cons_dur)
+    
     if vend is not None:               # diphthong: glide main → final (ease)
         pts.append((cur, vmain, "ease"))
         cur = _clamp(cur + vowel_dur * 0.4)
@@ -849,9 +915,12 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
         pts.append((cur, vmain, "hold"))
         cur = _clamp(cur + vowel_dur)
         pts.append((cur, vmain, "ease"))  # Smooth release
-    for c in final:
-        pts.append((cur, c, "ease"))  # Smooth consonant transitions
+    
+    # Final consonants (blended into one point)
+    if final_blended:
+        pts.append((cur, final_blended, "ease"))
         cur = _clamp(cur + cons_dur)
+    
     pts.append((t + dur, {}, "ease"))   # Smooth closing
     return pts
 
