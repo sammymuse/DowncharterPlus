@@ -406,7 +406,11 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
 
     Smoothness: attack/release at most 0.4× duration (was 0.25×); each consonant
     unit at least 0.033 s (1 frame @30fps) when inner allows, otherwise
-    proportional (preserves phoneme sequence on short syllables)."""
+    proportional (preserves phoneme sequence on short syllables).
+    
+    VOWEL HOLD: Officials sustain the vowel for 30-67% of frames (mouth stays
+    still). We replicate this by adding a HOLD point after the vowel — the mouth
+    reaches the vowel shape and STAYS there before transitioning to final consonants."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
     attack = min(_TRANSITION_S, dur * 0.4)
@@ -428,10 +432,17 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     if vend is not None:           # diphthong: main → final
         pts.append((cur, vmain))
         cur = _clamp(cur + 1.5 * u)
+        # VOWEL HOLD: sustain the main vowel before transitioning
+        pts.append((cur, vmain))  # HOLD point — mouth stays at vmain
+        cur = _clamp(cur + 1.5 * u)
         pts.append((cur, vend))
         cur = _clamp(cur + 1.5 * u)
     else:
         pts.append((cur, vmain))
+        # VOWEL HOLD: sustain the vowel for ~50% of the inner duration
+        # Officials hold the vowel for 30-67% of frames, we use 50% as middle ground
+        hold_dur = max(0.033, inner * 0.5)  # at least 1 frame
+        pts.append((_clamp(cur + hold_dur), vmain))  # HOLD point
         cur = _clamp(cur + 3 * u)
     for c in final:
         pts.append((cur, c))
