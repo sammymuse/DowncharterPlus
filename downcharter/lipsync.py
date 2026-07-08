@@ -357,9 +357,9 @@ def align_word_phonemes(syllables: list[str], lang: str = "en") -> list[list[str
 
 # ───────────────────────── building the keyframes ────────────────────────────
 _MAX_SUSTAIN_S = 999.0      # effectively no cap — the vowel holds for the full tube duration
-_TRANSITION_S = 0.05        # mouth attack/release ramp — ~1.5 frames @30fps (officials: 4-7 frames total)
-                            # Officials use ease-in/ease-out curves, not linear.
-                            # Shorter transitions = faster mouth movement = more natural.
+_TRANSITION_S = 0.18        # mouth attack/release ramp — ~5.4 frames @30fps (officials: 10-22 frames)
+                            # Officials use sigmoid curves (smooth S-shape), not linear.
+                            # Longer transitions = smoother mouth movement.
 _WORD_CLOSE_S = 0.05        # minimum mouth-closure duration at word boundaries (~1.5 frames)
 
 
@@ -450,12 +450,12 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     
-    # Consonants are very fast (officials: 1-2 frames)
-    cons_dur = 0.01  # ~0.3 frames, nearly instant
+    # Consonants are smooth (officials: 3-5 frames)
+    cons_dur = 0.10  # ~3 frames, smooth transition
     vowel_dur = inner - (n_i + n_f) * cons_dur
     if vowel_dur < 0.033:  # at least 1 frame for vowel
         vowel_dur = 0.033
-        cons_dur = max(0.001, (inner - vowel_dur) / max(1, n_i + n_f))
+        cons_dur = max(0.01, (inner - vowel_dur) / max(1, n_i + n_f))
     
     def _clamp(cur):
         return min(cur, t + dur - 1e-6)
@@ -499,17 +499,22 @@ def _lerp_state(a: dict, b: dict, f: float) -> dict:
 
 
 def _ease_curve(f: float, opening: bool) -> float:
-    """Apply ease-in/ease-out curve to interpolation fraction.
+    """Apply sigmoid curve to interpolation fraction.
     
-    Officials use exponential curves, not linear:
-    - Opening (0→max): ease-in (starts slow, accelerates) → f^2
-    - Closing (max→0): ease-out (starts fast, decelerates) → 1-(1-f)^2
+    Officials use smooth S-shaped curves (sigmoid), not linear or simple ease-in/out.
+    This creates natural, fluid mouth movements that accelerate in the middle
+    and decelerate at the endpoints.
     
-    This matches the official transition shapes observed in .milo_xbox files."""
+    Sigmoid formula: 1 / (1 + exp(-k*(x-0.5)))
+    where k controls the steepness (k=10 gives a good S-curve)."""
+    # Sigmoid with k=10 for smooth S-curve
+    k = 10.0
     if opening:
-        return f * f  # ease-in: slow start, fast end
+        # Ease-in: slow start, accelerate to peak
+        return 1.0 / (1.0 + math.exp(-k * (f - 0.5)))
     else:
-        return 1.0 - (1.0 - f) * (1.0 - f)  # ease-out: fast start, slow end
+        # Ease-out: fast start, decelerate to zero
+        return 1.0 - (1.0 / (1.0 + math.exp(-k * (f - 0.5))))
 
 
 def _ease_lerp_state(a: dict, b: dict, f: float) -> dict:
@@ -808,44 +813,46 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
     """Like `_syllable_points` but each point carries the graph of the segment that
     STARTS at it: a held vowel plateau (`hold`) and the diphthong glide (`ease`).
 
-    Smoothness: attack/release are at most 0.4× duration (was 0.25×) so the mouth
-    doesn't snap between shapes — short syllables still get a visible transition.
-    Each segment (consonant/vowel step) lasts at least 0.033 s (1 frame @30fps)
-    when inner allows, otherwise proportional (preserves phoneme sequence on
-    short syllables)."""
+    Smoothness: Uses `ease` (sigmoid curves) for all transitions instead of `linear`.
+    Officials prioritize smooth, fluid mouth movements over sharp transitions.
+    Each segment (consonant/vowel step) lasts at least 0.10 s (~3 frames @30fps)
+    for smooth transitions."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
     attack = min(_TRANSITION_S, dur * 0.4)
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
-    n_segments = n_i + 3 + n_f    # the vowel is worth 3 units
-    raw_u = inner / n_segments
-    u = max(0.033, raw_u)
-    if u * n_segments > inner:    # minimum too large: keep phoneme order instead
-        u = raw_u
+    
+    # Smooth transitions: consonants and vowels use longer durations
+    cons_dur = 0.10  # ~3 frames, smooth
+    vowel_dur = inner - (n_i + n_f) * cons_dur
+    if vowel_dur < 0.033:  # at least 1 frame for vowel
+        vowel_dur = 0.033
+        cons_dur = max(0.01, (inner - vowel_dur) / max(1, n_i + n_f))
+    
     # Monotonicity guard: every intermediate point must stay ≤ t+dur.
     # The closing {} point at t+dur is appended last — always.
     def _clamp(cur):
         return min(cur, t + dur - 1e-6)
     pts: list[tuple[float, dict, str]] = [
-        (t, {}, "linear")]
+        (t, {}, "ease")]  # Use ease for smooth opening
     cur = _clamp(t + attack)
     for c in initial:
-        pts.append((cur, c, "linear"))
-        cur = _clamp(cur + u)
+        pts.append((cur, c, "ease"))  # Smooth consonant transitions
+        cur = _clamp(cur + cons_dur)
     if vend is not None:               # diphthong: glide main → final (ease)
         pts.append((cur, vmain, "ease"))
-        cur = _clamp(cur + 1.5 * u)
-        pts.append((cur, vend, "linear"))
-        cur = _clamp(cur + 1.5 * u)
+        cur = _clamp(cur + vowel_dur * 0.4)
+        pts.append((cur, vend, "ease"))
+        cur = _clamp(cur + vowel_dur * 0.6)
     else:                              # monophthong: reach, HOLD the plateau, release
         pts.append((cur, vmain, "hold"))
-        cur += 3 * u
-        pts.append((cur, vmain, "linear"))
+        cur = _clamp(cur + vowel_dur)
+        pts.append((cur, vmain, "ease"))  # Smooth release
     for c in final:
-        pts.append((cur, c, "linear"))
-        cur += u
-    pts.append((t + dur, {}, "linear"))   # close
+        pts.append((cur, c, "ease"))  # Smooth consonant transitions
+        cur = _clamp(cur + cons_dur)
+    pts.append((t + dur, {}, "ease"))   # Smooth closing
     return pts
 
 
