@@ -98,31 +98,60 @@ _W = 140
 
 
 def _pair(base: str) -> dict[str, int]:
-    """_hi+_lo viseme with official weights (e.g. 'Ox' → {Ox_hi:50, Ox_lo:74})."""
+    """_hi+_lo viseme with official weights (e.g. 'Ox' → {Ox_hi:102, Ox_lo:153})."""
     return {
         f"{base}_hi": _VISEME_WEIGHTS.get(f"{base}_hi", _W),
         f"{base}_lo": _VISEME_WEIGHTS.get(f"{base}_lo", _W),
     }
 
 
+def _blend(*bases: str, weights: list[float] | None = None) -> dict[str, int]:
+    """Blend multiple viseme pairs with different weights.
+    
+    Officials use 4-6 visemes simultaneously (blending). For example, 'AE' (cat)
+    is not just Cage, but Earth+Eat+If blended together. This creates richer,
+    more natural mouth shapes.
+    
+    Args:
+        *bases: viseme base names (e.g. 'Earth', 'Eat', 'If')
+        weights: relative weights for each base (default: 1.0, 0.7, 0.5, ...)
+                 First base gets full weight, others get progressively lower.
+    
+    Returns:
+        dict of viseme_name → weight
+    """
+    if weights is None:
+        # Default: first base 100%, second 70%, third 50%, etc.
+        weights = [1.0, 0.7, 0.5, 0.35, 0.25][:len(bases)]
+    
+    result = {}
+    for base, w in zip(bases, weights):
+        pair = _pair(base)
+        for viseme, weight in pair.items():
+            result[viseme] = int(weight * w)
+    return result
+
+
 # ── VOWEL map: name → (main shape, final shape | None for diphthong) ──
-# Reused from Onyx's rb3.yml (data table).
+# Officials use BLENDS of multiple visemes (4-6 simultaneously).
+# Based on analysis of official .milo_xbox files.
 _VOWELS: dict[str, tuple[dict, dict | None]] = {
-    "AA": (_pair("Ox"), None),
-    "AH": (_pair("If"), None),
-    "AY": (_pair("Ox"), _pair("If")),      # diphthong (bite)
-    "EH": (_pair("Cage"), None),
-    "ER": (_pair("Church"), None),
-    "EY": (_pair("Cage"), _pair("If")),    # diphthong (bait)
-    "IH": (_pair("If"), None),
-    "IY": (_pair("Eat"), None),
-    "OW": (_pair("Oat"), _pair("Wet")),    # diphthong (boat)
-    "UW": (_pair("Wet"), None),
-    "AE": (_pair("Cage"), None),
-    "AO": (_pair("Earth"), None),
-    "AW": (_pair("Ox"), _pair("Wet")),     # diphthong (bout)
-    "OY": (_pair("Oat"), _pair("If")),     # diphthong (boy)
-    "UH": (_pair("Though"), None),
+    # Vowels with blends based on official milo analysis
+    "AA": (_blend("Ox", "Eat"), None),                    # "father" - Ox dominant + Eat blend
+    "AH": (_blend("If", "Eat"), None),                    # "but" - If dominant + Eat blend
+    "AY": (_blend("Ox", "Eat"), _blend("If", "Eat")),    # diphthong (bite)
+    "EH": (_blend("Cage", "Eat", "If"), None),            # "bed" - Cage + Eat + If (308x in officials)
+    "ER": (_blend("Church", "If"), None),                 # "bird" - Church + If blend
+    "EY": (_blend("Cage", "Eat"), _blend("If", "Eat")),  # diphthong (bait)
+    "IH": (_blend("If", "Eat"), None),                    # "bit" - If + Eat blend
+    "IY": (_blend("Eat", "If"), None),                    # "beat" - Eat dominant + If blend
+    "OW": (_blend("Oat", "Wet"), _blend("Ox", "Wet")),   # diphthong (boat)
+    "UW": (_blend("Wet", "Ox"), None),                    # "boot" - Wet + Ox blend
+    "AE": (_blend("Earth", "Eat", "If"), None),           # "cat" - Earth+Eat+If (official: 308x)
+    "AO": (_blend("Earth", "Ox"), None),                  # "thought" - Earth + Ox blend
+    "AW": (_blend("Ox", "Earth"), _blend("Wet", "Ox")),  # diphthong (bout)
+    "OY": (_blend("Oat", "If"), _blend("Eat", "If")),    # diphthong (boy)
+    "UH": (_blend("Though", "If"), None),                 # "book" - Though + If blend
 }
 
 # ── CONSONANT map: name → mouth shape ({} = invisible, e.g. G/H/K/NG) ──
@@ -328,8 +357,9 @@ def align_word_phonemes(syllables: list[str], lang: str = "en") -> list[list[str
 
 # ───────────────────────── building the keyframes ────────────────────────────
 _MAX_SUSTAIN_S = 999.0      # effectively no cap — the vowel holds for the full tube duration
-_TRANSITION_S = 0.22        # mouth attack/release ramp — ~6.5 frames @30fps (was 0.18).
-                            # Slower transitions make the mouth feel less snappy/sudden.
+_TRANSITION_S = 0.05        # mouth attack/release ramp — ~1.5 frames @30fps (officials: 4-7 frames total)
+                            # Officials use ease-in/ease-out curves, not linear.
+                            # Shorter transitions = faster mouth movement = more natural.
 _WORD_CLOSE_S = 0.05        # minimum mouth-closure duration at word boundaries (~1.5 frames)
 
 
@@ -410,43 +440,48 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     
     VOWEL HOLD: Officials sustain the vowel for 30-67% of frames (mouth stays
     still). We replicate this by adding a HOLD point after the vowel — the mouth
-    reaches the vowel shape and STAYS there before transitioning to final consonants."""
+    reaches the vowel shape and STAYS there before transitioning to final consonants.
+    
+    CONSONANT SPEED: Officials make consonant transitions very fast (1-2 frames).
+    We use 0.01s (~0.3 frames) for consonants so they're nearly instant."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
     attack = min(_TRANSITION_S, dur * 0.4)
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
-    units = n_i + 3 + n_f          # the vowel is worth 3 units
-    raw_u = inner / units
-    u = max(0.033, raw_u)
-    if u * units > inner:          # minimum too large: keep phoneme order instead
-        u = raw_u
-
+    
+    # Consonants are very fast (officials: 1-2 frames)
+    cons_dur = 0.01  # ~0.3 frames, nearly instant
+    vowel_dur = inner - (n_i + n_f) * cons_dur
+    if vowel_dur < 0.033:  # at least 1 frame for vowel
+        vowel_dur = 0.033
+        cons_dur = max(0.001, (inner - vowel_dur) / max(1, n_i + n_f))
+    
     def _clamp(cur):
         return min(cur, t + dur - 1e-6)
     pts: list[tuple[float, dict]] = [(t, {})]
     cur = _clamp(t + attack)
     for c in initial:
         pts.append((cur, c))
-        cur = _clamp(cur + u)
+        cur = _clamp(cur + cons_dur)
     if vend is not None:           # diphthong: main → final
         pts.append((cur, vmain))
-        cur = _clamp(cur + 1.5 * u)
+        cur = _clamp(cur + vowel_dur * 0.4)
         # VOWEL HOLD: sustain the main vowel before transitioning
         pts.append((cur, vmain))  # HOLD point — mouth stays at vmain
-        cur = _clamp(cur + 1.5 * u)
+        cur = _clamp(cur + vowel_dur * 0.3)
         pts.append((cur, vend))
-        cur = _clamp(cur + 1.5 * u)
+        cur = _clamp(cur + vowel_dur * 0.3)
     else:
         pts.append((cur, vmain))
         # VOWEL HOLD: sustain the vowel for ~50% of the inner duration
         # Officials hold the vowel for 30-67% of frames, we use 50% as middle ground
-        hold_dur = max(0.033, inner * 0.5)  # at least 1 frame
+        hold_dur = max(0.033, vowel_dur * 0.5)  # at least 1 frame
         pts.append((_clamp(cur + hold_dur), vmain))  # HOLD point
-        cur = _clamp(cur + 3 * u)
+        cur = _clamp(cur + vowel_dur)
     for c in final:
         pts.append((cur, c))
-        cur = _clamp(cur + u)
+        cur = _clamp(cur + cons_dur)
     pts.append((t + dur, {}))
     return pts
 
@@ -458,6 +493,41 @@ def _lerp_state(a: dict, b: dict, f: float) -> dict:
         wa = a.get(name, 0)
         wb = b.get(name, 0)
         w = int(round(wa + (wb - wa) * f))
+        if w > 0:
+            out[name] = w
+    return out
+
+
+def _ease_curve(f: float, opening: bool) -> float:
+    """Apply ease-in/ease-out curve to interpolation fraction.
+    
+    Officials use exponential curves, not linear:
+    - Opening (0→max): ease-in (starts slow, accelerates) → f^2
+    - Closing (max→0): ease-out (starts fast, decelerates) → 1-(1-f)^2
+    
+    This matches the official transition shapes observed in .milo_xbox files."""
+    if opening:
+        return f * f  # ease-in: slow start, fast end
+    else:
+        return 1.0 - (1.0 - f) * (1.0 - f)  # ease-out: fast start, slow end
+
+
+def _ease_lerp_state(a: dict, b: dict, f: float) -> dict:
+    """Interpolate with ease curve. Determines direction (opening/closing) based
+    on whether total weight is increasing or decreasing."""
+    # Determine if this is an opening or closing transition
+    total_a = sum(a.values())
+    total_b = sum(b.values())
+    opening = total_b > total_a
+    
+    # Apply ease curve
+    eased_f = _ease_curve(f, opening)
+    
+    out = {}
+    for name in set(a) | set(b):
+        wa = a.get(name, 0)
+        wb = b.get(name, 0)
+        w = int(round(wa + (wb - wa) * eased_f))
         if w > 0:
             out[name] = w
     return out
@@ -545,7 +615,7 @@ def _sample_into(frames: dict[int, dict], pts: list[tuple[float, dict]]) -> None
         tb, sb = pts[seg + 1]
         frac = 0.0 if tb <= ta else (tf - ta) / (tb - ta)
         frac = max(0.0, min(1.0, frac))
-        state = _lerp_state(sa, sb, frac)
+        state = _ease_lerp_state(sa, sb, frac)  # Use ease curve instead of linear
         if not state:
             continue
         slot = frames.setdefault(fr, {})
