@@ -26,8 +26,7 @@ What it covers:
 
 - Difficulty reduction for guitar, bass and keys — Hard, Medium and Easy
 - Drum reduction across all three difficulties, plus Expert+ (2× kick) detection
-- Venue generation — camera cuts, lights, post-processing, pyro and animations,
-  calibrated against 100 official RB3 charts
+- Venue generation — camera cuts, lights, post-processing, pyro and animations
 - Talkies charted from the lyrics, with note ends trimmed against the vocal stem
 - Audio-driven lipsync (mouth + blink/brow/squint), packaged in a native `.milo`
   and validated frame-by-frame against official RB3 lipsync
