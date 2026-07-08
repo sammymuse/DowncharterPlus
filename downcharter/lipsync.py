@@ -47,7 +47,10 @@ from .midi_utils import tick_to_ms
 
 FPS = 30
 
-# 34 canonical RB3 visemes (exact order from an official .lipsync).
+# Canonical RB3 visemes (34 base + extras found in official milos).
+# The first 34 match the static .lipsync format; extras (Brow_openmouthed,
+# exp_banger_roar_01) appear in some official milos and are tracked here so
+# the dynamic milo table can include them.
 VISEMES = [
     "Blink", "Brow_down", "Squint", "Brow_aggressive", "Size_hi", "Eat_hi",
     "Fave_lo", "Earth_lo", "If_lo", "Ox_hi", "Cage_hi", "Oat_lo", "Told_hi",
@@ -55,6 +58,10 @@ VISEMES = [
     "Roar_lo", "Bump_lo", "Oat_hi", "New_hi", "Wet_lo", "Though_hi", "Size_lo",
     "Eat_lo", "Church_hi", "Roar_hi", "Ox_lo", "Cage_lo", "Bump_hi", "Told_lo",
     "Wet_hi",
+    # Extras found in official milos (not in the 34-static list, but present
+    # in some songs' dynamic viseme tables):
+    "Brow_openmouthed",
+    "exp_banger_roar_01",
 ]
 _VIDX = {n: i for i, n in enumerate(VISEMES)}
 
@@ -288,37 +295,148 @@ def align_word_phonemes(syllables: list[str], lang: str = "en") -> list[list[str
 
 
 # ───────────────────────── building the keyframes ────────────────────────────
-def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
+# A syllable that connects to its neighbour with no real pause (legato/same
+# word/held phrase) shouldn't punch the mouth fully shut and reopen — real
+# singing (and connected speech) relaxes partway, not to a dead stop. Only a
+# genuine gap (silence, phrase end, song boundary) gets the full close to {}.
+# Below this many seconds between two spans counts as "no real gap" (they're
+# meant to be exactly back-to-back per `_chart_vocals_from_lyrics`).
+_LEGATO_GAP_S = 0.02   # back-to-back only. _pad_spans already extends every span
+                       # by the 0.12 s transition, so tubes within 0.24 s MEET
+                       # (gap 0 → legato) and anything still gapped after padding
+                       # must close fully — officials close for any gap > ~0.24 s
+                       # (raising this to 0.12 on top of the padding chained whole
+                       # verses into 100 s+ open episodes; official max is ~8 s)
+_LEGATO_FLOOR = 0.35   # weight fraction kept at a legato boundary (same-word) instead of 0
+_WORD_FLOOR = 0.0      # weight fraction at word boundaries (0 = fully closed)
+_LEGATO_RELEASE_S = 0.12   # relaxed edge visemes close this long into the NEXT syllable
+_MAX_SUSTAIN_S = 999.0      # effectively no cap — the vowel holds for the full tube duration
+_TRANSITION_S = 0.12        # mouth attack/release ramp (Magma/YARG autoLipsync transition;
+                            # 0.10 swept marginally worse on the 15-official comparison)
+_WORD_CLOSE_S = 0.05        # minimum mouth-closure duration at word boundaries (~1.5 frames)
+
+
+def _pad_spans(spans, pad: float = _TRANSITION_S):
+    """Magma/YARG autoLipsync model: the mouth opens ~0.12 s BEFORE the tube and
+    closes ~0.12 s AFTER it — the transition lives OUTSIDE the note, so the vowel
+    holds for the note's whole length. Tubes closer than 2*pad meet in the middle
+    of the gap (gap → 0 → the legato path keeps the mouth from closing between
+    them), which is why official milos sustain 0.5-4 s episodes across a phrase
+    while unpadded spans punched shut between every tube (measured: official
+    open median 55.6% vs our 29.5% before this).
+
+    At word boundaries (where ``_word_continues`` is False for the previous span),
+    the padding is asymmetrical: the current span's end gets NO forward padding and
+    the next span's start is SHIFTED forward by ``_WORD_CLOSE_S``.  This creates a
+    real gap between words where the mouth stays visibly closed — the singer's
+    micro-breath between words.  Without this gap, back-to-back spans at the same
+    tick produce at most 1 frame of closure (0.033 s), which the eye never sees."""
+    if not spans:
+        return spans
+    out = []
+    n = len(spans)
+    for i, sp in enumerate(spans):
+        s, e = sp[0], sp[1]
+        rest = tuple(sp[2:])
+
+        # ── Start padding ──────────────────────────────────────────────
+        if i == 0:
+            ns = s - pad
+        else:
+            prev_txt = spans[i - 1][2] if len(spans[i - 1]) > 2 else ""
+            if _word_continues(prev_txt):
+                gap = s - spans[i - 1][1]
+                ns = s - min(pad, max(0.0, gap / 2))
+            else:
+                # Word boundary: ensure at least _WORD_CLOSE_S gap between
+                # the padded spans so the mouth stays visibly closed.
+                # The natural gap (from note durations) already provides
+                # closure when large enough; only top up when it's tight.
+                # The forward shift is capped at 0.02 s (~0.6 frame) to
+                # avoid shrinking very short syllables (0.08 s rap notes)
+                # into near-zero windows.
+                gap = s - spans[i - 1][1]
+                if gap < _WORD_CLOSE_S:
+                    ns = s + min(_WORD_CLOSE_S - gap, 0.02)
+                else:
+                    ns = s  # natural gap already >= _WORD_CLOSE_S
+
+        # ── End padding ────────────────────────────────────────────────
+        cur_txt = sp[2] if len(sp) > 2 else ""
+        if i + 1 == n:
+            ne = e + pad
+        else:
+            if _word_continues(cur_txt):
+                gap = spans[i + 1][0] - e
+                ne = e + min(pad, max(0.0, gap / 2))
+            else:
+                ne = e  # word boundary: no forward pad into the gap
+
+        ns = max(0.0, ns)
+        out.append((ns, max(ne, ns + 1e-3)) + rest)
+    return out
+
+
+def _scale_state(state: dict, f: float) -> dict:
+    """`state` scaled to weight fraction `f` (0 → {}, i.e. fully closed)."""
+    if f <= 0 or not state:
+        return {}
+    return {k: max(1, min(255, int(round(v * f)))) for k, v in state.items()}
+
+
+def _edge_shapes(shape) -> tuple[dict, dict]:
+    """The mouth shape actually touching each edge of the syllable window (first
+    consonant or the vowel if there's none; last consonant/diphthong-end or the
+    vowel) — what a legato boundary should relax TOWARD instead of {}."""
+    initial, (vmain, vend), final = shape
+    start = initial[0] if initial else vmain
+    end = final[-1] if final else (vend if vend is not None else vmain)
+    return start, end
+
+
+def _syllable_points(t: float, dur: float, shape,
+                     start_floor: float = 0.0, end_floor: float = 0.0
+                     ) -> list[tuple[float, dict]]:
     """Control points (time, visemes) of a syllable in the window [t, t+dur].
 
-    Closed mouth {} before/after; brief consonants; vowel sustained in the middle;
+    Closed mouth {} before/after (or, with `start_floor`/`end_floor` > 0, a
+    partial-weight version of the syllable's own edge shape — used when this
+    syllable connects to its neighbour with no real pause, so the mouth eases
+    instead of fully closing); brief consonants; vowel sustained in the middle;
     diphthong drops from the main shape to the final one. Linear interpolation
-    between points creates the transitions (consonant↔vowel)."""
+    between points creates the transitions (consonant↔vowel).
+
+    Smoothness: attack/release at most 0.4× duration (was 0.25×); each consonant
+    unit at least 0.03 s. See :func:`_syllable_points_g` for the rationale."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
-    attack = min(0.04, dur * 0.25)
-    release = min(0.05, dur * 0.25)
+    # Official ramp: Magma/YARG autoLipsync use a 0.12 s transition.
+    attack = min(_TRANSITION_S, dur * 0.4)
+    release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     units = n_i + 3 + n_f          # the vowel is worth 3 units
     u = inner / units
+    edge_start, edge_end = _edge_shapes(shape)
 
-    pts: list[tuple[float, dict]] = [(t, {})]
-    cur = t + attack
+    def _clamp(cur):
+        return min(cur, t + dur - 1e-6)
+    pts: list[tuple[float, dict]] = [(t, _scale_state(edge_start, start_floor))]
+    cur = _clamp(t + attack)
     for c in initial:
         pts.append((cur, c))
-        cur += u
+        cur = _clamp(cur + u)
     if vend is not None:           # diphthong: main → final
         pts.append((cur, vmain))
-        cur += 1.5 * u
+        cur = _clamp(cur + 1.5 * u)
         pts.append((cur, vend))
-        cur += 1.5 * u
+        cur = _clamp(cur + 1.5 * u)
     else:
         pts.append((cur, vmain))
-        cur += 3 * u
+        cur = _clamp(cur + 3 * u)
     for c in final:
         pts.append((cur, c))
-        cur += u
-    pts.append((t + dur, {}))
+        cur = _clamp(cur + u)
+    pts.append((t + dur, _scale_state(edge_end, end_floor)))
     return pts
 
 
@@ -331,6 +449,71 @@ def _lerp_state(a: dict, b: dict, f: float) -> dict:
         w = int(round(wa + (wb - wa) * f))
         if w > 0:
             out[name] = w
+    return out
+
+
+def _facial_frames_from_keyframes(
+    facial_kf: list[tuple[float, str, int, str]],
+    n_frames: int,
+) -> dict[int, dict]:
+    """Sparse (time_s, viseme, weight, graph) → dense 30fps {frame: {viseme: weight}}.
+
+    Graph tokens (from Lipsync.hs confirmed semantics):
+      hold   → mantenha o peso até ao próximo keyframe
+      linear → interpole linearmente até ao próximo peso
+      ease   → exponencial (1 - (1-t)^2) até ao próximo peso"""
+    out: dict[int, dict] = {}
+    # Group by viseme and sort by time
+    by_viseme: dict[str, list[tuple[float, int, str]]] = {}
+    for time_s, viseme, weight, graph in facial_kf:
+        by_viseme.setdefault(viseme, []).append((time_s, weight, graph))
+
+    for viseme, kfs in by_viseme.items():
+        kfs.sort(key=lambda x: x[0])  # stable: same-time twins keep emission order
+        # Same-time twins (e.g. 0 then 157 at the same instant — a step) need NO
+        # dedup: the previous segment interpolates INTO the first twin (the
+        # bracketing zero) over an interval that truncates to the same frame,
+        # and the second twin's own segment carries the new value forward.
+        # Collapsing them to "last wins" eats the zero and makes the previous
+        # segment ramp toward the nonzero twin across the whole gap (a
+        # 26-second mouth-opening ramp in testing).
+        n = len(kfs)
+        for i, (t_i, w_i, g_i) in enumerate(kfs):
+            start_frame = max(0, int(t_i * FPS))
+            if i + 1 < n:
+                t_next, w_next, _ = kfs[i + 1]
+                end_frame = min(n_frames, int(t_next * FPS))
+                graph = g_i
+            else:
+                end_frame = n_frames
+                graph = "hold"
+
+            for fr in range(start_frame, end_frame):
+                if graph == "hold":
+                    w = w_i
+                elif graph == "linear":
+                    t_range = t_next - t_i
+                    if t_range > 0:
+                        t_local = (fr / FPS) - t_i
+                        alpha = min(1.0, t_local / t_range)
+                        w = int(w_i + alpha * (w_next - w_i))
+                    else:
+                        w = w_i
+                elif graph == "ease":
+                    t_range = t_next - t_i
+                    if t_range > 0:
+                        t_local = (fr / FPS) - t_i
+                        alpha = min(1.0, t_local / t_range)
+                        alpha = 1.0 - (1.0 - alpha) ** 2
+                        w = int(w_i + alpha * (w_next - w_i))
+                    else:
+                        w = w_i
+                else:
+                    w = w_i
+                w_clamped = max(0, min(255, w))
+                if fr not in out:
+                    out[fr] = {}
+                out[fr][viseme] = w_clamped
     return out
 
 
@@ -428,7 +611,10 @@ def lipsync_delta_events(lyrics: list[tuple[float, str]], song_len_s: float,
     return list(_delta_frames(frames, n_frames))
 
 
-def lipsync_events_from_spans(spans, song_len_s: float, lang: str = "en"):
+def lipsync_events_from_spans(spans, song_len_s: float, lang: str = "en",
+                             phrase_ends: list[float] | None = None,
+                             vocal_notes: list[tuple[float, int]] | None = None,
+                             facial_seed: int | None = None):
     """(frame_idx, [(viseme, weight)]) for a LIPSYNC# MIDI track, driven by the REAL
     syllable spans (audio-guided start/end) instead of a geometric onset window.
 
@@ -444,12 +630,21 @@ def lipsync_events_from_spans(spans, song_len_s: float, lang: str = "en"):
 
     NOTE: this is the dense 30fps-delta path, kept as reference/fallback. The production
     path is `lipsync_keyframes_from_spans` (sparse keyframes with hold/ease graphs)."""
-    frames, n_frames = frames_from_spans(spans, song_len_s, lang)
+    frames, n_frames = frames_from_spans(
+        spans, song_len_s, lang,
+        phrase_ends=phrase_ends,
+        vocal_notes=vocal_notes,
+        facial_seed=facial_seed,
+    )
     return list(_delta_frames(frames, n_frames))
 
 
 def frames_from_spans(spans, song_len_s: float,
-                      lang: str = "en") -> tuple[dict[int, dict], int]:
+                      lang: str = "en",
+                      phrase_ends: list[float] | None = None,
+                      vocal_notes: list[tuple[float, int]] | None = None,
+                      facial_seed: int | None = None,
+                      ) -> tuple[dict[int, dict], int]:
     """Dense per-frame viseme states (name→weight, 30 fps) from audio-guided spans.
 
     The shared core of the dense path: resolves one mouth shape per span (grouping
@@ -457,23 +652,51 @@ def frames_from_spans(spans, song_len_s: float,
     at 30 fps and merges them (max per viseme), scaling by the per-syllable loudness
     `gain`. Returns `(frames, n_frames)`. `lipsync_events_from_spans` delta-encodes it
     for the MIDI track; `milo.build_song_lipsync` serializes it into the CharLipSync
-    that goes inside the .milo (guaranteeing the same lipsync reaches the game)."""
-    spans = list(spans)
+    that goes inside the .milo (guaranteeing the same lipsync reaches the game).
+
+    When ``phrase_ends`` or ``vocal_notes`` are provided, facial animation keyframes
+    (Blink, Squint, Eyebrows) are also embedded so they reach the game via the milo."""
+    spans = _pad_spans(list(spans))
     shapes = _resolve_shapes(spans, lang)
     frames: dict[int, dict] = {}
-    for sp, shape in zip(spans, shapes):
+    n = len(spans)
+    for i, (sp, shape) in enumerate(zip(spans, shapes)):
         t, end = sp[0], sp[1]
         gain = sp[3] if len(sp) > 3 else 1.0
         dur = end - t
         if dur <= 0:
             continue
-        pts = _syllable_points(t, dur, shape)
+        start_floor = (_LEGATO_FLOOR if i > 0
+                       and t - spans[i - 1][1] <= _LEGATO_GAP_S else 0.0)
+        end_floor = (_LEGATO_FLOOR if i < n - 1
+                     and spans[i + 1][0] - end <= _LEGATO_GAP_S else 0.0)
+        pts = _syllable_points(t, dur, shape, start_floor, end_floor)
         if gain != 1.0:
             pts = [(pt_t, {nm: max(0, min(255, int(round(w * gain))))
                            for nm, w in st.items()})
                    for pt_t, st in pts]
         _sample_into(frames, pts)
     n_frames = max(1, int(math.ceil(song_len_s * FPS)) + 1)
+
+    # Inject facial animation keyframes (Blink, Squint, Eyebrows) into the milo.
+    if song_len_s is not None and song_len_s > 0 and (phrase_ends or vocal_notes):
+        gains: list[tuple[float, float]] = [(sp[0], sp[3] if len(sp) > 3 else 1.0)
+                                            for sp in spans]
+        facial_kf = generate_facial_keyframes(
+            song_len_s, phrase_ends, facial_seed, vocal_notes, gains)
+        if facial_kf:
+            facial_frames = _facial_frames_from_keyframes(facial_kf, n_frames)
+            # Merge — max per viseme (mouth and facial visemes are disjoint sets,
+            # but max is still the safe choice).
+            for fr, visemes in facial_frames.items():
+                if fr not in frames:
+                    frames[fr] = {}
+                for viseme, w in visemes.items():
+                    if viseme not in frames[fr]:
+                        frames[fr][viseme] = w
+                    else:
+                        frames[fr][viseme] = max(frames[fr][viseme], w)
+
     return frames, n_frames
 
 
@@ -501,25 +724,44 @@ def _resolve_shapes(spans, lang: str = "en") -> list:
 # the viseme's NEXT event — `hold` keeps the weight flat, `linear` ramps, `ease`
 # ramps exponentially (diphthong glide). Default (no token) = linear.
 
-def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, str]]:
+def _syllable_points_g(t: float, dur: float, shape,
+                       start_floor: float = 0.0, end_floor: float = 0.0
+                       ) -> list[tuple[float, dict, str]]:
     """Like `_syllable_points` but each point carries the graph of the segment that
-    STARTS at it: a held vowel plateau (`hold`) and the diphthong glide (`ease`)."""
+    STARTS at it: a held vowel plateau (`hold`) and the diphthong glide (`ease`).
+
+    `start_floor`/`end_floor` (see `_syllable_points`) relax to a partial-weight
+    version of the syllable's own edge shape instead of fully closing to {} when
+    this syllable connects to its neighbour with no real pause.
+
+    Smoothness: attack/release are at most 0.4× duration (was 0.25×) so the mouth
+    doesn't snap between shapes — short syllables still get a visible transition."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
-    attack = min(0.04, dur * 0.25)
-    release = min(0.05, dur * 0.25)
+    # Official ramp: Magma/YARG autoLipsync use a 0.12 s transition.  Previously
+    # capped at 0.25× duration, short syllables had attack < 0.04 s — the mouth
+    # snapped open in under a frame.  0.4× gives a visible ramp even on fast
+    # syllables while leaving at least 20 % of the span for the vowel body.
+    attack = min(_TRANSITION_S, dur * 0.4)
+    release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
-    u = inner / (n_i + 3 + n_f)        # the vowel is worth 3 units
-    pts: list[tuple[float, dict, str]] = [(t, {}, "linear")]   # ramp up from closed
-    cur = t + attack
+    u = inner / (n_i + 3 + n_f)  # the vowel is worth 3 units
+    edge_start, edge_end = _edge_shapes(shape)
+    # Monotonicity guard: every intermediate point must stay ≤ t+dur.
+    # The closing {} point at t+dur is appended last — always.
+    def _clamp(cur):
+        return min(cur, t + dur - 1e-6)
+    pts: list[tuple[float, dict, str]] = [
+        (t, _scale_state(edge_start, start_floor), "linear")]
+    cur = _clamp(t + attack)
     for c in initial:
         pts.append((cur, c, "linear"))
-        cur += u
+        cur = _clamp(cur + u)
     if vend is not None:               # diphthong: glide main → final (ease)
         pts.append((cur, vmain, "ease"))
-        cur += 1.5 * u
+        cur = _clamp(cur + 1.5 * u)
         pts.append((cur, vend, "linear"))
-        cur += 1.5 * u
+        cur = _clamp(cur + 1.5 * u)
     else:                              # monophthong: reach, HOLD the plateau, release
         pts.append((cur, vmain, "hold"))
         cur += 3 * u
@@ -527,7 +769,7 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
     for c in final:
         pts.append((cur, c, "linear"))
         cur += u
-    pts.append((t + dur, {}, "linear"))   # close
+    pts.append((t + dur, _scale_state(edge_end, end_floor), "linear"))   # close/relax
     return pts
 
 
@@ -581,7 +823,7 @@ def _simplify_series(ser: list[list]) -> list[list]:
 # Official RB3 milos carry Blink, Brow_*, Squint mixed with mouth shapes.
 
 _FACIAL_VISEMES = ("Blink", "Brow_aggressive", "Brow_down",
-                   "Brow_pouty", "Brow_up", "Squint")
+                   "Brow_openmouthed", "Brow_pouty", "Brow_up", "Squint")
 
 # Timing constants (seconds)
 _BLINK_INTERVAL = (2.0, 10.0)     # random uniform range
@@ -626,6 +868,8 @@ def _generate_blinks(
         out.append((t, "Blink", _BLINK_WEIGHT, "ease"))       # close
         out.append((t + _BLINK_CLOSE_S, "Blink", _BLINK_WEIGHT, "hold"))  # hold
         out.append((t + _BLINK_CLOSE_S + _BLINK_HOLD_S, "Blink", 0, "linear"))  # open
+        out.append((t + _BLINK_CLOSE_S + _BLINK_HOLD_S + _BLINK_OPEN_S,
+                    "Blink", 0, "hold"))                       # hold open
         t += rng.uniform(*_BLINK_INTERVAL)
 
     # Phrase-boundary bonus blinks: 40 % chance of an extra blink just
@@ -641,8 +885,11 @@ def _generate_blinks(
                 out.append((pe, "Blink", _BLINK_WEIGHT, "ease"))
                 out.append((pe + _BLINK_CLOSE_S, "Blink", _BLINK_WEIGHT, "hold"))
                 out.append((pe + _BLINK_CLOSE_S + _BLINK_HOLD_S, "Blink", 0, "linear"))
+                out.append((pe + _BLINK_CLOSE_S + _BLINK_HOLD_S + _BLINK_OPEN_S,
+                            "Blink", 0, "hold"))
                 blink_times.update({pe, pe + _BLINK_CLOSE_S,
-                                    pe + _BLINK_CLOSE_S + _BLINK_HOLD_S})
+                                    pe + _BLINK_CLOSE_S + _BLINK_HOLD_S,
+                                    pe + _BLINK_CLOSE_S + _BLINK_HOLD_S + _BLINK_OPEN_S})
 
     out.sort(key=lambda e: (e[0], e[1]))
     return out
@@ -651,37 +898,71 @@ def _generate_blinks(
 def _generate_squints(
     song_len_s: float,
     rng=None,
+    gains: list[tuple[float, float]] | None = None,
 ) -> list[tuple[float, str, int, str]]:
-    """Periodic squint keyframes."""
+    """Periodic squint keyframes, plus extra ones on belted/loud syllables
+    (``gains``, see `audio.syllable_gain`) — singers visibly scrunch up on the
+    loudest notes, which the plain periodic timer alone doesn't capture."""
     if rng is None:
         import random as rng
     out: list[tuple[float, str, int, str]] = []
+    times: list[float] = []
     t = rng.uniform(*_SQUINT_INTERVAL)
     while t < song_len_s:
         out.append((t, "Squint", _SQUINT_WEIGHT, "ease"))
         out.append((t + _SQUINT_DURATION, "Squint", 0, "linear"))
+        times.append(t)
         t += rng.uniform(*_SQUINT_INTERVAL)
+    for gt, g in (gains or []):
+        if g < _BROW_LOUD_GAIN or rng.random() >= 0.15:
+            continue
+        if any(abs(gt - ot) < 1.0 for ot in times):
+            continue   # don't stack on top of a nearby squint
+        out.append((gt, "Squint", _SQUINT_WEIGHT, "ease"))
+        out.append((gt + _SQUINT_DURATION, "Squint", 0, "linear"))
+        times.append(gt)
     return out
+
+
+_BROW_LOUD_GAIN = 1.05     # phrase avg gain >= this reads as a belted/intense phrase
+_BROW_LOUD_JUMP = 0.35     # gain rise between consecutive phrases that reads as a surge
+
+
+def _nearest_gain(gains: list[tuple[float, float]], t: float) -> float:
+    """Loudness gain (see `audio.syllable_gain`) for the syllable closest to `t`,
+    or 1.0 (neutral) if `gains` is empty."""
+    if not gains:
+        return 1.0
+    best = min(gains, key=lambda g: abs(g[0] - t))
+    return best[1]
 
 
 def _generate_eyebrows(
     vocal_notes: list[tuple[float, int]],
     song_len_s: float,
     rng=None,
+    gains: list[tuple[float, float]] | None = None,
 ) -> list[tuple[float, str, int, str]]:
-    """Eyebrow animation keyframes driven by vocal pitch and intensity.
+    """Eyebrow animation keyframes driven by vocal pitch, loudness and intensity.
 
     Official milo analysis shows **Brow_down is the DEFAULT** (present in
     ~98 % of frames across all songs), not an event.  Other brow visemes
     (aggressive / up / pouty) override it when active.
 
     ``vocal_notes`` is a sorted list of ``(start_s, midi_pitch)`` from the
-    PART VOCALS track.  Rules, in priority order (higher wins):
+    PART VOCALS track. Most charts here are TALKY (unpitched, fixed pitch) —
+    pitch alone then reads as flat and the brows barely react. ``gains``
+    (sorted ``(start_s, gain)`` from the audio-guided syllable loudness, see
+    `audio.syllable_gain`) is used alongside pitch so a belted/screamed
+    passage still gets an expressive brow even with no real melody. Rules, in
+    priority order (higher wins):
 
-    * **Brow_aggressive** — high pitch (>= C5/72) OR dense phrasing (>= 3
-      notes/s within a phrase).  Overrides Brow_down.
+    * **Brow_aggressive** — high pitch (>= C5/72), dense phrasing (>= 3
+      notes/s within a phrase), OR a loud/belted phrase (avg gain >=
+      ``_BROW_LOUD_GAIN``).  Overrides Brow_down.
     * **Brow_up** — a pitch jump >= ``_BROW_UP_JUMP`` semitones between
-      consecutive notes.  Brief flash, overrides Brow_down.
+      consecutive notes, OR a loudness surge (``_BROW_LOUD_JUMP``) into the
+      next phrase.  Brief flash, overrides Brow_down.
     * **Brow_pouty** — rare; triggered randomly in ~5 % of phrases that
       don't already have another override.  Overrides Brow_down.
     * **Brow_down** — default state at moderate weight (``_BROW_DEFAULT_W``).
@@ -692,6 +973,7 @@ def _generate_eyebrows(
     out: list[tuple[float, str, int, str]] = []
     if not vocal_notes:
         return out
+    gains = gains or []
 
     _DW = _BROW_DEFAULT_W
     _AW = _BROW_AGGRESSIVE_WEIGHT
@@ -710,11 +992,16 @@ def _generate_eyebrows(
     # Each entry: (start_s, end_s, expression, weight)
     # expression is one of: "aggressive", "down", "pouty", "up", None (default)
     brow_segments: list[tuple[float, float, str | None, int]] = []
+    phrase_gains: list[float] = []
 
     for phrase in phrases:
         if len(phrase) < 1:
+            phrase_gains.append(1.0)
             continue
         pitches = [p for _, p in phrase]
+        phrase_g = [_nearest_gain(gains, t) for t, _ in phrase]
+        avg_gain = sum(phrase_g) / len(phrase_g)
+        phrase_gains.append(avg_gain)
         t0 = phrase[0][0]
         t1 = min(phrase[-1][0] + _BROW_HOLD_S + _BROW_FADE_S,
                  song_len_s)
@@ -726,7 +1013,8 @@ def _generate_eyebrows(
         expr: str | None = None
         w = 0
 
-        if max_p >= _BROW_AGGRESSIVE_PITCH or (density >= 3.0 and len(phrase) >= 4):
+        if (max_p >= _BROW_AGGRESSIVE_PITCH or (density >= 3.0 and len(phrase) >= 4)
+                or avg_gain >= _BROW_LOUD_GAIN):
             expr, w = "aggressive", _AW
         # Sustained low-pitch phrase: dur is the phrase span (gap ≤ 0.5 s
         # between notes).  A phrase with several short notes can still be
@@ -747,6 +1035,12 @@ def _generate_eyebrows(
         cur_t, cur_p = vocal_notes[i]
         if cur_p - prev_p >= _BROW_UP_JUMP:
             brow_up_times.add(cur_t)
+    # A loudness surge between consecutive PHRASES also reads as a "surprise"
+    # flash (e.g. a quiet verse suddenly bursting into a belted line) — flash
+    # at the start of the louder phrase.
+    for i in range(1, len(phrases)):
+        if phrases[i] and phrase_gains[i] - phrase_gains[i - 1] >= _BROW_LOUD_JUMP:
+            brow_up_times.add(phrases[i][0][0])
 
     # ── Build keyframes ──
     # Start with DEFAULT Brow_down at tick 0.
@@ -797,6 +1091,7 @@ def generate_facial_keyframes(
     phrase_ends: list[float] | None = None,
     rng_seed: int | None = None,
     vocal_notes: list[tuple[float, int]] | None = None,
+    gains: list[tuple[float, float]] | None = None,
 ) -> list[tuple[float, str, int, str]]:
     """All facial animation keyframes (Blink, Squint, Brow_*) for the whole song.
 
@@ -806,14 +1101,18 @@ def generate_facial_keyframes(
     When ``vocal_notes`` (list of ``(start_s, midi_pitch)``) is provided,
     eyebrow expressions are generated based on pitch: high notes raise inner
     brows (Brow_aggressive), low sustained notes furrow (Brow_down), and
-    large pitch jumps cause surprise (Brow_up)."""
+    large pitch jumps cause surprise (Brow_up). ``gains`` (sorted
+    ``(start_s, gain)`` per-syllable loudness, see `audio.syllable_gain`) adds
+    the same reactions driven by LOUDNESS instead of pitch — most charted
+    vocals here are talky/unpitched, so pitch alone reads flat; loudness keeps
+    the face expressive on belted or screamed passages regardless."""
     import random as _rng
     rng = _rng.Random(rng_seed) if rng_seed is not None else _rng
     out: list[tuple[float, str, int, str]] = []
     out.extend(_generate_blinks(song_len_s, phrase_ends, rng))
-    out.extend(_generate_squints(song_len_s, rng))
+    out.extend(_generate_squints(song_len_s, rng, gains))
     if vocal_notes:
-        out.extend(_generate_eyebrows(vocal_notes, song_len_s, rng))
+        out.extend(_generate_eyebrows(vocal_notes, song_len_s, rng, gains))
     out.sort(key=lambda e: (e[0], e[1]))
     return out
 
@@ -839,31 +1138,148 @@ def lipsync_keyframes_from_spans(
     song_len_s: float | None = None,
     facial_seed: int | None = None,
     vocal_notes: list[tuple[float, int]] | None = None,
+    mouth_openness: float = 1.0,
 ) -> list[tuple[float, str, int, str]]:
     """(time_s, viseme, weight, graph) sparse keyframes for a LIPSYNC# MIDI track.
+
+    ``mouth_openness`` (0.0–1.0) scales the weight of every mouth viseme,
+    letting the user reduce the overall mouth activity for songs where the
+    singer barely moves their lips (spoken-word, rap, etc.).  At 1.0 the
+    mouth opens fully for each syllable (standard RB3 autoLipsync); at 0.5
+    the shapes are half as pronounced; at 0.0 the mouth stays visually
+    closed.  Facial animations (blink, squint, brows) are NOT affected.
 
     Production path. Same audio-guided spans as `lipsync_events_from_spans`, but emits
     sparse keyframes with Onyx graph tokens (held vowels = `hold`, diphthong glides =
     `ease`, transitions = linear) instead of baking the curve into dense 30fps deltas.
-    Far fewer events and closer to how Onyx itself authors the milo. Syllable windows
-    are disjoint (audio gap between gems) so each closes the mouth before the next.
+    Far fewer events and closer to how Onyx itself authors the milo. Adjacent syllable
+    windows with no real pause between them (back-to-back, same word/phrase) relax
+    only partway (`_LEGATO_FLOOR`) instead of fully closing the mouth — otherwise every
+    syllable boundary punches shut and reopens like discrete speech instead of the
+    connected articulation of singing. A genuine gap (real silence, phrase end) still
+    closes fully.
 
     When ``song_len_s`` is provided, facial animation keyframes are generated alongside
     the mouth shapes and merged into the output.  ``facial_seed`` makes random blink/
     squint timing reproducible.  ``vocal_notes`` (list of ``(start_s, midi_pitch)``)
-    drives eyebrow expressions via :func:`generate_facial_keyframes`."""
-    spans = list(spans)
+    drives eyebrow expressions via :func:`generate_facial_keyframes`; the same
+    per-syllable loudness gain carried in ``spans`` also feeds it, so belted/
+    screamed passages stay expressive even when ``vocal_notes`` is flat (talky)."""
+    spans = _pad_spans(list(spans))
     shapes = _resolve_shapes(spans, lang)
     out: list[tuple[float, str, int, str]] = []
-    for sp, shape in zip(spans, shapes):
+    n = len(spans)
+    gains: list[tuple[float, float]] = []
+
+    def _shape_names(shape) -> set:
+        initial, (vmain, vend), final = shape
+        names: set = set(vmain)
+        if vend is not None:
+            names |= set(vend)
+        for st in (*initial, *final):
+            names |= set(st)
+        return names
+
+    # Precomputed once — the legato relax-in/out checks below look at the
+    # previous/next syllable's names for every boundary.
+    shape_names = [_shape_names(sh) for sh in shapes]
+
+    for i, (sp, shape) in enumerate(zip(spans, shapes)):
         t, end = sp[0], sp[1]
         gain = sp[3] if len(sp) > 3 else 1.0
-        if end - t <= 0:
+        gains.append((t, gain))
+        raw_dur = end - t
+        if raw_dur <= 0:
             continue
-        out.extend(_keyframes_from_points(_syllable_points_g(t, end - t, shape), gain))
+        # Word-boundary-aware articulation:
+        # Same-word syllables (connected by hyphen '=') keep the mouth partially open
+        # (legato). Different-word boundaries ALWAYS close the mouth fully — the singer
+        # takes a real breath/break between words, and the official RB3 autoLipsync
+        # model closes between every word, not just when the span exceeds a threshold.
+        if i > 0:
+            prev_continues = _word_continues(spans[i - 1][2])
+            if prev_continues:
+                start_floor = _LEGATO_FLOOR     # same word: partial legato
+            else:
+                start_floor = _WORD_FLOOR       # new word: start from closed
+        else:
+            start_floor = 0.0                   # first syllable: start closed
+
+        if i < n - 1:
+            this_continues = _word_continues(spans[i][2])
+            if this_continues:
+                end_floor = _LEGATO_FLOOR       # same word: keep mouth partially open
+                dur = raw_dur                   # hold vowel for full span (no cap)
+            else:
+                end_floor = _WORD_FLOOR         # word boundary: ALWAYS close fully
+                dur = raw_dur                   # hold vowel for full span (no cap)
+        else:
+            end_floor = 0.0                     # last span: close fully at end
+            dur = raw_dur                       # hold vowel for full span (no cap)
+        pts = _syllable_points_g(t, dur, shape, start_floor, end_floor)
+        # Legato boundaries break the zero-bracketing every series otherwise
+        # has, and a viseme keyframe ramps linearly to the NEXT keyframe of
+        # that viseme no matter how far away it is (Onyx graph semantics — the
+        # game does the same). Two dangling cases must be closed by hand:
+        #
+        #  * relax-in: with start_floor > 0 the series STARTS nonzero, so the
+        #    viseme's previous keyframe — possibly 30 s back — ramps up across
+        #    the whole gap (slow mouth-opening over silence). Pin a zero just
+        #    before this syllable for visemes the previous syllable didn't use.
+        #    MUST be emitted BEFORE the series: when the zero lands at the same
+        #    timestamp as the series' entry keyframe (back-to-back padded
+        #    spans), the stable time-sort keeps emission order, and only a
+        #    (0, entry) twin order makes the previous segment ramp into the
+        #    zero — (entry, 0) re-creates the multi-second ramp.
+        #  * relax-out: the edge visemes end at _LEGATO_FLOOR with no closing
+        #    zero — a viseme the next syllable doesn't use dangles at ~35%
+        #    until its next reuse ("mouth never closes"). Close it shortly
+        #    into the next syllable.
+        if start_floor > 0.0 and i > 0:
+            prev_names = shape_names[i - 1]
+            entry = pts[0][1]                         # the relaxed entry state
+            # The previous syllable doesn't use these visemes, so its window is
+            # free — back the zero into it (clamped to its start) for a real
+            # 0→entry ramp instead of a same-frame step.
+            open_t = max(spans[i - 1][0], t - _LEGATO_RELEASE_S)
+            for nm, w in entry.items():
+                if w > 0 and nm not in prev_names:
+                    out.append((open_t, nm, 0, "linear"))
+        # mouth_openness scales the weight of all mouth visemes, letting
+        # the user reduce overall mouth activity per song.
+        out.extend(_keyframes_from_points(pts, gain * mouth_openness))
+        # ── Word-boundary closure hold ──────────────────────────────────
+        # The mouth must stay visibly closed for at least _WORD_CLOSE_S
+        # at every word boundary.  Without this, the closures are only 1
+        # frame deep (0.033 s) because back-to-back spans share the same
+        # boundary tick, and the next span's attack interpolation (over
+        # _TRANSITION_S = 0.12 s) makes a mouth viseme non-zero within
+        # the very next frame — the eye never sees a closed mouth.
+        #
+        # We close every viseme that is still active at the last real
+        # articulation point (``pts[-2]`` — the point before the closing
+        # ``{}``) and hold it at zero for _WORD_CLOSE_S seconds.
+        # This pins ALL active visemes to 0 simultaneously, so the
+        # between-word gap registers as genuinely closed.
+        if end_floor == _WORD_FLOOR and i + 1 < n and len(pts) >= 2:
+            last_real = pts[-2][1]  # the last non-{} state
+            close_at = end
+            hold_until = end + _WORD_CLOSE_S
+            for nm in sorted(last_real):
+                out.append((close_at, nm, 0, "linear"))
+                out.append((hold_until, nm, 0, "linear"))
+        if end_floor > 0.0 and i + 1 < n:
+            nxt_start, nxt_end = spans[i + 1][0], spans[i + 1][1]
+            nxt_names = shape_names[i + 1]
+            relaxed = pts[-1][1]                      # the relaxed edge state
+            close_t = min(max(nxt_start, end) + _LEGATO_RELEASE_S,
+                          max(nxt_end, end + 1e-3))
+            for nm, w in relaxed.items():
+                if w > 0 and nm not in nxt_names:
+                    out.append((close_t, nm, 0, "linear"))
     if song_len_s is not None and song_len_s > 0:
         facial = generate_facial_keyframes(
-            song_len_s, phrase_ends, facial_seed, vocal_notes)
+            song_len_s, phrase_ends, facial_seed, vocal_notes, gains)
         out = merge_facial_into_keyframes(out, facial)
     else:
         out.sort(key=lambda e: (e[0], e[1]))

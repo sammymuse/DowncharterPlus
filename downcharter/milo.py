@@ -46,13 +46,15 @@ _BARRIER = b"\xad\xde\xad\xde"
 _MILO_MAGIC = 0xCABEDEAF
 _MILO_HEADER_SIZE = 0x810
 
-# The MagmaLipsync1 ObjectDir header, from milo version (28) up to — but not
-# including — the first ADDEADDE barrier of the files section. Constant for
-# every single-`song.lipsync` milo; copied verbatim (byte-verified) from the
-# Onyx-built milos. Contains: ver 28, "ObjectDir", name "lipsync", U1=4,
-# U2=0x15, entry ("CharLipSync","song.lipsync"), U3=0x1B, U4=2, empty subname,
-# the 7 dummy matrices, and the trailing dir bookkeeping + 13 unknown bytes.
-_DIR_PREFIX = bytes.fromhex(
+# The MagmaLipsync1 ObjectDir header tail (U3, U4, empty subname, 7 dummy
+# matrices, trailing bookkeeping). Extracted byte-by-byte from the Onyx-built
+# milo blob at offset 71 (after the first entry). Constant regardless of how
+# many CharLipSync entries are listed — only U1 + U2 + the entry list change.
+#
+# We assemble the full header for 1 entry, then slice off the tail (offset 71+)
+# so the hex string is written once and sliced, avoiding subtle string-pasting
+# length bugs.
+_FULL_DIR_SINGLE = bytes.fromhex(
     "0000001c000000094f626a656374446972000000076c697073796e63000000040000001500000001"
     "0000000b436861724c697053796e630000000c736f6e672e6c697073796e630000001b0000000200"
     "0000000000000000000000000000073f3504f3bf3504f3000000003f13cd3a3f13cd3abf13cd3a3e"
@@ -66,6 +68,61 @@ _DIR_PREFIX = bytes.fromhex(
     "8000000000000000000000000000003f800000000000004440000000000000000000000100000000"
     "00000000000000000000000000000000000000000000"
 )
+_DIR_TAIL = _FULL_DIR_SINGLE[71:]  # U3 + U4 + subname + matrices + trailing
+
+
+def _build_dir_prefix(entry_names: list[str]) -> bytes:
+    """Build the ObjectDir header bytes for N `entry_names`.
+
+    Entry name convention (RB3 multi-entry milos, verified against 100+ official
+    samples): single-entry = ``["song.lipsync"]``; multi-entry =
+    ``["part2.lipsync", ..., "song.lipsync"]`` — part entries FIRST, song LAST.
+
+    U1/U2 scale with entry count (verified: N=1→U1=4/U2=21, N=2→U1=6/U2=35,
+    N=3→U1=8/U2=49):
+        U1 = 2 + 2*N
+        U2 = 7 + 14*N
+
+    Structure:
+        u32 version = 28
+        u32 type_name_len + "ObjectDir"
+        u32 name_len + "lipsync"
+        u32 U1 = 2 + 2*N
+        u32 U2 = 7 + 14*N
+        u32 entry_count (= N)
+        for each entry: u32 type_len + "CharLipSync" + u32 name_len + name
+        _DIR_TAIL (= U3, U4, subname, 7 matrices, trailing)
+    """
+    n = len(entry_names)
+    u1 = 2 + 2 * n
+    u2 = 7 + 14 * n
+    out = bytearray()
+    # ObjectDir header fields are BIG-ENDIAN (>I) — verified against 100+ official
+    # milos (PS3 and Xbox). The outer MILO_A wrapper uses native-endian for the
+    # header fields, but the dir body is pure big-endian.
+    out += struct.pack(">I", 28)               # version
+    out += struct.pack(">I", 9)                # type name length
+    out += b"ObjectDir"                        # type name
+    out += struct.pack(">I", 7)               # name length
+    out += b"lipsync"                          # name
+    out += struct.pack(">I", u1)               # U1
+    out += struct.pack(">I", u2)               # U2
+    out += struct.pack(">I", n)                # entry_count
+
+    for name in entry_names:
+        out += struct.pack(">I", 11)           # type length
+        out += b"CharLipSync"                  # type
+        out += struct.pack(">I", len(name))    # name length
+        out += name.encode("ascii")            # name
+
+    out += _DIR_TAIL
+    return bytes(out)
+
+
+# Singleton dir prefix for the common single-entry case (N=1).
+# Uses the same _build_dir_prefix path as multi-entry, so behaviour is
+# consistent; byte-identical to the original hardcoded _FULL_DIR_SINGLE.
+_DIR_PREFIX = _build_dir_prefix(["song.lipsync"])
 
 
 def add_milo_header(body: bytes) -> bytes:
@@ -80,11 +137,41 @@ def add_milo_header(body: bytes) -> bytes:
     return bytes(out) + body
 
 
-def build_milo(lipsync_bytes: bytes) -> bytes:
-    """Assemble a complete .milo (== .milo_ps3 == .milo_xbox body) carrying one
-    `song.lipsync` (CharLipSync). The body is platform-independent."""
-    body = _DIR_PREFIX + _BARRIER + lipsync_bytes + _BARRIER
-    return add_milo_header(body)
+def build_milo(lipsync_or_list: bytes | list[bytes]) -> bytes:
+    """Assemble a complete .milo (== .milo_ps3 == .milo_xbox body).
+
+    Accepts a single ``bytes`` (single ``song.lipsync`` entry) or a ``list[bytes]``
+    (multi-entry for PART VOCALS + HARM2 + HARM3: entries are
+    ``["part2.lipsync", "song.lipsync"]`` for 2 tracks or
+    ``["part2.lipsync", "part3.lipsync", "song.lipsync"]`` for 3 — part entries FIRST,
+    song LAST, matching the official RB3 milo convention verified against 100+ real
+    files).
+
+    The body is platform-independent (PS3 and Xbox share the same milo body)."""
+    if isinstance(lipsync_or_list, bytes):
+        lipsync_list: list[bytes] = [lipsync_or_list]
+    else:
+        lipsync_list = lipsync_or_list
+
+    n = len(lipsync_list)
+    if n == 1:
+        names = ["song.lipsync"]
+    else:
+        # part entries first, song.lipsync last — verified against official milos
+        names = [f"part{k}.lipsync" for k in range(2, n + 1)]
+        names.append("song.lipsync")
+
+    body = bytearray()
+    body += _build_dir_prefix(names)
+    # N entries → N+2 barriers total (leading + N intermediate + trailing).
+    # Barrier layout: [leading, blob0_end, blob1_end, ..., blob{N-1}_end, trailing]
+    # so blob i is body[barriers[i+1]+4 : barriers[i+2]].
+    # The leading barrier (barriers[0]) marks end-of-header; the formula
+    # i1=barriers[index*2+1], i2=barriers[index*2+2] then gives the correct range.
+    body += _BARRIER  # leading (barriers[0])
+    for lb in lipsync_list:
+        body += lb + _BARRIER  # blob + intermediate barrier
+    return add_milo_header(bytes(body))
 
 
 def _serialize_lipsync(frames: dict[int, dict], n_frames: int) -> bytes:
@@ -141,29 +228,115 @@ def _serialize_lipsync(frames: dict[int, dict], n_frames: int) -> bytes:
     return bytes(out)
 
 
-def build_song_lipsync(spans, song_len_s: float, lang: str = "en") -> bytes:
+def build_song_lipsync(spans, song_len_s: float, lang: str = "en",
+                        phrase_ends: list[float] | None = None,
+                        vocal_notes: list[tuple[float, int]] | None = None,
+                        facial_seed: int | None = None,
+                        mouth_openness: float = 1.0) -> bytes:
     """CharLipSync bytes for the milo, from the same audio-guided syllable spans
     (`lip_spans` = [(start_s, end_s, text, gain)]) used for the LIPSYNC1 MIDI track.
 
-    Reuses `lipsync.frames_from_spans` (the dense 30 fps state path) so the milo's
-    inherently dense per-frame viseme states come straight from what we already
-    compute — no new lipsync logic."""
-    frames, n_frames = _lip.frames_from_spans(spans, song_len_s, lang)
+    ``mouth_openness`` is passed through to :func:`lipsync_keyframes_from_spans`.
+
+    Uses the sparse keyframes path (`lipsync_keyframes_from_spans`) which correctly
+    sustains vowels at full weight via 'hold' graph tokens — unlike the dense
+    `frames_from_spans` path whose 3-point control (attack → release → end) decays
+    the mouth throughout the syllable. The sparse keyframes are converted to dense
+    30fps frames via `_facial_frames_from_keyframes` (graph-aware interpolation:
+    'hold' = flat plateau, 'linear'/'ease' = smooth transitions) before serialising.
+
+    When phrase_ends/vocal_notes are provided, facial animation keyframes
+    (Blink, Squint, Eyebrows) are also embedded in the milo so they reach
+    the game — not just the MIDI LIPSYNC1 track."""
+    keyframes = _lip.lipsync_keyframes_from_spans(
+        spans,
+        phrase_ends=phrase_ends,
+        song_len_s=song_len_s,
+        vocal_notes=vocal_notes,
+        facial_seed=facial_seed,
+        mouth_openness=mouth_openness,
+    )
+    n_frames = max(1, int(math.ceil(song_len_s * _lip.FPS)) + 1)
+    frames = _lip._facial_frames_from_keyframes(keyframes, n_frames)
     return _serialize_lipsync(frames, n_frames)
 
 
-def build_milo_from_spans(spans, song_len_s: float, lang: str = "en") -> bytes:
-    """Convenience: spans → complete .milo ready to write to disk."""
-    return build_milo(build_song_lipsync(spans, song_len_s, lang))
+def build_milo_from_spans(spans, song_len_s: float, lang: str = "en",
+                           phrase_ends: list[float] | None = None,
+                           vocal_notes: list[tuple[float, int]] | None = None,
+                           facial_seed: int | None = None,
+                           mouth_openness: float = 1.0) -> bytes:
+    """Convenience: spans → complete .milo ready to write to disk.
+    ``mouth_openness`` is passed through to :func:`build_song_lipsync`."""
+    return build_milo(build_song_lipsync(
+        spans, song_len_s, lang,
+        phrase_ends=phrase_ends,
+        vocal_notes=vocal_notes,
+        facial_seed=facial_seed,
+        mouth_openness=mouth_openness,
+    ))
+
+
+def build_multi_lipsync(spans_list: list, song_len_s: float, lang: str = "en",
+                         phrase_ends: list[float] | None = None,
+                         vocal_notes: list[tuple[float, int]] | None = None,
+                         facial_seed: int | None = None,
+                         mouth_openness: float = 1.0) -> list[bytes]:
+    """Build N lipsync byte blobs from N span lists (lead + HARM1 + HARM2 + HARM3).
+
+    ``mouth_openness`` is passed through to :func:`build_song_lipsync`.
+
+    Each list may be empty (a track with no lyrics produces no lipsync entry).
+    Returns entries in the order expected by build_milo for the RB3 multi-entry
+    convention: harmonies FIRST, lead LAST (so build_milo names them
+    part2.lipsync / part3.lipsync / song.lipsync)."""
+    parts: list[bytes] = []
+    lead: bytes | None = None
+    for i, spans in enumerate(spans_list):
+        if spans:
+            # Vary facial_seed per entry so each vocalist blinks/pairs differently
+            seed = (facial_seed + i) if facial_seed is not None else None
+            blob = build_song_lipsync(
+                spans, song_len_s, lang,
+                phrase_ends=phrase_ends,
+                vocal_notes=vocal_notes,
+                facial_seed=seed,
+                mouth_openness=mouth_openness,
+            )
+            if i == 0:
+                lead = blob   # first vocal track = lead / PART VOCALS
+            else:
+                parts.append(blob)
+    if lead is not None:
+        parts.append(lead)   # lead goes LAST → named "song.lipsync" by build_milo
+    return parts
 
 
 # ───────────────────────────── validation reader ─────────────────────────────
-def parse_song_lipsync(milo_bytes: bytes) -> dict:
-    """Parse a .milo back to {visemes, n_frames, lipsync_bytes, frames} — a small
-    reader for the round-trip validation gate (diff our output vs. a real milo)."""
+def parse_song_lipsync(milo_bytes: bytes, index: int = 0) -> dict:
+    """Parse the Nth lipsync entry from a .milo back to
+    {visemes, n_frames, lipsync_bytes, frames}.
+
+    For a multi-entry milo the entries are (in order):
+    ``part2.lipsync``, ``part3.lipsync``, …, ``song.lipsync`` (RB3 convention).
+    ``index=0`` reads the first entry; ``index=1`` the second, etc.
+    Used for round-trip validation gate."""
     body = milo_bytes[_MILO_HEADER_SIZE:]
-    i1 = body.find(_BARRIER)
-    i2 = body.find(_BARRIER, i1 + 4)
+    # Collect all ADDEADDE barrier positions
+    barriers: list[int] = []
+    pos = 0
+    while True:
+        p = body.find(_BARRIER, pos)
+        if p == -1:
+            break
+        barriers.append(p)
+        pos = p + 4
+    if index + 1 >= len(barriers):
+        raise ValueError(
+            f"lipsync entry {index} not found "
+            f"(milo has {len(barriers) - 1} entries)")
+    i1 = barriers[index]
+    i2 = barriers[index + 1]
     lip = body[i1 + 4:i2]
     o = 0
 
