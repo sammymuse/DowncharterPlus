@@ -112,33 +112,35 @@ def _pair(base: str) -> dict[str, int]:
 
 _VISEME_GROUPS = {
     # Mouth shapes (vowels) - 6 visemes simultaneously
+    # Using AVERAGE weights from officials (not max) for natural mouth opening
     "mouth_open": {
-        "Eat_hi": 102, "Eat_lo": 153,
-        "If_hi": 102, "If_lo": 153,
-        "Ox_hi": 102, "Ox_lo": 153,
+        "Eat_hi": 37, "Eat_lo": 54,
+        "If_hi": 44, "If_lo": 66,
+        "Ox_hi": 47, "Ox_lo": 70,
     },
     "mouth_mid": {
-        "Earth_hi": 102, "Earth_lo": 153,
-        "Eat_hi": 102, "Eat_lo": 153,
-        "If_hi": 102, "If_lo": 153,
+        "Earth_hi": 15, "Earth_lo": 22,
+        "Eat_hi": 37, "Eat_lo": 54,
+        "If_hi": 44, "If_lo": 66,
     },
     "mouth_closed": {
-        "Bump_hi": 102, "Bump_lo": 153,
-        "Told_hi": 102, "Told_lo": 153,
+        "Bump_hi": 54, "Bump_lo": 80,
+        "Told_hi": 43, "Told_lo": 64,
     },
     
     # Facial expressions - ALWAYS ACTIVE (officials: 90%+ of frames)
+    # Using AVERAGE weights from officials
     "facial_base": {
-        "Blink": 105,
-        "Brow_down": 126,
-        "Brow_pouty": 170,
+        "Blink": 109,
+        "Brow_down": 88,
+        "Brow_pouty": 168,
         "Squint": 51,
     },
     "facial_intense": {
-        "Blink": 105,
-        "Brow_down": 126,
-        "Brow_aggressive": 174,
-        "Brow_pouty": 170,
+        "Blink": 109,
+        "Brow_down": 88,
+        "Brow_aggressive": 100,
+        "Brow_pouty": 168,
         "Squint": 51,
     },
 }
