@@ -373,15 +373,18 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     between points creates the transitions (consonant↔vowel).
 
     Smoothness: attack/release at most 0.4× duration (was 0.25×); each consonant
-    unit at least 0.06 s (~2 frames @30fps). See :func:`_syllable_points_g` for
-    the rationale."""
+    unit at least 0.033 s (1 frame @30fps) when inner allows, otherwise
+    proportional (preserves phoneme sequence on short syllables)."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
     attack = min(_TRANSITION_S, dur * 0.4)
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     units = n_i + 3 + n_f          # the vowel is worth 3 units
-    u = max(0.06, inner / units)   # each segment lasts at least 2 frames
+    raw_u = inner / units
+    u = max(0.033, raw_u)
+    if u * units > inner:          # minimum too large: keep phoneme order instead
+        u = raw_u
 
     def _clamp(cur):
         return min(cur, t + dur - 1e-6)
@@ -692,15 +695,19 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
 
     Smoothness: attack/release are at most 0.4× duration (was 0.25×) so the mouth
     doesn't snap between shapes — short syllables still get a visible transition.
-    Each segment (consonant/vowel step) lasts at least 0.06 s (~2 frames @30fps)
-    so individual viseme changes are never instant."""
+    Each segment (consonant/vowel step) lasts at least 0.033 s (1 frame @30fps)
+    when inner allows, otherwise proportional (preserves phoneme sequence on
+    short syllables)."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
     attack = min(_TRANSITION_S, dur * 0.4)
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     n_segments = n_i + 3 + n_f    # the vowel is worth 3 units
-    u = max(0.06, inner / n_segments)  # each segment lasts at least 2 frames
+    raw_u = inner / n_segments
+    u = max(0.033, raw_u)
+    if u * n_segments > inner:    # minimum too large: keep phoneme order instead
+        u = raw_u
     # Monotonicity guard: every intermediate point must stay ≤ t+dur.
     # The closing {} point at t+dur is appended last — always.
     def _clamp(cur):
