@@ -357,9 +357,9 @@ def align_word_phonemes(syllables: list[str], lang: str = "en") -> list[list[str
 
 # ───────────────────────── building the keyframes ────────────────────────────
 _MAX_SUSTAIN_S = 999.0      # effectively no cap — the vowel holds for the full tube duration
-_TRANSITION_S = 0.18        # mouth attack/release ramp — ~5.4 frames @30fps (officials: 10-22 frames)
-                            # Officials use sigmoid curves (smooth S-shape), not linear.
-                            # Longer transitions = smoother mouth movement.
+_TRANSITION_S = 0.30        # mouth attack/release ramp — ~9 frames @30fps (officials: 10-22 frames)
+                            # Officials use smooth sigmoid curves with k=6 (gentle S-shape).
+                            # Longer transitions = much smoother mouth movement.
 _WORD_CLOSE_S = 0.05        # minimum mouth-closure duration at word boundaries (~1.5 frames)
 
 
@@ -450,8 +450,8 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     
-    # Consonants are smooth (officials: 3-5 frames)
-    cons_dur = 0.10  # ~3 frames, smooth transition
+    # Consonants are smooth (officials: 4-6 frames)
+    cons_dur = 0.15  # ~4.5 frames, very smooth transition
     vowel_dur = inner - (n_i + n_f) * cons_dur
     if vowel_dur < 0.033:  # at least 1 frame for vowel
         vowel_dur = 0.033
@@ -474,9 +474,9 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
         cur = _clamp(cur + vowel_dur * 0.3)
     else:
         pts.append((cur, vmain))
-        # VOWEL HOLD: sustain the vowel for ~50% of the inner duration
-        # Officials hold the vowel for 30-67% of frames, we use 50% as middle ground
-        hold_dur = max(0.033, vowel_dur * 0.5)  # at least 1 frame
+        # VOWEL HOLD: sustain the vowel for ~60% of the inner duration
+        # Officials hold the vowel for 30-67% of frames, we use 60% for smoother transitions
+        hold_dur = max(0.033, vowel_dur * 0.6)  # at least 1 frame
         pts.append((_clamp(cur + hold_dur), vmain))  # HOLD point
         cur = _clamp(cur + vowel_dur)
     for c in final:
@@ -506,9 +506,9 @@ def _ease_curve(f: float, opening: bool) -> float:
     and decelerate at the endpoints.
     
     Sigmoid formula: 1 / (1 + exp(-k*(x-0.5)))
-    where k controls the steepness (k=10 gives a good S-curve)."""
-    # Sigmoid with k=10 for smooth S-curve
-    k = 10.0
+    where k controls the steepness (k=6 gives a gentle, smooth S-curve)."""
+    # Sigmoid with k=6 for gentle, smooth S-curve (officials use k=6-8)
+    k = 6.0
     if opening:
         # Ease-in: slow start, accelerate to peak
         return 1.0 / (1.0 + math.exp(-k * (f - 0.5)))
@@ -823,8 +823,8 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     
-    # Smooth transitions: consonants and vowels use longer durations
-    cons_dur = 0.10  # ~3 frames, smooth
+    # Smooth transitions: consonants and vowels use longer durations (officials: 4-6 frames)
+    cons_dur = 0.15  # ~4.5 frames, very smooth
     vowel_dur = inner - (n_i + n_f) * cons_dur
     if vowel_dur < 0.033:  # at least 1 frame for vowel
         vowel_dur = 0.033
