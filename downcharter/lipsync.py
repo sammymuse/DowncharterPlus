@@ -105,6 +105,45 @@ def _pair(base: str) -> dict[str, int]:
     }
 
 
+# ───────────────────────── VISEME GROUPS (Official Patterns) ──────────────────
+# Officials use specific combinations of visemes that appear together frequently.
+# Based on analysis of official .milo_xbox files (Bohemian Rhapsody).
+# These groups are activated SIMULTANEOUSLY during transitions.
+
+_VISEME_GROUPS = {
+    # Mouth shapes (vowels) - 6 visemes simultaneously
+    "mouth_open": {
+        "Eat_hi": 102, "Eat_lo": 153,
+        "If_hi": 102, "If_lo": 153,
+        "Ox_hi": 102, "Ox_lo": 153,
+    },
+    "mouth_mid": {
+        "Earth_hi": 102, "Earth_lo": 153,
+        "Eat_hi": 102, "Eat_lo": 153,
+        "If_hi": 102, "If_lo": 153,
+    },
+    "mouth_closed": {
+        "Bump_hi": 102, "Bump_lo": 153,
+        "Told_hi": 102, "Told_lo": 153,
+    },
+    
+    # Facial expressions - ALWAYS ACTIVE (officials: 90%+ of frames)
+    "facial_base": {
+        "Blink": 105,
+        "Brow_down": 126,
+        "Brow_pouty": 170,
+        "Squint": 51,
+    },
+    "facial_intense": {
+        "Blink": 105,
+        "Brow_down": 126,
+        "Brow_aggressive": 174,
+        "Brow_pouty": 170,
+        "Squint": 51,
+    },
+}
+
+
 def _blend(*bases: str, weights: list[float] | None = None) -> dict[str, int]:
     """Blend multiple viseme pairs with different weights.
     
@@ -427,77 +466,54 @@ def _pad_spans(spans, pad: float = _TRANSITION_S):
 def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     """Control points (time, visemes) of a syllable in the window [t, t+dur].
 
-    Closed mouth {} before/after (or, with `start_floor`/`end_floor` > 0, a
-    partial-weight version of the syllable's own edge shape — used when this
-    syllable connects to its neighbour with no real pause, so the mouth eases
-    instead of fully closing); brief consonants; vowel sustained in the middle;
-    diphthong drops from the main shape to the final one. Linear interpolation
-    between points creates the transitions (consonant↔vowel).
-
-    Smoothness: attack/release at most 0.4× duration (was 0.25×); each consonant
-    unit at least 0.033 s (1 frame @30fps) when inner allows, otherwise
-    proportional (preserves phoneme sequence on short syllables).
+    NEW ARCHITECTURE (based on official milo analysis):
+    - Transitions: 30-60 frames (1-2 seconds) instead of 8 frames
+    - Simultaneous activation: 5-6 visemes active at once (not sequential)
+    - Viseme groups: Pre-defined combinations that appear together in officials
+    - Facial integration: Expressions always active during mouth movement
     
-    VOWEL HOLD: Officials sustain the vowel for 30-67% of frames (mouth stays
-    still). We replicate this by adding a HOLD point after the vowel — the mouth
-    reaches the vowel shape and STAYS there before transitioning to final consonants.
-    
-    CONSONANT SPEED: Officials make consonant transitions very fast (1-2 frames).
-    We use 0.01s (~0.3 frames) for consonants so they're nearly instant.
-    
-    VISEME BLENDING: Officials use 4-6 visemes simultaneously. We blend all
-    consonants into a single shape to create richer mouth shapes."""
+    Structure: closed → [long transition to open] → [hold open] → [long transition to closed]
+    """
     initial, (vmain, vend), final = shape
-    n_i, n_f = len(initial), len(final)
-    attack = min(_TRANSITION_S, dur * 0.4)
-    release = min(_TRANSITION_S, dur * 0.4)
-    inner = max(1e-3, dur - attack - release)
     
-    # VISEME BLENDING: Blend all consonants into a single shape
-    # Officials use 4-6 visemes simultaneously
-    initial_blended = _blend_visemes(initial)
-    final_blended = _blend_visemes(final)
+    # NEW: Use viseme groups instead of individual visemes
+    # Officials activate 5-6 visemes simultaneously
+    open_shape = _VISEME_GROUPS["mouth_open"].copy()
+    closed_shape = _VISEME_GROUPS["mouth_closed"].copy()
     
-    # Consonants are smooth (officials: 4-6 frames)
-    cons_dur = 0.70  # ~21 frames, very smooth transition
-    # Only 2 consonant groups now (initial + final) instead of n_i + n_f
-    vowel_dur = inner - 2 * cons_dur
-    if vowel_dur < 0.033:  # at least 1 frame for vowel
-        vowel_dur = 0.033
-        cons_dur = max(0.01, (inner - vowel_dur) / 2)
+    # NEW: Integrate facial expressions (always active in officials)
+    facial = _VISEME_GROUPS["facial_base"].copy()
+    open_shape.update(facial)
+    closed_shape.update(facial)
+    
+    # NEW: Very long transitions (30-60 frames = 1-2 seconds)
+    # Officials use 60.9 frames average, we use 40 frames (1.33s) as middle ground
+    transition_frames = 40
+    transition_dur = transition_frames / FPS  # 1.33 seconds
+    
+    # If syllable is too short, use proportional transition
+    if dur < transition_dur * 2:
+        transition_dur = dur * 0.4  # 40% of syllable for each transition
+    
+    hold_dur = max(dur - 2 * transition_dur, 0.033)  # at least 1 frame hold
     
     def _clamp(cur):
         return min(cur, t + dur - 1e-6)
-    pts: list[tuple[float, dict]] = [(t, {})]
-    cur = _clamp(t + attack)
     
-    # Initial consonants (blended into one point)
-    if initial_blended:
-        pts.append((cur, initial_blended))
-        cur = _clamp(cur + cons_dur)
+    pts: list[tuple[float, dict]] = []
     
-    if vend is not None:           # diphthong: main → final
-        pts.append((cur, vmain))
-        cur = _clamp(cur + vowel_dur * 0.4)
-        # VOWEL HOLD: sustain the main vowel before transitioning
-        pts.append((cur, vmain))  # HOLD point — mouth stays at vmain
-        cur = _clamp(cur + vowel_dur * 0.3)
-        pts.append((cur, vend))
-        cur = _clamp(cur + vowel_dur * 0.3)
-    else:
-        pts.append((cur, vmain))
-        # VOWEL HOLD: sustain the vowel for ~60% of the inner duration
-        # Officials hold the vowel for 30-67% of frames, we use 60% for smoother transitions
-        hold_dur = max(0.033, vowel_dur * 0.6)  # at least 1 frame
-        pts.append((_clamp(cur + hold_dur), vmain))  # HOLD point
-        cur = _clamp(cur + vowel_dur)
+    # Point 1: closed mouth at start (with facial)
+    pts.append((t, closed_shape))
     
-    # Final consonants (blended into one point)
-    if final_blended:
-        pts.append((cur, final_blended))
-        cur = _clamp(cur + cons_dur)
+    # Point 2: open mouth (after long transition)
+    pts.append((_clamp(t + transition_dur), open_shape))
     
-    pts.append((t + dur, {}))
+    # Point 3: hold open
+    pts.append((_clamp(t + transition_dur + hold_dur), open_shape))
+    
+    # Point 4: closed mouth at end (after long transition)
+    pts.append((_clamp(t + transition_dur + hold_dur + transition_dur), closed_shape))
+    
     return pts
 
 
@@ -869,59 +885,50 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
     """Like `_syllable_points` but each point carries the graph of the segment that
     STARTS at it: a held vowel plateau (`hold`) and the diphthong glide (`ease`).
 
-    Smoothness: Uses `ease` (sigmoid curves) for all transitions instead of `linear`.
-    Officials prioritize smooth, fluid mouth movements over sharp transitions.
-    
-    VISEME BLENDING: Officials use 4-6 visemes simultaneously. We blend all
-    consonants into a single shape to create richer mouth shapes."""
+    NEW ARCHITECTURE (based on official milo analysis):
+    - Transitions: 30-60 frames (1-2 seconds) instead of 8 frames
+    - Simultaneous activation: 5-6 visemes active at once (not sequential)
+    - Viseme groups: Pre-defined combinations that appear together in officials
+    - Facial integration: Expressions always active during mouth movement
+    """
     initial, (vmain, vend), final = shape
-    n_i, n_f = len(initial), len(final)
-    attack = min(_TRANSITION_S, dur * 0.4)
-    release = min(_TRANSITION_S, dur * 0.4)
-    inner = max(1e-3, dur - attack - release)
     
-    # VISEME BLENDING: Blend all consonants into a single shape
-    # Officials use 4-6 visemes simultaneously
-    initial_blended = _blend_visemes(initial)
-    final_blended = _blend_visemes(final)
+    # NEW: Use viseme groups instead of individual visemes
+    open_shape = _VISEME_GROUPS["mouth_open"].copy()
+    closed_shape = _VISEME_GROUPS["mouth_closed"].copy()
     
-    # Smooth transitions: consonants and vowels use longer durations (officials: 4-6 frames)
-    cons_dur = 0.70  # ~21 frames, very smooth
-    # Only 2 consonant groups now (initial + final) instead of n_i + n_f
-    vowel_dur = inner - 2 * cons_dur
-    if vowel_dur < 0.033:  # at least 1 frame for vowel
-        vowel_dur = 0.033
-        cons_dur = max(0.01, (inner - vowel_dur) / 2)
+    # NEW: Integrate facial expressions (always active in officials)
+    facial = _VISEME_GROUPS["facial_base"].copy()
+    open_shape.update(facial)
+    closed_shape.update(facial)
     
-    # Monotonicity guard: every intermediate point must stay ≤ t+dur.
-    # The closing {} point at t+dur is appended last — always.
+    # NEW: Very long transitions (30-60 frames = 1-2 seconds)
+    transition_frames = 40
+    transition_dur = transition_frames / FPS  # 1.33 seconds
+    
+    # If syllable is too short, use proportional transition
+    if dur < transition_dur * 2:
+        transition_dur = dur * 0.4
+    
+    hold_dur = max(dur - 2 * transition_dur, 0.033)
+    
     def _clamp(cur):
         return min(cur, t + dur - 1e-6)
-    pts: list[tuple[float, dict, str]] = [
-        (t, {}, "ease")]  # Use ease for smooth opening
-    cur = _clamp(t + attack)
     
-    # Initial consonants (blended into one point)
-    if initial_blended:
-        pts.append((cur, initial_blended, "ease"))
-        cur = _clamp(cur + cons_dur)
+    pts: list[tuple[float, dict, str]] = []
     
-    if vend is not None:               # diphthong: glide main → final (ease)
-        pts.append((cur, vmain, "ease"))
-        cur = _clamp(cur + vowel_dur * 0.4)
-        pts.append((cur, vend, "ease"))
-        cur = _clamp(cur + vowel_dur * 0.6)
-    else:                              # monophthong: reach, HOLD the plateau, release
-        pts.append((cur, vmain, "hold"))
-        cur = _clamp(cur + vowel_dur)
-        pts.append((cur, vmain, "ease"))  # Smooth release
+    # Point 1: closed mouth at start (with facial)
+    pts.append((t, closed_shape, "ease"))
     
-    # Final consonants (blended into one point)
-    if final_blended:
-        pts.append((cur, final_blended, "ease"))
-        cur = _clamp(cur + cons_dur)
+    # Point 2: open mouth (after long transition)
+    pts.append((_clamp(t + transition_dur), open_shape, "ease"))
     
-    pts.append((t + dur, {}, "ease"))   # Smooth closing
+    # Point 3: hold open
+    pts.append((_clamp(t + transition_dur + hold_dur), open_shape, "hold"))
+    
+    # Point 4: closed mouth at end (after long transition)
+    pts.append((_clamp(t + transition_dur + hold_dur + transition_dur), closed_shape, "ease"))
+    
     return pts
 
 
