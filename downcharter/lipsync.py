@@ -296,8 +296,8 @@ def align_word_phonemes(syllables: list[str], lang: str = "en") -> list[list[str
 
 # ───────────────────────── building the keyframes ────────────────────────────
 _MAX_SUSTAIN_S = 999.0      # effectively no cap — the vowel holds for the full tube duration
-_TRANSITION_S = 0.12        # mouth attack/release ramp (Magma/YARG autoLipsync transition;
-                            # 0.10 swept marginally worse on the 15-official comparison)
+_TRANSITION_S = 0.15        # mouth attack/release ramp — 4.5 frames @30fps (was 0.12, ~3.6 frames).
+                            # Slower transitions make the mouth feel less snappy/sudden.
 _WORD_CLOSE_S = 0.05        # minimum mouth-closure duration at word boundaries (~1.5 frames)
 
 
@@ -373,15 +373,15 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     between points creates the transitions (consonant↔vowel).
 
     Smoothness: attack/release at most 0.4× duration (was 0.25×); each consonant
-    unit at least 0.03 s. See :func:`_syllable_points_g` for the rationale."""
+    unit at least 0.033 s (1 frame @30fps). See :func:`_syllable_points_g` for
+    the rationale."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
-    # Official ramp: Magma/YARG autoLipsync use a 0.12 s transition.
     attack = min(_TRANSITION_S, dur * 0.4)
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     units = n_i + 3 + n_f          # the vowel is worth 3 units
-    u = inner / units
+    u = max(0.033, inner / units)  # each segment lasts at least 1 frame
 
     def _clamp(cur):
         return min(cur, t + dur - 1e-6)
@@ -691,17 +691,16 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
     STARTS at it: a held vowel plateau (`hold`) and the diphthong glide (`ease`).
 
     Smoothness: attack/release are at most 0.4× duration (was 0.25×) so the mouth
-    doesn't snap between shapes — short syllables still get a visible transition."""
+    doesn't snap between shapes — short syllables still get a visible transition.
+    Each segment (consonant/vowel step) lasts at least 0.033 s (1 frame @30fps)
+    so individual viseme changes are never instant."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
-    # Official ramp: Magma/YARG autoLipsync use a 0.12 s transition.  Previously
-    # capped at 0.25× duration, short syllables had attack < 0.04 s — the mouth
-    # snapped open in under a frame.  0.4× gives a visible ramp even on fast
-    # syllables while leaving at least 20 % of the span for the vowel body.
     attack = min(_TRANSITION_S, dur * 0.4)
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
-    u = inner / (n_i + 3 + n_f)  # the vowel is worth 3 units
+    n_segments = n_i + 3 + n_f    # the vowel is worth 3 units
+    u = max(0.033, inner / n_segments)  # each segment lasts at least 1 frame
     # Monotonicity guard: every intermediate point must stay ≤ t+dur.
     # The closing {} point at t+dur is appended last — always.
     def _clamp(cur):
