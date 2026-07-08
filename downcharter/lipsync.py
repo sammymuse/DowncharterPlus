@@ -357,8 +357,8 @@ def align_word_phonemes(syllables: list[str], lang: str = "en") -> list[list[str
 
 # ───────────────────────── building the keyframes ────────────────────────────
 _MAX_SUSTAIN_S = 999.0      # effectively no cap — the vowel holds for the full tube duration
-_TRANSITION_S = 0.30        # mouth attack/release ramp — ~9 frames @30fps (officials: 10-22 frames)
-                            # Officials use smooth sigmoid curves with k=6 (gentle S-shape).
+_TRANSITION_S = 1.00        # mouth attack/release ramp — ~30 frames @30fps (officials: 10-22 frames)
+                            # Officials use smooth sigmoid curves with k=5 (very gentle S-shape).
                             # Longer transitions = much smoother mouth movement.
 _WORD_CLOSE_S = 0.05        # minimum mouth-closure duration at word boundaries (~1.5 frames)
 
@@ -427,61 +427,67 @@ def _pad_spans(spans, pad: float = _TRANSITION_S):
 def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     """Control points (time, visemes) of a syllable in the window [t, t+dur].
 
-    Closed mouth {} before/after (or, with `start_floor`/`end_floor` > 0, a
-    partial-weight version of the syllable's own edge shape — used when this
-    syllable connects to its neighbour with no real pause, so the mouth eases
-    instead of fully closing); brief consonants; vowel sustained in the middle;
-    diphthong drops from the main shape to the final one. Linear interpolation
-    between points creates the transitions (consonant↔vowel).
+    Officials use FEWER control points with LONGER transitions. Instead of one
+    point per consonant, we GROUP all initial consonants into one point and all
+    final consonants into another. This creates fewer, longer transitions.
 
-    Smoothness: attack/release at most 0.4× duration (was 0.25×); each consonant
-    unit at least 0.033 s (1 frame @30fps) when inner allows, otherwise
-    proportional (preserves phoneme sequence on short syllables).
-    
-    VOWEL HOLD: Officials sustain the vowel for 30-67% of frames (mouth stays
-    still). We replicate this by adding a HOLD point after the vowel — the mouth
-    reaches the vowel shape and STAYS there before transitioning to final consonants.
-    
-    CONSONANT SPEED: Officials make consonant transitions very fast (1-2 frames).
-    We use 0.01s (~0.3 frames) for consonants so they're nearly instant."""
+    Structure: closed → [initial consonants blended] → vowel (hold) → [final consonants blended] → closed
+    """
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
     attack = min(_TRANSITION_S, dur * 0.4)
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     
-    # Consonants are smooth (officials: 4-6 frames)
-    cons_dur = 0.15  # ~4.5 frames, very smooth transition
-    vowel_dur = inner - (n_i + n_f) * cons_dur
-    if vowel_dur < 0.033:  # at least 1 frame for vowel
+    # Group consonants: blend all initial into one point, all final into another
+    # This reduces the number of transitions and makes them longer
+    initial_blended = {}
+    for c in initial:
+        for name, w in c.items():
+            initial_blended[name] = max(initial_blended.get(name, 0), w)
+    
+    final_blended = {}
+    for c in final:
+        for name, w in c.items():
+            final_blended[name] = max(final_blended.get(name, 0), w)
+    
+    # Transition durations: longer for smoother movement
+    cons_dur = 0.40  # ~12 frames for consonant group transition
+    vowel_dur = inner - 2 * cons_dur  # 2 transitions: initial→vowel, vowel→final
+    if vowel_dur < 0.033:
         vowel_dur = 0.033
-        cons_dur = max(0.01, (inner - vowel_dur) / max(1, n_i + n_f))
+        cons_dur = max(0.01, (inner - vowel_dur) / 2)
     
     def _clamp(cur):
         return min(cur, t + dur - 1e-6)
+    
     pts: list[tuple[float, dict]] = [(t, {})]
     cur = _clamp(t + attack)
-    for c in initial:
-        pts.append((cur, c))
+    
+    # Initial consonants (blended into one point)
+    if initial_blended:
+        pts.append((cur, initial_blended))
         cur = _clamp(cur + cons_dur)
-    if vend is not None:           # diphthong: main → final
+    
+    # Vowel (with hold)
+    if vend is not None:  # diphthong
         pts.append((cur, vmain))
-        cur = _clamp(cur + vowel_dur * 0.4)
-        # VOWEL HOLD: sustain the main vowel before transitioning
-        pts.append((cur, vmain))  # HOLD point — mouth stays at vmain
         cur = _clamp(cur + vowel_dur * 0.3)
+        pts.append((cur, vmain))  # HOLD
+        cur = _clamp(cur + vowel_dur * 0.4)
         pts.append((cur, vend))
         cur = _clamp(cur + vowel_dur * 0.3)
-    else:
+    else:  # monophthong
         pts.append((cur, vmain))
-        # VOWEL HOLD: sustain the vowel for ~60% of the inner duration
-        # Officials hold the vowel for 30-67% of frames, we use 60% for smoother transitions
-        hold_dur = max(0.033, vowel_dur * 0.6)  # at least 1 frame
-        pts.append((_clamp(cur + hold_dur), vmain))  # HOLD point
+        hold_dur = max(0.033, vowel_dur * 0.6)
+        pts.append((_clamp(cur + hold_dur), vmain))  # HOLD
         cur = _clamp(cur + vowel_dur)
-    for c in final:
-        pts.append((cur, c))
+    
+    # Final consonants (blended into one point)
+    if final_blended:
+        pts.append((cur, final_blended))
         cur = _clamp(cur + cons_dur)
+    
     pts.append((t + dur, {}))
     return pts
 
@@ -506,9 +512,9 @@ def _ease_curve(f: float, opening: bool) -> float:
     and decelerate at the endpoints.
     
     Sigmoid formula: 1 / (1 + exp(-k*(x-0.5)))
-    where k controls the steepness (k=6 gives a gentle, smooth S-curve)."""
-    # Sigmoid with k=6 for gentle, smooth S-curve (officials use k=6-8)
-    k = 6.0
+    where k controls the steepness (k=5 gives a very gentle, smooth S-curve)."""
+    # Sigmoid with k=5 for very gentle, smooth S-curve (officials use k=5-7)
+    k = 5.0
     if opening:
         # Ease-in: slow start, accelerate to peak
         return 1.0 / (1.0 + math.exp(-k * (f - 0.5)))
@@ -604,7 +610,19 @@ def _facial_frames_from_keyframes(
 
 
 def _sample_into(frames: dict[int, dict], pts: list[tuple[float, dict]]) -> None:
-    """Sample the points at 30 fps and merge into `frames` (max per viseme)."""
+    """Sample the points at 30 fps and merge into `frames` using CROSSFADE.
+    
+    Officials use crossfade (blend) between visemes instead of substitution.
+    When transitioning from one viseme to another, BOTH are kept active with
+    complementary weights that sum to ~100%. This creates much smoother transitions.
+    
+    Example: transitioning If→Eat over 6 frames:
+      Frame 1: If=100%, Eat=0%
+      Frame 2: If=80%, Eat=20%
+      Frame 3: If=60%, Eat=40%
+      ...
+      Frame 6: If=0%, Eat=100%
+    """
     if len(pts) < 2:
         return
     f0 = int(math.floor(pts[0][0] * FPS))
@@ -620,13 +638,50 @@ def _sample_into(frames: dict[int, dict], pts: list[tuple[float, dict]]) -> None
         tb, sb = pts[seg + 1]
         frac = 0.0 if tb <= ta else (tf - ta) / (tb - ta)
         frac = max(0.0, min(1.0, frac))
-        state = _ease_lerp_state(sa, sb, frac)  # Use ease curve instead of linear
+        
+        # CROSSFADE: blend between sa and sb using eased fraction
+        # Both states are kept active with complementary weights
+        state = _crossfade_state(sa, sb, frac)
         if not state:
             continue
         slot = frames.setdefault(fr, {})
         for name, w in state.items():
+            # Use max for same viseme (in case of overlap within same state)
             if w > slot.get(name, 0):
                 slot[name] = w
+
+
+def _crossfade_state(a: dict, b: dict, f: float) -> dict:
+    """Crossfade between two viseme states using eased fraction.
+    
+    Unlike _lerp_state which replaces visemes, this KEEPS BOTH states active
+    with complementary weights. The eased fraction controls the blend ratio.
+    
+    For example, if a={If_lo: 153} and b={Eat_lo: 153}, at f=0.5:
+      result = {If_lo: 77, Eat_lo: 77}  (both active, weights sum to ~153)
+    """
+    # Apply ease curve to fraction for smooth transition
+    total_a = sum(a.values())
+    total_b = sum(b.values())
+    opening = total_b > total_a
+    eased_f = _ease_curve(f, opening)
+    
+    out = {}
+    # Keep visemes from state A with decreasing weight
+    for name, w in a.items():
+        new_w = int(round(w * (1.0 - eased_f)))
+        if new_w > 0:
+            out[name] = new_w
+    # Add visemes from state B with increasing weight
+    for name, w in b.items():
+        new_w = int(round(w * eased_f))
+        if new_w > 0:
+            # If viseme already exists (from state A), use max
+            if name in out:
+                out[name] = max(out[name], new_w)
+            else:
+                out[name] = new_w
+    return out
 
 
 def _build_frames(lyrics: list[tuple[float, str]],
@@ -813,46 +868,64 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
     """Like `_syllable_points` but each point carries the graph of the segment that
     STARTS at it: a held vowel plateau (`hold`) and the diphthong glide (`ease`).
 
-    Smoothness: Uses `ease` (sigmoid curves) for all transitions instead of `linear`.
-    Officials prioritize smooth, fluid mouth movements over sharp transitions.
-    Each segment (consonant/vowel step) lasts at least 0.10 s (~3 frames @30fps)
-    for smooth transitions."""
+    Officials use FEWER control points with LONGER transitions. We GROUP all
+    initial consonants into one point and all final consonants into another."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
     attack = min(_TRANSITION_S, dur * 0.4)
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     
-    # Smooth transitions: consonants and vowels use longer durations (officials: 4-6 frames)
-    cons_dur = 0.15  # ~4.5 frames, very smooth
-    vowel_dur = inner - (n_i + n_f) * cons_dur
-    if vowel_dur < 0.033:  # at least 1 frame for vowel
-        vowel_dur = 0.033
-        cons_dur = max(0.01, (inner - vowel_dur) / max(1, n_i + n_f))
+    # Group consonants: blend all initial into one point, all final into another
+    initial_blended = {}
+    for c in initial:
+        for name, w in c.items():
+            initial_blended[name] = max(initial_blended.get(name, 0), w)
     
-    # Monotonicity guard: every intermediate point must stay ≤ t+dur.
-    # The closing {} point at t+dur is appended last — always.
+    final_blended = {}
+    for c in final:
+        for name, w in c.items():
+            final_blended[name] = max(final_blended.get(name, 0), w)
+    
+    # Transition durations: longer for smoother movement
+    cons_dur = 0.40  # ~12 frames for consonant group transition
+    vowel_dur = inner - 2 * cons_dur  # 2 transitions: initial→vowel, vowel→final
+    if vowel_dur < 0.033:
+        vowel_dur = 0.033
+        cons_dur = max(0.01, (inner - vowel_dur) / 2)
+    
     def _clamp(cur):
         return min(cur, t + dur - 1e-6)
-    pts: list[tuple[float, dict, str]] = [
-        (t, {}, "ease")]  # Use ease for smooth opening
+    
+    pts: list[tuple[float, dict, str]] = [(t, {}, "ease")]
     cur = _clamp(t + attack)
-    for c in initial:
-        pts.append((cur, c, "ease"))  # Smooth consonant transitions
+    
+    # Initial consonants (blended into one point)
+    if initial_blended:
+        pts.append((cur, initial_blended, "ease"))
         cur = _clamp(cur + cons_dur)
-    if vend is not None:               # diphthong: glide main → final (ease)
+    
+    # Vowel (with hold)
+    if vend is not None:  # diphthong
         pts.append((cur, vmain, "ease"))
+        cur = _clamp(cur + vowel_dur * 0.3)
+        pts.append((cur, vmain, "hold"))  # HOLD
         cur = _clamp(cur + vowel_dur * 0.4)
         pts.append((cur, vend, "ease"))
-        cur = _clamp(cur + vowel_dur * 0.6)
-    else:                              # monophthong: reach, HOLD the plateau, release
-        pts.append((cur, vmain, "hold"))
+        cur = _clamp(cur + vowel_dur * 0.3)
+    else:  # monophthong
+        pts.append((cur, vmain, "ease"))
+        hold_dur = max(0.033, vowel_dur * 0.6)
+        pts.append((_clamp(cur + hold_dur), vmain, "hold"))  # HOLD
         cur = _clamp(cur + vowel_dur)
-        pts.append((cur, vmain, "ease"))  # Smooth release
-    for c in final:
-        pts.append((cur, c, "ease"))  # Smooth consonant transitions
+        pts.append((cur, vmain, "ease"))  # release
+    
+    # Final consonants (blended into one point)
+    if final_blended:
+        pts.append((cur, final_blended, "ease"))
         cur = _clamp(cur + cons_dur)
-    pts.append((t + dur, {}, "ease"))   # Smooth closing
+    
+    pts.append((t + dur, {}, "ease"))
     return pts
 
 
