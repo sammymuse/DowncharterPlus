@@ -478,25 +478,20 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     """
     initial, (vmain, vend), final = shape
     
-    # NEW: Use viseme groups instead of individual visemes
-    # Officials activate 5-6 visemes simultaneously
+    # Use viseme groups instead of individual visemes
     open_shape = _VISEME_GROUPS["mouth_open"].copy()
     closed_shape = _VISEME_GROUPS["mouth_closed"].copy()
     
-    # NEW: Integrate facial expressions (always active in officials)
+    # Integrate facial expressions (always active in officials)
     facial = _VISEME_GROUPS["facial_base"].copy()
     open_shape.update(facial)
     closed_shape.update(facial)
     
-    # NEW: Very long transitions (30-60 frames = 1-2 seconds)
-    # Officials use 60.9 frames average, we use 40 frames (1.33s) as middle ground
-    transition_frames = 40
-    transition_dur = transition_frames / FPS  # 1.33 seconds
-    
-    # If syllable is too short, use proportional transition
-    if dur < transition_dur * 2:
-        transition_dur = dur * 0.4  # 40% of syllable for each transition
-    
+    # Transitions proportional to syllable duration, but with a minimum
+    # Officials use ~23 frames average, we use at least 30 frames (1s)
+    # For longer syllables, use 30% of duration
+    min_transition_dur = 30 / FPS  # 1 second minimum
+    transition_dur = max(min_transition_dur, dur * 0.30)
     hold_dur = max(dur - 2 * transition_dur, 0.033)  # at least 1 frame hold
     
     def _clamp(cur):
@@ -816,25 +811,80 @@ def frames_from_spans(spans, song_len_s: float,
     that goes inside the .milo (guaranteeing the same lipsync reaches the game).
 
     When ``phrase_ends`` or ``vocal_notes`` are provided, facial animation keyframes
-    (Blink, Squint, Eyebrows) are also embedded so they reach the game via the milo."""
+    (Blink, Squint, Eyebrows) are also embedded so they reach the game via the milo.
+    
+    NEW: Groups consecutive spans into phrases and keeps mouth open during entire phrases
+    (like officials), only closing during pauses between phrases.
+    """
     spans = _pad_spans(list(spans))
     shapes = _resolve_shapes(spans, lang)
     frames: dict[int, dict] = {}
-    for sp, shape in zip(spans, shapes):
-        t, end = sp[0], sp[1]
-        gain = sp[3] if len(sp) > 3 else 1.0
-        dur = end - t
-        if dur <= 0:
-            continue
-        # Official milos use FIXED weights per viseme (not scaled by gain).
-        # The gain affects timing/duration, not weight magnitude.
-        # Only mouth_openness (user parameter) scales the weights.
-        pts = _syllable_points(t, dur, shape)
+    
+    # Group consecutive spans into phrases (gap > 0.5s = phrase boundary)
+    phrase_groups = []
+    current_group = []
+    for i, (sp, shape) in enumerate(zip(spans, shapes)):
+        if not current_group:
+            current_group.append((sp, shape))
+        else:
+            prev_sp = current_group[-1][0]
+            gap = sp[0] - prev_sp[1]
+            if gap > 0.5:  # 0.5s gap = phrase boundary
+                phrase_groups.append(current_group)
+                current_group = [(sp, shape)]
+            else:
+                current_group.append((sp, shape))
+    if current_group:
+        phrase_groups.append(current_group)
+    
+    # Process each phrase group
+    for group in phrase_groups:
+        # Find phrase start and end
+        phrase_start = group[0][0][0]
+        phrase_end = group[-1][0][1]
+        phrase_dur = phrase_end - phrase_start
+        
+        # Use viseme groups
+        open_shape = _VISEME_GROUPS["mouth_open"].copy()
+        closed_shape = _VISEME_GROUPS["mouth_closed"].copy()
+        
+        # Integrate facial expressions
+        facial = _VISEME_GROUPS["facial_base"].copy()
+        open_shape.update(facial)
+        closed_shape.update(facial)
+        
+        # Apply mouth_openness scaling
         if mouth_openness != 1.0:
-            pts = [(pt_t, {nm: max(0, min(255, int(round(w * mouth_openness))))
-                           for nm, w in st.items()})
-                   for pt_t, st in pts]
+            open_shape = {nm: max(0, min(255, int(round(w * mouth_openness))))
+                         for nm, w in open_shape.items()}
+            closed_shape = {nm: max(0, min(255, int(round(w * mouth_openness))))
+                           for nm, w in closed_shape.items()}
+        
+        # Create phrase-level points: closed → open → hold → closed
+        # Use 30% of phrase duration for each transition
+        transition_dur = phrase_dur * 0.30
+        hold_dur = max(phrase_dur - 2 * transition_dur, 0.033)
+        
+        def _clamp(cur):
+            return min(cur, phrase_end - 1e-6)
+        
+        pts: list[tuple[float, dict]] = []
+        
+        # Point 1: closed mouth at phrase start
+        pts.append((phrase_start, closed_shape))
+        
+        # Point 2: open mouth (after transition)
+        pts.append((_clamp(phrase_start + transition_dur), open_shape))
+        
+        # Point 3: hold open
+        pts.append((_clamp(phrase_start + transition_dur + hold_dur), open_shape))
+        
+        # Point 4: closed mouth at phrase end (after transition)
+        pts.append((_clamp(phrase_start + transition_dur + hold_dur + transition_dur), closed_shape))
+        
+        # Sample points into frames
         _sample_into(frames, pts)
+    
     n_frames = max(1, int(math.ceil(song_len_s * FPS)) + 1)
 
     # Inject facial animation keyframes (Blink, Squint, Eyebrows) into the milo.
@@ -895,23 +945,20 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
     """
     initial, (vmain, vend), final = shape
     
-    # NEW: Use viseme groups instead of individual visemes
+    # Use viseme groups instead of individual visemes
     open_shape = _VISEME_GROUPS["mouth_open"].copy()
     closed_shape = _VISEME_GROUPS["mouth_closed"].copy()
     
-    # NEW: Integrate facial expressions (always active in officials)
+    # Integrate facial expressions (always active in officials)
     facial = _VISEME_GROUPS["facial_base"].copy()
     open_shape.update(facial)
     closed_shape.update(facial)
     
-    # NEW: Very long transitions (30-60 frames = 1-2 seconds)
-    transition_frames = 40
-    transition_dur = transition_frames / FPS  # 1.33 seconds
-    
-    # If syllable is too short, use proportional transition
-    if dur < transition_dur * 2:
-        transition_dur = dur * 0.4
-    
+    # Transitions proportional to syllable duration, but with a minimum
+    # Officials use ~23 frames average, we use at least 30 frames (1s)
+    # For longer syllables, use 30% of duration
+    min_transition_dur = 30 / FPS  # 1 second minimum
+    transition_dur = max(min_transition_dur, dur * 0.30)
     hold_dur = max(dur - 2 * transition_dur, 0.033)
     
     def _clamp(cur):
