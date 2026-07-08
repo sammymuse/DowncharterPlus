@@ -885,8 +885,10 @@ def _generate_squints(
     return out
 
 
-_BROW_LOUD_GAIN = 0.85     # phrase avg gain >= this reads as a belted/intense phrase
-_BROW_LOUD_JUMP = 0.35     # gain rise between consecutive phrases that reads as a surge
+_BROW_LOUD_GAIN = 0.78     # phrase avg gain >= this reads as a belted/intense phrase
+                            # (~50th percentile of [0.55, 1.0], was 0.85)
+_BROW_LOUD_JUMP = 0.20     # gain rise between consecutive phrases that reads as a surge
+                            # (~44% of max possible jump, was 0.35)
 
 
 def _nearest_gain(gains: list[tuple[float, float]], t: float) -> float:
