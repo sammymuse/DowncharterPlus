@@ -296,7 +296,7 @@ def align_word_phonemes(syllables: list[str], lang: str = "en") -> list[list[str
 
 # ───────────────────────── building the keyframes ────────────────────────────
 _MAX_SUSTAIN_S = 999.0      # effectively no cap — the vowel holds for the full tube duration
-_TRANSITION_S = 0.18        # mouth attack/release ramp — ~5.5 frames @30fps (was 0.15).
+_TRANSITION_S = 0.22        # mouth attack/release ramp — ~6.5 frames @30fps (was 0.18).
                             # Slower transitions make the mouth feel less snappy/sudden.
 _WORD_CLOSE_S = 0.05        # minimum mouth-closure duration at word boundaries (~1.5 frames)
 
@@ -373,7 +373,7 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     between points creates the transitions (consonant↔vowel).
 
     Smoothness: attack/release at most 0.4× duration (was 0.25×); each consonant
-    unit at least 0.05 s (~1.5 frames @30fps). See :func:`_syllable_points_g` for
+    unit at least 0.06 s (~2 frames @30fps). See :func:`_syllable_points_g` for
     the rationale."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
@@ -381,7 +381,7 @@ def _syllable_points(t: float, dur: float, shape) -> list[tuple[float, dict]]:
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     units = n_i + 3 + n_f          # the vowel is worth 3 units
-    u = max(0.05, inner / units)   # each segment lasts at least 1.5 frames
+    u = max(0.06, inner / units)   # each segment lasts at least 2 frames
 
     def _clamp(cur):
         return min(cur, t + dur - 1e-6)
@@ -692,7 +692,7 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
 
     Smoothness: attack/release are at most 0.4× duration (was 0.25×) so the mouth
     doesn't snap between shapes — short syllables still get a visible transition.
-    Each segment (consonant/vowel step) lasts at least 0.05 s (~1.5 frames @30fps)
+    Each segment (consonant/vowel step) lasts at least 0.06 s (~2 frames @30fps)
     so individual viseme changes are never instant."""
     initial, (vmain, vend), final = shape
     n_i, n_f = len(initial), len(final)
@@ -700,7 +700,7 @@ def _syllable_points_g(t: float, dur: float, shape) -> list[tuple[float, dict, s
     release = min(_TRANSITION_S, dur * 0.4)
     inner = max(1e-3, dur - attack - release)
     n_segments = n_i + 3 + n_f    # the vowel is worth 3 units
-    u = max(0.05, inner / n_segments)  # each segment lasts at least 1.5 frames
+    u = max(0.06, inner / n_segments)  # each segment lasts at least 2 frames
     # Monotonicity guard: every intermediate point must stay ≤ t+dur.
     # The closing {} point at t+dur is appended last — always.
     def _clamp(cur):
