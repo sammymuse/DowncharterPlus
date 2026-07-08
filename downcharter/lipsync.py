@@ -956,15 +956,61 @@ def _generate_eyebrows(
     if rng is None:
         import random as rng
     out: list[tuple[float, str, int, str]] = []
-    if not vocal_notes:
-        return out
     gains = gains or []
-
+    
     _DW = _BROW_DEFAULT_W
     _AW = _BROW_AGGRESSIVE_WEIGHT
     _DWb = _BROW_DOWN_WEIGHT
     _UW = _BROW_UP_WEIGHT
     _PW = _BROW_POUTY_WEIGHT
+    
+    # If no vocal_notes, generate Brow_down as default using gains only
+    if not vocal_notes:
+        if not gains:
+            return out
+        # Use gains to create brow segments (loud = aggressive, quiet = down)
+        # Group gains into phrases (gap > 0.5s = boundary)
+        phrases: list[list[tuple[float, float]]] = [[gains[0]]]
+        for i in range(1, len(gains)):
+            if gains[i][0] - gains[i - 1][0] > 0.5:
+                phrases.append([])
+            phrases[-1].append(gains[i])
+        
+        for phrase in phrases:
+            if not phrase:
+                continue
+            t0 = phrase[0][0]
+            t1 = min(phrase[-1][0] + _BROW_HOLD_S + _BROW_FADE_S, song_len_s)
+            avg_gain = sum(g for _, g in phrase) / len(phrase)
+            
+            # Loud phrase → Brow_aggressive, quiet → Brow_down
+            if avg_gain >= _BROW_LOUD_GAIN:
+                expr, w = "aggressive", _AW
+            elif rng.random() < 0.05 and len(phrase) >= 3:
+                expr, w = "pouty", _PW
+            else:
+                expr, w = "down", _DWb
+            
+            # Close-off the default Brow_down before any override
+            if expr != "down":
+                out.append((t0, "Brow_down", 0, "linear"))
+                vis = f"Brow_{expr}"
+                out.append((t0, vis, w, "ease"))
+                out.append((t0 + _BROW_HOLD_S, vis, w, "hold"))
+                out.append((t1, vis, 0, "linear"))
+                out.append((t1, "Brow_down", _DW, "linear"))
+        
+        # Ensure Brow_down is active at start and end
+        if out:
+            out.insert(0, (0.0, "Brow_down", _DW, "linear"))
+            out.append((song_len_s, "Brow_down", 0, "linear"))
+        else:
+            # No phrases detected, just add default Brow_down
+            out.append((0.0, "Brow_down", _DW, "linear"))
+            out.append((song_len_s, "Brow_down", 0, "linear"))
+        
+        out.sort(key=lambda e: (e[0], e[1]))
+        return out
 
     # ── Group consecutive notes into phrases (gap > 0.5 s = boundary) ──
     phrases: list[list[tuple[float, int]]] = [[vocal_notes[0]]]
@@ -1096,8 +1142,8 @@ def generate_facial_keyframes(
     out: list[tuple[float, str, int, str]] = []
     out.extend(_generate_blinks(song_len_s, phrase_ends, rng))
     out.extend(_generate_squints(song_len_s, rng, gains))
-    if vocal_notes:
-        out.extend(_generate_eyebrows(vocal_notes, song_len_s, rng, gains))
+    # Always generate eyebrows (Brow_down is default, even without vocal_notes)
+    out.extend(_generate_eyebrows(vocal_notes or [], song_len_s, rng, gains))
     out.sort(key=lambda e: (e[0], e[1]))
     return out
 
