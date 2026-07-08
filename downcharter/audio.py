@@ -487,15 +487,14 @@ def voice_offset_s(va, start_s: float, ceil_s: float,
 
 
 def syllable_gain(va, start_s: float, end_s: float,
-                  floor: float = 0.45, ceiling: float = 1.35) -> float:
+                  floor: float = 0.55, ceiling: float = 1.0) -> float:
     """Loudness of a syllable's window [start_s, end_s] as a viseme-weight gain in
     [floor, ceiling]. Uses the vocal-stem RMS envelope from `voice_activity`: the
-    louder the singer holds the vowel, the wider the mouth opens. `ceiling` > 1.0
-    lets a belted/screamed syllable open WIDER than the flat baseline weight (not
-    just quieter ones close down more) — a bigger dynamic range reads as more
-    expressive/emotional than a mouth that only ever shrinks. Song-relative (peak
-    of the whole stem), never absolute dB. Returns 1.0 if no audio (no scaling);
-    callers already clamp the scaled weight to [0, 255]."""
+    louder the singer holds the vowel, the wider the mouth opens. A `ceiling` of
+    1.0 keeps the mouth at baseline weight at peak loudness; only quieter syllables
+    close down more. Song-relative (peak of the whole stem), never absolute dB.
+    Returns 1.0 if no audio (no scaling); callers already clamp the scaled weight
+    to [0, 255]."""
     if va is None:
         return 1.0
     try:

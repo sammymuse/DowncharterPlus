@@ -924,7 +924,7 @@ def _generate_squints(
     return out
 
 
-_BROW_LOUD_GAIN = 1.05     # phrase avg gain >= this reads as a belted/intense phrase
+_BROW_LOUD_GAIN = 0.85     # phrase avg gain >= this reads as a belted/intense phrase
 _BROW_LOUD_JUMP = 0.35     # gain rise between consecutive phrases that reads as a surge
 
 
