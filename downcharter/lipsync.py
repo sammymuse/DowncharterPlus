@@ -65,12 +65,44 @@ VISEMES = [
 ]
 _VIDX = {n: i for i, n in enumerate(VISEMES)}
 
-_W = 140  # "full" viseme weight (same as rb3.yml)
+# Viseme weights from official milos analysis (83 songs).
+# Officials use DIFFERENT weights for _hi and _lo, using MAX values (not averages).
+# These are the MAXIMUM weights observed in official .milo_xbox files.
+_VISEME_WEIGHTS = {
+    # Mouth visemes (pairs) — using MAX values from officials
+    "Bump_hi": 102, "Bump_lo": 153,
+    "Cage_hi": 102, "Cage_lo": 153,
+    "Church_hi": 102, "Church_lo": 153,
+    "Earth_hi": 102, "Earth_lo": 153,
+    "Eat_hi": 102, "Eat_lo": 153,
+    "Fave_hi": 102, "Fave_lo": 153,
+    "If_hi": 102, "If_lo": 153,
+    "New_hi": 102, "New_lo": 153,
+    "Oat_hi": 86, "Oat_lo": 129,
+    "Ox_hi": 102, "Ox_lo": 153,
+    "Roar_hi": 102, "Roar_lo": 153,
+    "Size_hi": 102, "Size_lo": 153,
+    "Though_hi": 102, "Though_lo": 153,
+    "Told_hi": 102, "Told_lo": 153,
+    "Wet_hi": 102, "Wet_lo": 153,
+    # Facial expressions (always-on baselines from official milos)
+    "Squint": 51,           # 98.5% of frames, weight ~51 (FIXED, not max)
+    "Brow_down": 126,       # 70.3% of frames, avg ~126
+    "Blink": 105,           # 59.4% of frames, avg ~105
+    "Brow_aggressive": 174, # 32.3% of frames, avg ~174
+    "Brow_pouty": 170,      # 34.5% of frames, avg ~170
+}
+
+# Legacy constant for backward compatibility
+_W = 140
 
 
 def _pair(base: str) -> dict[str, int]:
-    """_hi+_lo viseme (e.g. 'Ox' → {Ox_hi:140, Ox_lo:140})."""
-    return {f"{base}_hi": _W, f"{base}_lo": _W}
+    """_hi+_lo viseme with official weights (e.g. 'Ox' → {Ox_hi:50, Ox_lo:74})."""
+    return {
+        f"{base}_hi": _VISEME_WEIGHTS.get(f"{base}_hi", _W),
+        f"{base}_lo": _VISEME_WEIGHTS.get(f"{base}_lo", _W),
+    }
 
 
 # ── VOWEL map: name → (main shape, final shape | None for diphthong) ──
@@ -634,10 +666,12 @@ def frames_from_spans(spans, song_len_s: float,
         dur = end - t
         if dur <= 0:
             continue
-        effective_gain = gain * mouth_openness
+        # Official milos use FIXED weights per viseme (not scaled by gain).
+        # The gain affects timing/duration, not weight magnitude.
+        # Only mouth_openness (user parameter) scales the weights.
         pts = _syllable_points(t, dur, shape)
-        if effective_gain != 1.0:
-            pts = [(pt_t, {nm: max(0, min(255, int(round(w * effective_gain))))
+        if mouth_openness != 1.0:
+            pts = [(pt_t, {nm: max(0, min(255, int(round(w * mouth_openness))))
                            for nm, w in st.items()})
                    for pt_t, st in pts]
         _sample_into(frames, pts)
@@ -791,22 +825,22 @@ _BLINK_INTERVAL = (2.0, 10.0)     # random uniform range
 _BLINK_CLOSE_S = 0.06             # close duration
 _BLINK_HOLD_S = 0.05              # hold closed
 _BLINK_OPEN_S = 0.08              # open duration
-_BLINK_WEIGHT = 140
+_BLINK_WEIGHT = 98                # official avg (was 140)
 
-_SQUINT_INTERVAL = (8.0, 15.0)
-_SQUINT_DURATION = 0.25
-_SQUINT_WEIGHT = 100
+# Squint: ALWAYS ACTIVE in officials (98.5% of frames, weight ~51).
+# We emit it as a constant baseline, not periodic.
+_SQUINT_WEIGHT = 51               # official avg (was 100)
 
 # Eyebrow pitch thresholds (MIDI note numbers).
 # C5 = 72, G3 = 55, perfect fifth = 7 semitones.
 _BROW_AGGRESSIVE_PITCH = 72       # notes >= C5 → Brow_aggressive
 _BROW_DOWN_PITCH = 55             # notes <= G3 sustained → Brow_down
 _BROW_UP_JUMP = 7                 # consecutive note jump >= 7 → Brow_up
-_BROW_AGGRESSIVE_WEIGHT = 120
+_BROW_AGGRESSIVE_WEIGHT = 165     # official avg (was 120)
 _BROW_DOWN_WEIGHT = 110
 _BROW_UP_WEIGHT = 100
-_BROW_POUTY_WEIGHT = 90
-_BROW_DEFAULT_W = 70              # default gentle Brow_down (always active)
+_BROW_POUTY_WEIGHT = 164          # official avg (was 90)
+_BROW_DEFAULT_W = 112             # official avg for always-on Brow_down (was 70)
 _BROW_HOLD_S = 0.15               # hold the expression briefly
 _BROW_FADE_S = 0.30               # fade out duration
 
@@ -861,27 +895,15 @@ def _generate_squints(
     rng=None,
     gains: list[tuple[float, float]] | None = None,
 ) -> list[tuple[float, str, int, str]]:
-    """Periodic squint keyframes, plus extra ones on belted/loud syllables
-    (``gains``, see `audio.syllable_gain`) — singers visibly scrunch up on the
-    loudest notes, which the plain periodic timer alone doesn't capture."""
-    if rng is None:
-        import random as rng
+    """Squint is ALWAYS ACTIVE in official milos (98.5% of frames, weight ~51).
+    
+    Instead of periodic squints, we emit a constant baseline Squint at weight 51
+    for the entire song. Extra squint emphasis on loud syllables is handled by
+    temporarily increasing the weight (not implemented yet — future enhancement)."""
     out: list[tuple[float, str, int, str]] = []
-    times: list[float] = []
-    t = rng.uniform(*_SQUINT_INTERVAL)
-    while t < song_len_s:
-        out.append((t, "Squint", _SQUINT_WEIGHT, "ease"))
-        out.append((t + _SQUINT_DURATION, "Squint", 0, "linear"))
-        times.append(t)
-        t += rng.uniform(*_SQUINT_INTERVAL)
-    for gt, g in (gains or []):
-        if g < _BROW_LOUD_GAIN or rng.random() >= 0.15:
-            continue
-        if any(abs(gt - ot) < 1.0 for ot in times):
-            continue   # don't stack on top of a nearby squint
-        out.append((gt, "Squint", _SQUINT_WEIGHT, "ease"))
-        out.append((gt + _SQUINT_DURATION, "Squint", 0, "linear"))
-        times.append(gt)
+    # Constant Squint baseline for the entire song
+    out.append((0.0, "Squint", _SQUINT_WEIGHT, "hold"))
+    out.append((song_len_s, "Squint", 0, "linear"))  # close at song end
     return out
 
 
@@ -1136,7 +1158,7 @@ def lipsync_keyframes_from_spans(
         if dur <= 0:
             continue
         pts = _syllable_points_g(t, dur, shape)
-        out.extend(_keyframes_from_points(pts, gain * mouth_openness))
+        out.extend(_keyframes_from_points(pts, mouth_openness))
     if song_len_s is not None and song_len_s > 0:
         facial = generate_facial_keyframes(
             song_len_s, phrase_ends, facial_seed, vocal_notes, gains)
