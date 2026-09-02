@@ -803,11 +803,15 @@ def _gather_lighting_triggers(section, audio_onsets, drum_onsets, energy_env,
     triggers = set()
     triggers.add(section.start)  # P1: section boundary
 
-    # P2: Audio flux accents (keep top 30%)
+    # P2: Audio flux accents ON-BEAT only (same snap as the drum accents below).
+    # Off-beat transients (guitar stabs, vocals, hi-hats) would fire lights
+    # outside the drum rhythm — keep only hits within 1/8 beat of a beat.
     if audio_onsets:
         for tick in audio_onsets:
             if section.start <= tick < section.end:
-                triggers.add(tick)
+                nearest_beat = round(tick / tpb) * tpb
+                if abs(tick - nearest_beat) <= tpb // 8:
+                    triggers.add(tick)
 
     # P3: Downbeat grid
     for t_sig, num, den in time_sig_map:
