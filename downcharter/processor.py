@@ -1540,8 +1540,7 @@ def process_folder(
                 log_fn(f"    ◇ talkies: already charted"
                        f" · {s['vocals_trimmed']} trimmed by audio\n", "info")
             if s.get("lipsync_events"):
-                au = " · audio-guided" if s.get("lipsync_audio") else ""
-                log_fn(f"    ◇ lipsync: {s['lipsync_events']} viseme keyframes{au}\n", "info")
+                log_fn(f"    ◇ lipsync: {s['lipsync_events']} viseme keyframes\n", "info")
             if s.get("lipsync_error"):
                 log_fn(f"    ✗ lipsync error: {s['lipsync_error']}\n", "err")
             for sk in s.get("diffs_skipped", []):

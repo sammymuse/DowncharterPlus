@@ -384,14 +384,14 @@ class App(tk.Tk):
                  font=(MONO, 8), fg=FG3, bg=BG, anchor="w").pack(anchor="w", pady=(0, 10))
 
         tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
-        self._lbl("GENERATE VENUE  (camera · lights · post-proc)", p_ctrl).pack(anchor="w", pady=(0, 6))
-        CheckTile(p_ctrl, "Venue",   self._do_venue, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-        CheckTile(p_ctrl, "Drum animations",  self._do_drum_anim, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-        CheckTile(p_ctrl, "Lipsync  (vocal stem recommended)",
-                  self._do_lipsync_trk, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        self._lbl("VENUE  (camera · lights · post-proc)", p_ctrl).pack(anchor="w", pady=(0, 6))
+        CheckTile(p_ctrl, "Generate Venue",   self._do_venue, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
+        CheckTile(p_ctrl, "Generate drum animations",  self._do_drum_anim, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
         tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(8, 10))
-        self._lbl("GENERATE TALKIES  (vocal stem recommended)", p_ctrl).pack(anchor="w", pady=(0, 6))
+        self._lbl("TALKIES AND LIPSYNC  (vocal stem recommended)", p_ctrl).pack(anchor="w", pady=(0, 6))
+        CheckTile(p_ctrl, "Generate Lipsync",
+                  self._do_lipsync_trk, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
         CheckTile(p_ctrl, "Generate talkies from lyrics",
                   self._do_lipsync, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
 
@@ -399,7 +399,7 @@ class App(tk.Tk):
         self._lbl("EXTRAS", p_ctrl).pack(anchor="w", pady=(0, 6))
         CheckTile(p_ctrl, "Hide in-game background (image only)",
                   self._do_hide_bg, color=RED, width=360, height=28).pack(anchor="w", pady=(0, 6))
-        CheckTile(p_ctrl, "Vocal separation  (MDX-NET)  (recommended for lipsync and talkies)",
+        CheckTile(p_ctrl, "Vocal separation  (MDX-NET)  (recommended for talkies)",
                   self._do_vocal_sep, color=RED, width=520, height=28).pack(anchor="w", pady=(0, 6))
 
         tk.Frame(p_ctrl, bg=BORDER, height=1).pack(fill="x", pady=(0, 12))
