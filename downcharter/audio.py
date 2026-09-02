@@ -577,7 +577,10 @@ def _read_all_or_blocks(src):
             except Exception:
                 pass
 
-    # Last resort: seek-based chunked reading (may insert silence for bad pages)
+    # Last resort: chunked reading (may insert silence for bad pages). Read
+    # SEQUENTIALLY — seeking on every chunk is what introduced ~0.5 s decode gaps
+    # in .opus/.ogg (Ogg Opus seeks aren't sample-accurate). We only seek to skip
+    # past a page that actually failed.
     if hasattr(src, "seek"):
         src.seek(0)
     with sf.SoundFile(src) as f:
@@ -587,13 +590,20 @@ def _read_all_or_blocks(src):
         while pos < total:
             n = min(chunk, total - pos)
             try:
-                f.seek(pos)
                 d = f.read(n, dtype="float32", always_2d=True)
                 if len(d) < n:                # short read near a bad page
                     d = np.vstack([d, np.zeros((n - len(d), ch), "float32")])
+                    try:
+                        f.seek(pos + n)       # skip the bad page for the next chunk
+                    except Exception:
+                        pass
                 good += 1
             except Exception:
                 d = np.zeros((n, ch), "float32")     # skip bad page, keep timing
+                try:
+                    f.seek(pos + n)
+                except Exception:
+                    pass
             out.append(d)
             pos += n
     if not good:

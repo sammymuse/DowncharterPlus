@@ -192,6 +192,7 @@ def _serialize_lipsync(frames: dict[int, dict], n_frames: int) -> bytes:
 
     body = bytearray()
     prev: dict[int, int] = {}
+    extra_zero: set[int] = set()  # visemes shut off last frame → re-zero (Onyx redundantZero)
     for fr in range(n_frames):
         cur: dict[int, int] = {}
         for name, w in frames.get(fr, {}).items():
@@ -205,10 +206,17 @@ def _serialize_lipsync(frames: dict[int, dict], n_frames: int) -> bytes:
         for idx in prev:
             if idx not in cur:
                 events.append((idx, 0))
+        # Onyx's redundantZero: a viseme that shut off gets a second explicit 0
+        # in the following frame so the mouth fully closes in-game (official
+        # milos do this too).
+        for idx in extra_zero:
+            if idx not in cur:
+                events.append((idx, 0))
         events.sort()
         body.append(len(events) & 0xFF)
         for idx, w in events:
             body += struct.pack("BB", idx & 0xFF, w & 0xFF)
+        extra_zero = {idx for idx in prev if idx not in cur}
         prev = cur
 
     out = bytearray()
@@ -229,50 +237,39 @@ def _serialize_lipsync(frames: dict[int, dict], n_frames: int) -> bytes:
 
 
 def build_song_lipsync(spans, song_len_s: float, lang: str = "en",
-                        phrase_ends: list[float] | None = None,
-                        vocal_notes: list[tuple[float, int]] | None = None,
-                        facial_seed: int | None = None,
+                        eyes_closed: list | None = None,
                         mouth_openness: float = 1.0) -> bytes:
-    """CharLipSync bytes for the milo, from the same audio-guided syllable spans
+    """CharLipSync bytes for the milo, from the same tube-driven syllable spans
     (`lip_spans` = [(start_s, end_s, text, gain)]) used for the LIPSYNC1 MIDI track.
 
     Reuses `lipsync.frames_from_spans` (the dense 30 fps state path) so the milo's
     inherently dense per-frame viseme states come straight from what we already
     compute — no new lipsync logic.
 
-    When phrase_ends/vocal_notes are provided, facial animation keyframes
-    (Blink, Squint, Eyebrows) are also embedded in the milo so they reach
-    the game — not just the MIDI LIPSYNC1 track."""
+    ``eyes_closed`` (list of (start_s, end_s)) embeds Blink keyframes from charted
+    [eyes close]/[eyes open] events so they reach the game via the milo."""
     frames, n_frames = _lip.frames_from_spans(
         spans, song_len_s, lang,
-        phrase_ends=phrase_ends,
-        vocal_notes=vocal_notes,
-        facial_seed=facial_seed,
+        eyes_closed=eyes_closed,
         mouth_openness=mouth_openness,
     )
     return _serialize_lipsync(frames, n_frames)
 
 
 def build_milo_from_spans(spans, song_len_s: float, lang: str = "en",
-                           phrase_ends: list[float] | None = None,
-                           vocal_notes: list[tuple[float, int]] | None = None,
-                           facial_seed: int | None = None,
+                           eyes_closed: list | None = None,
                            mouth_openness: float = 1.0) -> bytes:
     """Convenience: spans → complete .milo ready to write to disk.
     ``mouth_openness`` is passed through to :func:`build_song_lipsync`."""
     return build_milo(build_song_lipsync(
         spans, song_len_s, lang,
-        phrase_ends=phrase_ends,
-        vocal_notes=vocal_notes,
-        facial_seed=facial_seed,
+        eyes_closed=eyes_closed,
         mouth_openness=mouth_openness,
     ))
 
 
 def build_multi_lipsync(spans_list: list, song_len_s: float, lang: str = "en",
-                         phrase_ends: list[float] | None = None,
-                         vocal_notes: list[tuple[float, int]] | None = None,
-                         facial_seed: int | None = None,
+                         eyes_closed: list | None = None,
                          mouth_openness: float = 1.0) -> list[bytes]:
     """Build N lipsync byte blobs from N span lists (lead + HARM1 + HARM2 + HARM3).
 
@@ -286,13 +283,9 @@ def build_multi_lipsync(spans_list: list, song_len_s: float, lang: str = "en",
     lead: bytes | None = None
     for i, spans in enumerate(spans_list):
         if spans:
-            # Vary facial_seed per entry so each vocalist blinks/pairs differently
-            seed = (facial_seed + i) if facial_seed is not None else None
             blob = build_song_lipsync(
                 spans, song_len_s, lang,
-                phrase_ends=phrase_ends,
-                vocal_notes=vocal_notes,
-                facial_seed=seed,
+                eyes_closed=eyes_closed,
                 mouth_openness=mouth_openness,
             )
             if i == 0:

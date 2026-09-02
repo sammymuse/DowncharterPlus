@@ -402,27 +402,17 @@ def build_lipsync_milo(out_mid, src_folder: str,
     Returns ``(milo_bytes | None, total_spans, n_entries)`` — None when the
     chart has no vocal content (caller decides the source-milo fallback)."""
     from . import milo as _milo
-    from . import processor as _proc
+    from . import lipsync as _lip
 
-    # phrase_ends + vocal_notes from PART VOCALS drive the facial animation.
-    phrase_ends_s: list[float] = []
-    vocal_notes: list[tuple[float, int]] = []
+    # eyes-closed spans from PART VOCALS drive the Blink animation (Onyx model).
+    eyes_closed_s: list[tuple[float, float]] = []
     pv = next((tr for tr in out_mid.tracks
                if (tr.name or "").strip().upper() == "PART VOCALS"), None)
     if pv is not None:
         tpb = out_mid.ticks_per_beat
         tempo_map = build_tempo_map(out_mid)
-        abs_pv = to_abs(pv)
-        pe_ticks = _proc._abs_phrase_ends(list(abs_pv))
-        phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
-                         for t in pe_ticks]
-        for e in abs_pv:
-            m = e.msg
-            n = getattr(m, "note", None)
-            if (m.type == "note_on" and getattr(m, "velocity", 0) > 0
-                    and n is not None and 36 <= n <= 84):
-                sec = tick_to_ms(e.abs_tick, tempo_map, tpb) / 1000.0
-                vocal_notes.append((sec, n))
+        song_len_s = tick_to_ms(out_mid.length, tempo_map, tpb) / 1000.0
+        eyes_closed_s = _lip.eyes_closed_seconds(pv, tempo_map, tpb, song_len_s)
 
     lead_spans = _extract_spans_from_track(out_mid, "PART VOCALS", src_folder)
     if not lead_spans:
@@ -441,9 +431,7 @@ def build_lipsync_milo(out_mid, src_folder: str,
 
     lipsync_list = _milo.build_multi_lipsync(
         all_spans, out_mid.length,
-        phrase_ends=phrase_ends_s,
-        vocal_notes=vocal_notes,
-        facial_seed=42,
+        eyes_closed=eyes_closed_s or None,
         mouth_openness=mouth_openness,
     )
     if not lipsync_list:

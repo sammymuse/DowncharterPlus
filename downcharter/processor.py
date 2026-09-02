@@ -1215,10 +1215,9 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
        `[<viseme> <weight>[ hold|ease]]`, the exact format Onyx parses (confirmed in
        `Onyx/MIDI/Track/Lipsync.hs`: track name `LIPSYNC1`, graph token = curve out of
        the keyframe). Sparse keyframes (held vowels, diphthong glides), not dense 30fps
-       deltas. Consumed by Onyx's milo workflow and future-proof for YARG (its
-       `LoadLipsyncFromMilo` has a TODO to parse lipsync from MIDI). Timing/weight are
-       audio-guided from the same spans as (1), beating both engines' built-in
-       geometric generators.
+        deltas. Consumed by Onyx's milo workflow and future-proof for YARG (its
+        `LoadLipsyncFromMilo` has a TODO to parse lipsync from MIDI). Timing follows
+        Onyx's tube-driven model (0.12 s transitions) from the same spans as (1).
 
     ``mouth_openness`` (0.0–1.0) is passed through to
     :func:`lipsync_keyframes_from_spans`; at 1.0 the mouth opens fully for each
@@ -1236,32 +1235,16 @@ def _apply_lipsync(new_mid, dst_path, tempo_map, tpb, song_end, stats,
     if do_lipsync and spans and tempo_map is not None and song_end > 0:
         try:
             from . import lipsync as _lip
-            # Extract phrase ends (seconds) and vocal notes from PART VOCALS
-            # for facial animation (eyebrows driven by pitch).
-            phrase_ends_s: list[float] = []
-            vocal_notes: list[tuple[float, int]] = []
+            song_len_s = tick_to_ms(song_end, tempo_map, tpb) / 1000.0
+            eyes_closed_s: list[tuple[float, float]] = []
             pv = next((t for t in new_mid.tracks
                        if t.name.strip().upper() == "PART VOCALS"), None)
             if pv is not None:
-                abs_pv = to_abs(pv)
-                pe_ticks = _abs_phrase_ends(list(abs_pv))
-                phrase_ends_s = [tick_to_ms(t, tempo_map, tpb) / 1000.0
-                                 for t in sorted(set(pe_ticks))]
-                for e in abs_pv:
-                    m = e.msg
-                    n = getattr(m, "note", None)
-                    if (m.type == "note_on" and getattr(m, "velocity", 0) > 0
-                            and n is not None and 36 <= n <= 84):
-                        sec = tick_to_ms(e.abs_tick, tempo_map, tpb) / 1000.0
-                        vocal_notes.append((sec, n))
-                vocal_notes.sort(key=lambda x: x[0])
-            song_len_s = tick_to_ms(song_end, tempo_map, tpb) / 1000.0
+                eyes_closed_s = _lip.eyes_closed_seconds(
+                    pv, tempo_map, tpb, song_len_s)
             keyframes = _lip.lipsync_keyframes_from_spans(
                 spans,
-                phrase_ends=phrase_ends_s,
-                song_len_s=song_len_s,
-                vocal_notes=vocal_notes or None,
-                facial_seed=42,  # deterministic for reproducible builds
+                eyes_closed=eyes_closed_s or None,
                 mouth_openness=mouth_openness,
             )
             if keyframes:
