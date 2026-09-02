@@ -376,6 +376,33 @@ def _add_sp_solo(evs, sp, solos):
             open_solo = None
 
 
+def _apply_offset(mid: mido.MidiFile, offset_s: float) -> mido.MidiFile:
+    """Bake a .chart ``Offset`` (seconds) into the MIDI timing.
+
+    YARG applies ``Offset`` from a ``.chart`` file, but a ``.mid`` carries no
+    offset — a processed song would lose the sync the author set. Shifting every
+    event by ``offset_s`` (mid_time = chart_time + offset_s) makes the ``.mid``
+    play exactly like the original ``.chart``."""
+    if not offset_s:
+        return mid
+    from .midi_utils import (build_tempo_map, ms_to_abs_tick, tick_to_ms,
+                             to_abs, to_track)
+    tpb = mid.ticks_per_beat
+    tempo_map = build_tempo_map(mid)
+    ms = offset_s * 1000.0
+    for track in mid.tracks:
+        name = track.name
+        events = to_abs(track)
+        for e in events:
+            e.abs_tick = max(0, ms_to_abs_tick(
+                tick_to_ms(e.abs_tick, tempo_map, tpb) + ms, tempo_map, tpb))
+        shifted = to_track(events)
+        shifted.name = name
+        track.clear()
+        track.extend(shifted)
+    return mid
+
+
 def chart_to_midi(path: str) -> mido.MidiFile:
     """Convert a .chart into a mido.MidiFile (RB/CH layout, highest difficulty)."""
     meta, sections = _parse(path)
@@ -405,4 +432,11 @@ def chart_to_midi(path: str) -> mido.MidiFile:
     if mid.ticks_per_beat != 480:
         from .midi_utils import rescale_midi_tpb
         rescale_midi_tpb(mid, 480)
+    # Bake the .chart Offset into the .mid timing (YARG reads Offset from .chart
+    # but not from .mid), so the processed song keeps the author's audio sync.
+    try:
+        offset_s = float(meta.get("Offset", 0) or 0)
+    except (TypeError, ValueError):
+        offset_s = 0.0
+    _apply_offset(mid, offset_s)
     return mid
