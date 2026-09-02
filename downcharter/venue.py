@@ -447,9 +447,9 @@ SECTION_LIGHT_POOL = {
         "high": ["searchlights", "frenzy", "silhouettes_spot", "loop_cool", "strobe_fast"],
     },
     "drop": {
-        "calm": ["frenzy", "strobe_fast", "flare_fast", "blackout_fast"],
-        "mid":  ["frenzy", "strobe_fast", "flare_fast", "blackout_fast"],
-        "high": ["frenzy", "strobe_fast", "flare_fast", "blackout_fast"],
+        "calm": ["searchlights", "loop_cool", "flare_fast", "blackout_spot"],
+        "mid":  ["searchlights", "loop_cool", "frenzy", "manual_cool"],
+        "high": ["searchlights", "frenzy", "flare_fast", "loop_cool"],
     },
     "riff": {
         "calm": ["harmony", "loop_warm", "loop_cool", "sweep"],
@@ -916,18 +916,15 @@ def build_lighting(sections: list[Section], theme: dict, tpb: int,
             base = _warmth_pool(pool_by_kind.get(energy, pool_by_kind.get("calm", [])), s.warmth)
         else:
             base = _warmth_pool(pool_by_kind, s.warmth)
-        # allow_strobe: song has actual strobe spans (blast/double-bass content)?
-        # If not, filter strobe_* from BOTH base pool AND accents — strobe comes
-        # from explicit spans only, not random selection. This reduces strobe from
-        # 100% to ~47% of songs (matching official).
+        # Strobe presets come ONLY from explicit strobe spans (blast/double-bass
+        # bursts) — never from random pool selection. Kept out of every cycling
+        # pool so the screen doesn't flash on sections that don't warrant it.
         def _no_strobe(pool):
             return [p for p in pool if p not in ("strobe_fast", "strobe_slow")]
-        if not strobe_spans:
-            base = _no_strobe(base) or ["frenzy"]   # fallback: nao deixar vazio
+        base = _no_strobe(base) or ["loop_cool"]   # fallback: nao deixar vazio
         accents = ([SPECIAL_LIGHTING[s.kind]] if s.kind in SPECIAL_LIGHTING
                    else _warmth_pool(_section_lights(theme, s), s.warmth))
-        if not strobe_spans:
-            accents = _no_strobe(accents) or ["frenzy"]  # build -> SPECIAL_LIGHTING="strobe_slow" fica vazio
+        accents = _no_strobe(accents) or ["loop_cool"]
         # ── Motivo por grupo (repetição estrutural, dev/repetition_stats.json:
         # oficiais reutilizam o look — Jaccard same-group 0.53 vs 0.18, 1.º preset
         # igual 57%). 1.ª ocorrência GRAVA a sequência; repetições REPETEM-NA.
