@@ -22,6 +22,8 @@ lyrics, and lipsync. It then packages the result natively for the
 platform you play on — a PS3/RPCS3 folder, an Xbox 360 CON, or a YARG/Clone
 Hero `.sng` — with no external converter needed.
 
+![Downcharter+ UI](docs/images/ui.png)
+
 What it covers:
 
 - Difficulty reduction for guitar, bass and keys — Hard, Medium and Easy
