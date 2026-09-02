@@ -77,7 +77,7 @@ realistic sticking, including strict alternation through fills.
 
 ![Venue generation](docs/images/venue.jpg)
 
-▶️ **[Watch the full demo](https://youtu.be/stHylYlXqAs)**
+▶️ **[Watch the full demo](https://youtu.be/nC5P9pX2MEs)**
 
 Generates camera cuts, lights, post-processing, spotlights, pyro and character
 animations, with a theme chosen to fit the song. Everything is calibrated
