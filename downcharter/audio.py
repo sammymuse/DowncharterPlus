@@ -679,7 +679,10 @@ def _decode_with_ffmpeg(src, ffmpeg_path):
             [ffmpeg_path, "-y", "-i", src,
              "-f", "wav", "-acodec", "pcm_f32le",
              "-ar", "48000", "-ac", "2", tmp.name],
-            capture_output=True, check=True)
+            capture_output=True, check=True,
+            # Don't flash a console window when launched from the windowed .exe
+            # (PyInstaller console=False) — ffmpeg is a console app.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         data, sr = sf.read(tmp.name, dtype="float32", always_2d=True)
         return data, sr
     finally:
