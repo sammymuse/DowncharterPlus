@@ -15,4 +15,5 @@ Pillow>=10.0           # album art (.png_ps3/.png_xbox DXT1) — needed by downc
 # they both install into the "onnxruntime" module and will conflict; keep
 # only this one. CPU still works as a fallback if DirectML init fails.
 # Feature soft-fails (CPU-only pipeline unaffected) if this isn't installed.
-onnxruntime-directml>=1.24
+# Windows-only package → platform marker keeps CI on Linux working.
+onnxruntime-directml>=1.20; platform_system == "Windows"
