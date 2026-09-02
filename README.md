@@ -5,8 +5,8 @@
 # Downcharter+
 
 <p align="center">
-  <a href="https://github.com/sammymuse/Downcharter/releases/latest"><img src="https://img.shields.io/github/v/release/sammymuse/Downcharter?label=release" alt="Latest release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/sammymuse/Downcharter" alt="License: MIT"></a>
+  <a href="https://github.com/sammymuse/DowncharterPlus/releases/latest"><img src="https://img.shields.io/github/v/release/sammymuse/DowncharterPlus?label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/sammymuse/DowncharterPlus" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/platform-Windows-blue" alt="Platform: Windows">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
 </p>
@@ -18,7 +18,7 @@ and [Clone Hero](https://clonehero.net/).
 Most customs ship with only an Expert chart. Downcharter+ takes that `.mid` or
 `.chart` and fills in the rest: the lower difficulties for every instrument, a
 venue with camera and lights, character animations, talky vocals from the
-lyrics, and audio-driven lipsync. It then packages the result natively for the
+lyrics, and lipsync. It then packages the result natively for the
 platform you play on — a PS3/RPCS3 folder, an Xbox 360 CON, or a YARG/Clone
 Hero `.sng` — with no external converter needed.
 
@@ -28,7 +28,7 @@ What it covers:
 - Drum reduction across all three difficulties, plus Expert+ (2× kick) detection
 - Venue generation — camera cuts, lights, post-processing, pyro and animations
 - Talkies charted from the lyrics, with note ends trimmed against the vocal stem
-- Audio-driven lipsync (mouth + blink/brow/squint), packaged in a native `.milo`
+- Lipsync (mouth + blink), packaged in a native `.milo`
   and validated frame-by-frame against official RB3 lipsync
 - Vocal stem separation (MDX-NET) when the song has no isolated stems —
   GPU (DirectML) with CPU fallback
@@ -115,7 +115,7 @@ The lipsync itself is phoneme-based (CMUdict + rule G2P → visemes) and follows
 the official articulation model: the mouth opens ~0.12 s before each tube and
 closes ~0.12 s after it, vowels hold for the tube's whole length, melisma (`+`)
 tubes keep it open, and back-to-back syllables connect legato instead of
-punching shut. Blinks, brow and squint keyframes ride along. Compared
+punching shut. Blink keyframes ride along. Compared
 frame-by-frame against 15 official RB3 milos, the generated lipsync agrees on
 mouth state 88% of the time (96% open-when-they're-open), with episode lengths
 matching the official envelope.
@@ -155,8 +155,8 @@ know before it ships.
 
 ### In the app
 1. **Open…** → pick the folder with your charts (subfolders included).
-2. Toggle what to generate: Expert+, difficulties (Hard/Medium/Easy), venue, talkies,
-   lipsync, hide in-game background.
+2. Toggle what to generate: Expert+, difficulties (Hard/Medium/Easy), venue, drum
+   animations, lipsync and talkies, hide in-game background.
 3. **Process folder** — originals are backed up as `.bak.mid` / `.bak.chart`.
 4. **Convert** — pick PS3 folder, CON or `.sng` and the pedal variant (1×/2×).
 5. Changed your mind? **Revert** restores the originals.
@@ -188,7 +188,8 @@ Result:
 - `dist/Downcharter+.zip` — ready to publish in Releases
 
 Packaging uses PyInstaller via `downcharter.spec`, which bundles soundfile's
-`libsndfile`, the CMU pronunciation dictionary and the onnxruntime-directml
+`libsndfile`, a self-contained ffmpeg (via `imageio-ffmpeg`) for robust Opus
+decoding, the CMU pronunciation dictionary and the onnxruntime-directml
 runtime (DirectML.dll) for GPU vocal separation.
 
 ---
