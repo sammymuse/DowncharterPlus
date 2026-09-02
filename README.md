@@ -31,7 +31,6 @@ What it covers:
 - Venue generation — camera cuts, lights, post-processing, pyro and animations
 - Talkies charted from the lyrics, with note ends trimmed against the vocal stem
 - Lipsync (mouth + blink), packaged in a native `.milo`
-  and validated frame-by-frame against official RB3 lipsync
 - Vocal stem separation (MDX-NET) when the song has no isolated stems —
   GPU (DirectML) with CPU fallback
 - Native packaging: PS3/RPCS3 song folder, Xbox 360 CON, YARG/CH `.sng`
@@ -68,8 +67,8 @@ level stays consistent with the one above it.
 - A **groove-check** quality guard flags any reduction that loses the feel (logged to a session file)
 
 For Rock Band, the Expert chart also gets a hand-position map (force-HOPO/strum
-markers derived from 100 official charts) and full drum limb animations with
-realistic sticking, including strict alternation through fills.
+markers) and full drum limb animations with realistic sticking, including strict
+alternation through fills.
 
 ---
 
@@ -80,10 +79,9 @@ realistic sticking, including strict alternation through fills.
 ▶️ **[Watch the full demo](https://youtu.be/nC5P9pX2MEs)**
 
 Generates camera cuts, lights, post-processing, spotlights, pyro and character
-animations, with a theme chosen to fit the song. Everything is calibrated
-against 100 official RB3 charts: a director pass makes song-level decisions
-once (repeated sections reuse their look, section boundaries share anchors, the
-last chorus gets the official 1.5× lighting climax), and the RNG is seeded from
+animations, with a theme chosen to fit the song. A director pass makes song-level
+decisions once (repeated sections reuse their look, section boundaries share
+anchors, the last chorus gets a 1.5× lighting climax), and the RNG is seeded from
 the song's content so the same song always gets the same venue.
 
 The camera won't point at an instrument that isn't playing — and the vocalist's
@@ -113,14 +111,10 @@ extracts the vocal channels from an unencrypted `.mogg`, or separates one from
 the mix with MDX-NET (GPU via DirectML, CPU fallback). A real stem is worth
 having — it drives both the sustain trimming and the per-syllable mouth weight.
 
-The lipsync itself is phoneme-based (CMUdict + rule G2P → visemes) and follows
-the official articulation model: the mouth opens ~0.12 s before each tube and
-closes ~0.12 s after it, vowels hold for the tube's whole length, melisma (`+`)
-tubes keep it open, and back-to-back syllables connect legato instead of
-punching shut. Blink keyframes ride along. Compared
-frame-by-frame against 15 official RB3 milos, the generated lipsync agrees on
-mouth state 88% of the time (96% open-when-they're-open), with episode lengths
-matching the official envelope.
+The lipsync itself is phoneme-based (CMUdict + rule G2P → visemes): the mouth
+opens ~0.12 s before each tube and closes ~0.12 s after it, vowels hold for the
+tube's whole length, melisma (`+`) tubes keep it open, and back-to-back
+syllables connect legato instead of punching shut. Blink keyframes ride along.
 
 ---
 
@@ -207,7 +201,7 @@ downcharter/         engine package
   drums.py             drums reduction + Expert+
   venue.py             camera, lights, post-proc, BEAT track, animations
   venue_director.py    song-level venue decisions (repetition, anchors, climax)
-  cut_events.py        directed camera cuts (probabilistic, official-calibrated)
+  cut_events.py        directed camera cuts (probabilistic)
   audio.py             audio analysis (RMS / bands / voice activity / feel)
   separate.py          MDX-NET vocal separation (DirectML GPU / CPU)
   lipsync.py           phonemes → visemes → keyframes (mouth + facial)
