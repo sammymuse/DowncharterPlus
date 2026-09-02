@@ -1460,6 +1460,7 @@ def process_folder(
     log_fn(f"→ {len(midis)} file(s)\n", "info")
     errors = 0
     modified = 0
+    skipped_songs = 0
     skipped_total = 0
     venue_skipped_total = 0
     groove_fails: list[str] = []   # "song: PART DIFF groove X% (< Y%)"
@@ -1479,9 +1480,17 @@ def process_folder(
                 status_fn(f"{idx+1}/{total}  {name}")
             except Exception as _se:
                 log_fn(f"status error: {_se}\n", "err")
+        # Already processed in a previous run (a .bak.mid exists) → skip. Re-running
+        # would apply reductions on top of already-processed output. Every processed
+        # song — a .mid or a converted .chart — ends up with a .bak.mid marker.
+        if os.path.exists(backup):
+            skipped_songs += 1
+            log_fn(f"  ↷ {name}: already processed — skipped\n", "info")
+            continue
         try:
-            # A .mid coming from a .chart already has a .bak.chart backup → don't duplicate .bak.mid.
-            if not from_chart and not os.path.exists(backup):
+            # Back up the pre-processing MIDI (a .mid or a freshly converted .chart)
+            # — the .bak.mid doubles as the "already processed" marker above.
+            if not os.path.exists(backup):
                 shutil.copy2(path, backup)
             s = process_midi(path, path, diffs_to_gen, do_expert_plus,
                              threshold_ms, do_venue, None, do_lipsync, do_talkies,
@@ -1568,21 +1577,22 @@ def process_folder(
 
     # ── Summary ──────────────────────────────────────────────────────────────
     log_fn("\n── Done ──\n", "info")
-    log_fn(f"  modified: {modified}   skipped diffs: {skipped_total}"
+    log_fn(f"  modified: {modified}   skipped (already processed): {skipped_songs}"
+           f"   skipped diffs: {skipped_total}"
            f"   skipped venues: {venue_skipped_total}"
            f"   errors: {errors}\n", "info")
 
     # Session log: write errors + groove-check failures to a file in the folder.
     if groove_fails or error_log:
-        log_path = _write_session_log(folder, modified, skipped_total,
+        log_path = _write_session_log(folder, modified, skipped_songs, skipped_total,
                                       venue_skipped_total, groove_fails, error_log)
         if log_path:
             log_fn(f"  log: {os.path.basename(log_path)}\n", "info")
 
 
-def _write_session_log(folder: str, modified: int, skipped_total: int,
-                       venue_skipped_total: int, groove_fails: list[str],
-                       error_log: list[str]) -> str | None:
+def _write_session_log(folder: str, modified: int, skipped_songs: int,
+                       skipped_total: int, venue_skipped_total: int,
+                       groove_fails: list[str], error_log: list[str]) -> str | None:
     """Write a per-session log (errors + groove-check failures) to the folder.
     Returns the path written, or None on failure."""
     import datetime
@@ -1592,7 +1602,8 @@ def _write_session_log(folder: str, modified: int, skipped_total: int,
     lines = [
         f"Downcharter+ session log - {ts:%Y-%m-%d %H:%M:%S}",
         f"Folder: {folder}",
-        f"Modified: {modified}   Skipped diffs: {skipped_total}"
+        f"Modified: {modified}   Skipped (already processed): {skipped_songs}"
+        f"   Skipped diffs: {skipped_total}"
         f"   Skipped venues: {venue_skipped_total}"
         f"   Groove fails: {len(groove_fails)}   Errors: {len(error_log)}",
         "",
@@ -1674,7 +1685,14 @@ def revert_folder(folder: str, log_fn,
                     log_fn(f"  ✗ {f}: {e}\n", "err")
             elif f.endswith(".bak.mid"):
                 backup = os.path.join(root, f)
-                original = backup[:-8] + ".mid"
+                if not os.path.exists(backup):
+                    continue  # already reverted via the .bak.chart branch (removed its .bak.mid)
+                base = backup[:-8]
+                # A .bak.mid that came from a converted .chart (matching .bak.chart,
+                # or a restored .chart) is reverted fully by the .bak.chart branch.
+                if os.path.exists(base + ".bak.chart") or os.path.exists(base + ".chart"):
+                    continue
+                original = base + ".mid"
                 try:
                     if os.path.exists(original):
                         os.remove(original)
@@ -1684,7 +1702,9 @@ def revert_folder(folder: str, log_fn,
                 except Exception as e:
                     log_fn(f"  ✗ {f}: {e}\n", "err")
             elif f.endswith(".bak.chart"):
-                # Original was a .chart: restore the .chart and remove the generated .mid.
+                # Original was a .chart: restore the .chart and remove the generated
+                # .mid — and any .bak.mid it left behind (revert goes back to the
+                # original .chart, not to the intermediate converted MIDI).
                 backup = os.path.join(root, f)
                 base = backup[:-len(".bak.chart")]
                 original = base + ".chart"
@@ -1692,6 +1712,8 @@ def revert_folder(folder: str, log_fn,
                 try:
                     if os.path.exists(gen_mid):
                         os.remove(gen_mid)
+                    if os.path.exists(base + ".bak.mid"):
+                        os.remove(base + ".bak.mid")
                     if os.path.exists(original):
                         os.remove(original)
                     os.rename(backup, original)
