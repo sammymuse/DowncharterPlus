@@ -534,19 +534,72 @@ def find_song_audio(folder: str) -> list[str]:
 
 
 def _find_ffmpeg():
-    """Locate ffmpeg binary. Returns path or None."""
+    """Locate ffmpeg binary. Returns path or None.
+
+    Search order: system PATH → bundled-in-app (PyInstaller) → imageio-ffmpeg
+    (pip, self-contained ~90 MB) → common/legacy paths → WinGet install dir."""
     import shutil
     ff = shutil.which("ffmpeg")
     if ff:
         return ff
+
+    candidates: list[str] = []
+
+    # Bundled by PyInstaller: the spec drops the ffmpeg binary at the bundle
+    # root (or next to the exe) and _MEIPASS points at the internal dir, so scan
+    # both for any ffmpeg*.exe.
+    try:
+        import sys
+        bases = [getattr(sys, "_MEIPASS", ""),
+                 os.path.dirname(sys.executable)]
+        for base in bases:
+            if not base:
+                continue
+            try:
+                for fn in os.listdir(base):
+                    low = fn.lower()
+                    if low.startswith("ffmpeg") and low.endswith(".exe"):
+                        candidates.append(os.path.join(base, fn))
+            except OSError:
+                continue
+    except Exception:
+        pass
+
+    # imageio-ffmpeg ships a small, self-contained ffmpeg binary (~90 MB) —
+    # far lighter than a full ffmpeg install, and bundleable by PyInstaller.
+    try:
+        import imageio_ffmpeg
+        ff = imageio_ffmpeg.get_ffmpeg_exe()
+        if ff and os.path.isfile(ff):
+            candidates.append(ff)
+    except Exception:
+        pass
+
     # Common Windows locations + user's shared build
-    for candidate in [
+    candidates += [
         r"C:\ffmpeg\bin\ffmpeg.exe",
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
         os.path.expanduser(
             r"~\Downloads\ffmpeg-master-latest-win64-gpl-shared"
             r"\ffmpeg-master-latest-win64-gpl-shared\bin\ffmpeg.exe"),
-    ]:
+    ]
+    # WinGet install (user + machine scope) — `winget install Gyan.FFmpeg` lands
+    # under the packages dir, but its `bin` may not be on PATH until the shell
+    # is restarted, so search there directly too.
+    for scope in (os.environ.get("LOCALAPPDATA", ""),
+                  os.environ.get("ProgramData", "")):
+        base = os.path.join(scope, "Microsoft", "WinGet", "Packages")
+        if not os.path.isdir(base):
+            continue
+        for name in os.listdir(base):
+            if not name.lower().startswith("gyan.ffmpeg"):
+                continue
+            pkg = os.path.join(base, name)
+            for root, _dirs, files in os.walk(pkg):
+                for fn in files:
+                    if fn.lower() == "ffmpeg.exe":
+                        candidates.append(os.path.join(root, fn))
+    for candidate in candidates:
         if os.path.isfile(candidate):
             return candidate
     return None

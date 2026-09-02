@@ -3,6 +3,8 @@
 mido>=1.3
 numpy>=1.24
 soundfile>=0.12        # bundled libsndfile: reads .ogg/.opus/.wav/.flac/.mp3
+imageio-ffmpeg>=0.5    # self-contained ffmpeg (~90 MB) — decodes Opus files that
+                       # libsndfile 1.2.2 rejects as "malformed" (see audio._decode_with_ffmpeg)
 Pillow>=10.0           # album art (.png_ps3/.png_xbox DXT1) — needed by downcharter/art.py
 # GUI: tkinter (ships with Python, no extra dependency)
 

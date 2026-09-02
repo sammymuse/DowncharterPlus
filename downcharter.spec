@@ -22,6 +22,17 @@ for pkg in ("soundfile",):
     binaries += b
     hiddenimports += h
 
+# imageio-ffmpeg ships a self-contained ffmpeg binary (~90 MB) for robust
+# Opus/Ogg decoding (libsndfile 1.2.2 rejects some Opus pages as "malformed").
+# Drop it at the bundle root so audio._find_ffmpeg finds it next to the exe.
+try:
+    import imageio_ffmpeg
+    _ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    if _ffmpeg_exe and os.path.exists(_ffmpeg_exe):
+        binaries.append((_ffmpeg_exe, "."))
+except Exception:
+    pass
+
 hiddenimports += ["mido", "numpy"]
 
 # onnxruntime (optional, from onnxruntime-directml): needed for MDX-NET vocal
