@@ -380,14 +380,53 @@ def _apply_offset(mid: mido.MidiFile, offset_s: float) -> mido.MidiFile:
     """Bake a .chart ``Offset`` (seconds) into the MIDI timing.
 
     YARG applies ``Offset`` from a ``.chart`` file, but a ``.mid`` carries no
-    offset — a processed song would lose the sync the author set. Shifting every
-    event by ``offset_s`` (mid_time = chart_time + offset_s) makes the ``.mid``
-    play exactly like the original ``.chart``."""
+    offset — a processed song would lose the sync the author set.
+
+    Preferred method: retempo the lead-in so the WHOLE timeline shifts by
+    ``offset_s`` while every note keeps its original (on-beat) tick. This needs a
+    note-free lead-in region before the first tempo change/first note; when that
+    isn't possible it falls back to shifting every event's tick (which drops the
+    notes off the beat grid)."""
     if not offset_s:
         return mid
+
+    # Collect tempo events + first playable note.
+    tempos: list[tuple[int, object]] = []
+    first_note: int | None = None
+    for tr in mid.tracks:
+        nm = (tr.name or "").strip().upper()
+        acc = 0
+        for m in tr:
+            acc += m.time
+            if m.type == "set_tempo":
+                tempos.append((acc, m))
+            elif (nm.startswith("PART") and m.type == "note_on"
+                  and m.velocity > 0 and getattr(m, "note", 200) < 103):
+                first_note = acc if first_note is None else min(first_note, acc)
+    if not tempos:
+        return mid
+    tempos.sort(key=lambda x: x[0])
+    t0, t0_msg = tempos[0]
+
+    # Lead-in region: from t0 to the next tempo change or the first note. The
+    # region [t0, region_end) is note-free by construction (region_end <= first_note).
+    others = [t for t, _ in tempos[1:]]
+    if first_note is not None:
+        others.append(first_note)
+    region_end = min(others) if others else None
+
+    tpb = mid.ticks_per_beat
+    if t0 == 0 and region_end is not None and region_end > t0:
+        dur_ms = (region_end - t0) / tpb * (t0_msg.tempo / 1000.0)
+        if dur_ms > 0 and abs(offset_s * 1000.0) < dur_ms * 0.9:
+            new_tempo = int(round(t0_msg.tempo * (1.0 + offset_s * 1000.0 / dur_ms)))
+            if 100000 < new_tempo < 4_000_000:
+                t0_msg.tempo = new_tempo          # in-place edit of the first tempo
+                return mid
+
+    # Fallback: shift every event's tick by the offset (drops notes off-beat).
     from .midi_utils import (build_tempo_map, ms_to_abs_tick, tick_to_ms,
                              to_abs, to_track)
-    tpb = mid.ticks_per_beat
     tempo_map = build_tempo_map(mid)
     ms = offset_s * 1000.0
     for track in mid.tracks:
